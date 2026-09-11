@@ -1705,6 +1705,28 @@ inline bool pin_threads_enabled()
     return v;
 }
 
+inline bool thread_prio_enabled()
+{
+    static const bool v = [] {
+        const char* e = std::getenv("EXL3_MOE_THREAD_PRIO");
+        return e && *e != '0';
+    }();
+    return v;
+}
+
+// Rotate the start index into the physical-core order (EXL3_MOE_CPU_PIN_OFFSET,
+// default 0): on dual-CCD parts the first half of the order is typically one CCD
+// and the second half the other, so an offset of half the physical cores moves the
+// pool onto the other CCD for A/B testing cache-vs-frequency placement
+inline int pin_order_offset()
+{
+    static const int v = [] {
+        const char* e = std::getenv("EXL3_MOE_CPU_PIN_OFFSET");
+        return (e && *e) ? std::atoi(e) : 0;
+    }();
+    return v < 0 ? 0 : v;
+}
+
 struct Pool
 {
     int spawned = 0;
@@ -1725,7 +1747,7 @@ struct Pool
     void pin_self(int idx)
     {
         if (core_order.empty()) return;
-        const int enc = core_order[idx % core_order.size()];
+        const int enc = core_order[(idx + pin_order_offset()) % core_order.size()];
 #ifdef __linux__
         cpu_set_t set;
         CPU_ZERO(&set);
@@ -1736,6 +1758,20 @@ struct Pool
         ga.Group = static_cast<WORD>(enc >> 16);
         ga.Mask = KAFFINITY(1) << (enc & 0xffff);
         SetThreadGroupAffinity(GetCurrentThread(), &ga, nullptr);
+        if (thread_prio_enabled())
+        {
+            // Keep parked/throttled cores from dulling the pool (llama.cpp#199a838
+            // pattern): run above normal and opt out of power throttling
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+#ifdef THREAD_POWER_THROTTLING_CURRENT_VERSION
+            THREAD_POWER_THROTTLING_STATE pts{};
+            pts.Version = THREAD_POWER_THROTTLING_CURRENT_VERSION;
+            pts.ControlMask = THREAD_POWER_THROTTLING_EXECUTION_SPEED;
+            pts.StateMask = 0;
+            (void) SetThreadInformation(GetCurrentThread(), ThreadPowerThrottling,
+                                        &pts, sizeof(pts));
+#endif
+        }
 #endif
     }
 
