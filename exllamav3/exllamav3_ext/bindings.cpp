@@ -4,6 +4,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cstdlib>
+
 #include "stloader.h"
 #include "cuda_host.h"
 #include "hadamard.h"
@@ -93,6 +95,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.attr("HAS_HGEMM_F16ACC") = cuda_only;     // hgemm_f16acc, hgemm_f16acc_status
     m.attr("HAS_DFLASH2") = true;               // dflash2_dynconv, dflash2_selector_walk, dflash2_topk
 
+#ifndef __linux__
+    // cudaDeviceScheduleBlockingSync turns host-side waits into futex sleeps
+    // instead of spin-polls (llama.cpp pattern): less main-process CPU burn with
+    // no throughput cost on stream-ordered workloads. Must precede context
+    // creation; when something already created one the call fails and is ignored.
+    if (const char* e = std::getenv("EXL3_MOE_BLOCKING_SYNC"))
+    {
+        if (*e != '0') (void) cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
+    }
+#endif
     m.def("stloader_read", &stloader_read, "stloader_read");
     m.def("stloader_open_file", &stloader_open_file, "stloader_open_file");
     m.def("stloader_close_file", &stloader_close_file, "stloader_close_file");

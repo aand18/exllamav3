@@ -498,6 +498,35 @@ around specifically because the memop path is not yet exercised on Windows. The 
 30-second stall timeout does not apply to the memop path; a dead worker there is instead detected
 by a host-side watchdog that unblocks any pending wait.
 
+### `EXL3_MOE_TIMER_RES` (default: `0`)
+
+Windows only. Request a 0.5 ms timer quantum for the CPU worker process (`NtSetTimerResolution`)
+instead of the 1 ms requested at startup, halving what the worker's timed naps cost: the poll
+loops back off to 50 µs sleeps, and anything below the quantum rounds up to it, one quantum per
+missed poll landing on token latency. Best effort, and only on Windows 10 2004+ where the timer
+resolution is per process; older builds fail the call and keep the 1 ms request.
+
+### `EXL3_MOE_THREAD_PRIO` (default: `0`)
+
+Windows only. Run the CPU worker pool threads at above-normal priority with power throttling
+disabled for them, so a balanced power plan can't park or clock down a core between two jobs of
+the same token. Read on the native side when a worker pins itself, so it applies only to pinned
+workers.
+
+### `EXL3_MOE_BLOCKING_SYNC` (default: `0`)
+
+Windows only. Set `cudaDeviceScheduleBlockingSync` at extension init, so host-side CUDA waits
+sleep instead of spin-polling: less main-process CPU burn, no throughput cost on a stream-ordered
+workload. Must precede context creation; when something has already created the context the call
+fails and is ignored.
+
+### `EXL3_MOE_CPU_PIN_OFFSET` (default: `0`)
+
+Rotate the start index into the physical-core pin order (works with `EXL3_MOE_CPU_PIN` and
+`EXL3_MOE_CPU_SPREAD`). On a dual-CCD part the first half of that order is typically one CCD and
+the second half the other, so an offset of half the physical core count moves the pool onto the
+other CCD for A/B testing cache-vs-frequency placement. `0` keeps the default order.
+
 ### `EXL3_MOE_STREAM_DEBUG` (default: `0`)
 
 Print per-layer and per-batch engagement: streamed bandwidth probe result and threshold, expert

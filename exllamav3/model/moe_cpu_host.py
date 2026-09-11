@@ -168,6 +168,15 @@ class MoeCpuTuning:
         # on the GPU side
         self.mtile = os.environ.get("EXL3_MOE_MTILE", "1") != "0"
 
+        # --- Windows host tuning ---
+        # Request a 0.5 ms timer quantum for the worker process (Windows 10 2004+,
+        # NtSetTimerResolution) instead of the 1 ms requested at startup: the worker's poll
+        # loops back off to 50 us naps, so a coarser quantum rounds every missed poll up to the
+        # full quantum, landing directly on token latency. The pool-thread priority and the CUDA
+        # blocking-sync flags are the other two of this family and are read natively
+        # (EXL3_MOE_THREAD_PRIO in moe_mul1.cpp, EXL3_MOE_BLOCKING_SYNC in bindings.cpp)
+        self.timer_res = os.environ.get("EXL3_MOE_TIMER_RES", "0") != "0"
+
         # --- debug / kill switches ---
         self.stream_debug = bool(os.environ.get("EXL3_MOE_STREAM_DEBUG"))
         self.cpu_prof = bool(os.environ.get("EXL3_MOE_CPU_PROF"))
@@ -665,6 +674,14 @@ def _moe_cpu_child_main(conn, model_dir, threads, stage_threads, pinned = False,
             ctypes.WinDLL("winmm").timeBeginPeriod(1)
         except Exception:
             pass
+        if TUNING.timer_res:
+            # 0.5 ms quantum (Win10 2004+): halves what remains of that rounding. Best effort;
+            # older builds fail the call and the 1 ms request above stays in force
+            try:
+                cur = ctypes.c_ULONG()
+                ctypes.WinDLL("ntdll").NtSetTimerResolution(5000, 1, ctypes.byref(cur))
+            except Exception:
+                pass
 
     shm = None
     t_entry = time.time()
