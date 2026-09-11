@@ -105,6 +105,14 @@ class MoeCpuTuning:
         self.stream_debug = bool(os.environ.get("EXL3_MOE_STREAM_DEBUG"))
         self.cpu_prof = bool(os.environ.get("EXL3_MOE_CPU_PROF"))
         self.memops = os.environ.get("EXL3_MOE_MEMOPS", "1") != "0"
+        # Zero-copy whole-layer handshake (issue/collect kernels instead of DMAs)
+        self.zero_copy = os.environ.get("EXL3_MOE_ZERO_COPY", "0") != "0"
+        # 0.5 ms timer quantum for the worker's timed naps (Win10 2004+); without
+        # it they round up to ~1 ms and every poll miss lands on token latency
+        self.timer_res = os.environ.get("EXL3_MOE_TIMER_RES", "0") != "0"
+        # 2MB large pages for the expert arena (Windows; needs SeLockMemoryPrivilege,
+        # normally inert without admin setup -- best-effort with silent fallback)
+        self.arena_largepages = os.environ.get("EXL3_MOE_ARENA_LARGEPAGES", "0") != "0"
 
 
 TUNING = MoeCpuTuning()
@@ -124,6 +132,26 @@ class _HugeArena:
         self.cur = None
         self.cur_off = 0
 
+    def _new_chunk_large(self, size):
+        """One 2MB-large-page mapping attempt (Windows, EXL3_MOE_ARENA_LARGEPAGES=1).
+        Needs SeLockMemoryPrivilege, so without admin setup this fails and the caller
+        falls back to 4KB pages. Returns a bytes-like object supporting len() and
+        buffer access, or None."""
+        try:
+            import ctypes
+            k32 = ctypes.WinDLL("kernel32")
+            gran = k32.GetLargePageMinimum()
+            if not gran:
+                return None
+            aligned = (size + gran - 1) & ~(gran - 1)
+            # MEM_COMMIT|MEM_RESERVE|MEM_LARGE_PAGES, PAGE_READWRITE
+            addr = k32.VirtualAlloc(None, aligned, 0x3000 | 0x20000000, 0x04)
+            if not addr:
+                return None
+            return (ctypes.c_char * aligned).from_address(addr)
+        except Exception:
+            return None
+
     def _new_chunk(self, min_bytes):
         import mmap, os
         size = max(self.CHUNK_BYTES, (min_bytes + (2 << 20) - 1) & ~((2 << 20) - 1))
@@ -131,7 +159,11 @@ class _HugeArena:
             # mmap.MAP_PRIVATE / mmap.PROT_* don't exist on Windows; an anonymous mapping is
             # writable by default there. Hugepage promotion doesn't apply (promote_hugepages
             # is already a no-op via its try/except), the arena still serves its pooling role
-            m = mmap.mmap(-1, size)
+            m = None
+            if TUNING.arena_largepages:
+                m = self._new_chunk_large(size)
+            if m is None:
+                m = mmap.mmap(-1, size)
         else:
             m = mmap.mmap(-1, size, mmap.MAP_PRIVATE, mmap.PROT_READ | mmap.PROT_WRITE)
         self.chunks.append(m)
@@ -222,6 +254,14 @@ def _moe_cpu_child_main(conn, model_dir, threads, stage_threads):
             ctypes.WinDLL("winmm").timeBeginPeriod(1)
         except Exception:
             pass
+        if TUNING.timer_res:
+            # 0.5 ms quantum (Win10 2004+): halves the cost of every remaining timed
+            # nap in the worker loops. Best-effort; falls back to 1 ms silently
+            try:
+                _cur = ctypes.c_ULONG()
+                ctypes.WinDLL("ntdll").NtSetTimerResolution(5000, 1, ctypes.byref(_cur))
+            except Exception:
+                pass
 
     shm = None
     try:
@@ -667,6 +707,12 @@ class MoeCpuHost:
         # Device guard: the flag kernels launch on the *current* device's current stream, which
         # need not match the layer's device (e.g. a model loaded entirely on cuda:1)
         with torch.cuda.device(y.device):
+            # Zero-copy issue/collect (EXL3_MOE_ZERO_COPY=1): staging and fold-back
+            # kernels replace the small DMAs; falls back to the copy path whenever
+            # the job doesn't fit the single-slot fast path
+            zc = self._submit_zerocopy(layer_idx, y, selected_experts, routing_weights)
+            if zc is not None:
+                return zc
             spec = self.specs[layer_idx]
             h = y.shape[1]
             out = torch.empty((y.shape[0], h), dtype = torch.float, device = y.device)
@@ -714,6 +760,79 @@ class MoeCpuHost:
         jobs, rtmp, out, h, dev = handle
         with torch.cuda.device(dev):
             self._collect_compute(jobs, out, rtmp, h)
+        return out
+
+    def _submit_zerocopy(self, layer_idx, y, selected_experts, routing_weights):
+        """
+        Zero-copy variant of submit() for single-chunk jobs (EXL3_MOE_ZERO_COPY=1):
+        the fused issue kernel stages sel/x/w straight into the pinned slot with
+        zero-copy stores (replacing three cudaMemcpyAsync launches) and the fused
+        collect folds the worker's output back the same way (replacing the H2D
+        readback), so a layer handshake is 2 flag-waits + 2 flag-writes + 2 small
+        kernels and no DMA at all. Returns None when the job doesn't fit the fast
+        path (caller falls back to the copy path). Whole-layer use: selections are
+        global expert ids with no GPU-resident picks, so first_cpu=0 is the identity
+        map (-1 sentinels preserved); the job is KIND_COMPUTE_GATED (the designed
+        pairing for these two kernels: the worker skips all-inactive jobs and the
+        collect reads back only active ones; whole-layer jobs are always active).
+        """
+        if not TUNING.zero_copy:
+            return None
+        rows = y.shape[0]
+        spec = self.specs[layer_idx]
+        if (rows > self.cap_rows
+                or not (y.is_contiguous() and routing_weights.is_contiguous()
+                        and selected_experts.is_contiguous())
+                or y.dtype != torch.half or routing_weights.dtype != torch.half
+                or selected_experts.dtype != torch.int64
+                or tuple(selected_experts.shape) != (rows, spec["topk"])):
+            return None
+        h_ = y.shape[1]
+        hi = spec["hi"]
+        dev = y.device
+        with torch.cuda.device(dev):
+            counts = self.dev_count.get(dev)
+            if counts is None:
+                counts = self.dev_count[dev] = \
+                    torch.zeros((self.num_slots,), dtype = torch.int32, device = dev)
+            slot_idx = self.next_slot
+            self.next_slot = (self.next_slot + 1) % self.num_slots
+            self.seq += 1
+            seq = self.seq
+            slot = self.slots[slot_idx]
+
+            tail = int(self.v_jobs_tail[0])
+            if tail - int(self.v_jobs_head[0]) >= MOE_JOB_RING - 4:
+                import time
+                while tail - int(self.v_jobs_head[0]) >= MOE_JOB_RING - 4:
+                    if self.v_abort[0] or not self.proc.is_alive():
+                        raise RuntimeError("CPU MoE worker failed (ring stall)")
+                    time.sleep(0.0002)
+            job = self.v_jobs[tail % MOE_JOB_RING]
+            job[0] = seq
+            job[1] = layer_idx
+            job[2] = rows
+            job[3] = spec["topk"]
+            job[4] = slot_idx
+            job[5] = 2    # MOE_JOB_KIND_COMPUTE_GATED: worker skips all-inactive jobs
+            self.v_jobs_tail[0] = tail + 1
+
+            if self.slot_last_seq[slot_idx]:
+                ext.exl3_moe_flag_wait(slot["consumed"], self.slot_last_seq[slot_idx],
+                                       self.gpu_base_ptr + 128)
+            ext.moe_split_issue(
+                selected_experts.view(-1), None, None,
+                y, routing_weights,
+                slot["sel_dev"], slot["x_dev"], slot["w_dev"],
+                counts, slot_idx, hi, 0,
+            )
+            ext.exl3_moe_flag_write(slot["data_ready"], seq)
+            self.slot_last_seq[slot_idx] = seq
+
+            out = torch.zeros((rows, h_), dtype = torch.float, device = dev)
+            ext.exl3_moe_flag_wait(slot["done"], seq, self.gpu_base_ptr + 128)
+            ext.moe_split_collect_add(out, slot["out_dev"], counts, slot_idx, spec["ho"])
+            ext.exl3_moe_flag_write(slot["consumed"], seq)
         return out
 
     def submit_issue_fused(self, layer_idx, y, selected_experts, routing_weights,
