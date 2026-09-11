@@ -4,9 +4,13 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <cuda.h>
+#include <cuda_runtime_api.h>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <thread>
 
 #include "../ptx.cuh"
@@ -60,20 +64,59 @@ __global__ void moe_flag_wait_kernel(uint32_t* flag, uint32_t value, uint32_t* a
 // remains as a fallback (EXL3_MOE_MEMOPS=0 forces it); note the memop wait has no timeout, so
 // dead-worker detection moves to the host-side watchdog, which unblocks pending waits by
 // writing satisfying values into the flags.
+//
+// Windows/WDDM note: on WDDM the memop path measured ~10% slower than the kernel fallback
+// (36 offloaded layers x every decode step). Two compounding causes, each env-gated:
+//  * Visibility (EXL3_MOE_MEMOPS_FLUSH=0 disables, default on): a front-end write to mapped
+//    host memory is not guaranteed promptly visible to the CPU worker, nor are the worker's
+//    prior writes guaranteed visible downstream of a GPU wait, without an explicit flush.
+//    The write is therefore enqueued as a single 2-op batch [write32 + flush-remote-writes
+//    barrier] and waits carry WAIT_VALUE_FLUSH -- same number of driver calls as before.
+//    Requires CAN_FLUSH_REMOTE_WRITES (queried once per device); without it the code
+//    degrades to plain single ops.
+//  * Submission (EXL3_MOE_MEMOPS_SUBMIT=0 disables, default on): WDDM batches small ops in
+//    a software queue that only drains on heavier calls. The whole-layer decode handshake
+//    enqueues no kernel at all (memcpys + memops only), so a write can sit unsubmitted
+//    across the Python gap between issue and collect: the worker starts late (late
+//    data_ready) and the GPU polls late (late wait). After every memop write we record +
+//    query a dummy event, which pushes the software queue without any host sync, at the
+//    cost of two cheap driver calls per write.
+// EXL3_MOE_MEMOPS_LOG=1 prints a one-time resolution/support line plus any fallback-latch
+// trip. A batch/flush-only failure never latches to the kernel fallback by itself: the op
+// is retried plain first, and only a plain-op failure latches (preserving the invariant
+// that a latched MEMOPS=1 behaves exactly like MEMOPS=0).
 namespace {
 
 typedef CUresult (CUDAAPI* fn_stream_wait32)(CUstream, CUdeviceptr, cuuint32_t, unsigned int);
 typedef CUresult (CUDAAPI* fn_stream_write32)(CUstream, CUdeviceptr, cuuint32_t, unsigned int);
+typedef CUresult (CUDAAPI* fn_dev_attr)(int*, CUdevice_attribute, CUdevice);
+typedef CUresult (CUDAAPI* fn_ctx_dev)(CUdevice*);
+// Flush primitives (batch write+flush barrier, WAIT_VALUE_FLUSH, CAN_FLUSH_REMOTE_WRITES
+// query) need CUDA 12+ headers. They are enum constants, not macros, so they cannot be
+// probed with #if defined(); older toolkits degrade to plain single ops instead.
+#if defined(CUDA_VERSION) && CUDA_VERSION >= 12000
+#define MEMOPS_HAVE_FLUSH 1
+typedef CUresult (CUDAAPI* fn_stream_batch)(CUstream, unsigned, CUstreamBatchMemOpParams*, unsigned);
+#define MEMOPS_BATCH_SYM_V "cuStreamBatchMemOp_v2"
+#define MEMOPS_BATCH_STRUCT CUstreamBatchMemOpParams
+#endif
 
 struct MemOps
 {
     fn_stream_wait32 wait = nullptr;
     fn_stream_write32 write = nullptr;
+#ifdef MEMOPS_HAVE_FLUSH
+    fn_stream_batch batch = nullptr;
+#endif
+    fn_dev_attr dev_attr = nullptr;
+    fn_ctx_dev ctx_dev = nullptr;
     bool resolved = false;
     MemOps()
     {
         // Symbol resolution is unconditional (independent of exl3_moe_cpu_set_memops): whether
-        // the ops are used is a separate, mutable runtime switch, not a one-time decision
+        // the ops are used is a separate, mutable runtime switch, not a one-time decision.
+        // The batch entry is the v2 ABI paired with the v2 struct from the same headers;
+        // a missing entry degrades to plain ops, so a mismatch can never be called.
 #ifdef __linux__
         void* h = dlopen("libcuda.so.1", RTLD_LAZY | RTLD_NOLOAD);
         if (!h) h = dlopen("libcuda.so", RTLD_LAZY | RTLD_NOLOAD);
@@ -82,6 +125,11 @@ struct MemOps
         if (!wait) wait = (fn_stream_wait32) dlsym(h, "cuStreamWaitValue32");
         write = (fn_stream_write32) dlsym(h, "cuStreamWriteValue32_v2");
         if (!write) write = (fn_stream_write32) dlsym(h, "cuStreamWriteValue32");
+#ifdef MEMOPS_HAVE_FLUSH
+        batch = (fn_stream_batch) dlsym(h, MEMOPS_BATCH_SYM_V);
+#endif
+        dev_attr = (fn_dev_attr) dlsym(h, "cuDeviceGetAttribute");
+        ctx_dev = (fn_ctx_dev) dlsym(h, "cuCtxGetDevice");
 #else
         HMODULE h = GetModuleHandleA("nvcuda.dll");
         if (!h) return;
@@ -89,6 +137,11 @@ struct MemOps
         if (!wait) wait = (fn_stream_wait32) GetProcAddress(h, "cuStreamWaitValue32");
         write = (fn_stream_write32) GetProcAddress(h, "cuStreamWriteValue32_v2");
         if (!write) write = (fn_stream_write32) GetProcAddress(h, "cuStreamWriteValue32");
+#ifdef MEMOPS_HAVE_FLUSH
+        batch = (fn_stream_batch) GetProcAddress(h, MEMOPS_BATCH_SYM_V);
+#endif
+        dev_attr = (fn_dev_attr) GetProcAddress(h, "cuDeviceGetAttribute");
+        ctx_dev = (fn_ctx_dev) GetProcAddress(h, "cuCtxGetDevice");
 #endif
         resolved = wait && write;
     }
@@ -97,6 +150,179 @@ struct MemOps
 MemOps& memops() { static MemOps m; return m; }
 std::atomic<bool> g_memops_ok { true };
 std::atomic<bool> g_memops_enabled { true };
+std::atomic<bool> g_memops_logged { false };
+#ifdef MEMOPS_HAVE_FLUSH
+std::atomic<bool> g_memops_batch_ok { true };       // cleared on first batch-only failure
+#endif
+#ifdef MEMOPS_HAVE_FLUSH
+std::atomic<bool> g_memops_wait_flush_ok { true };  // cleared on first FLUSH-wait failure
+#endif
+
+struct MemOpsCfg
+{
+    bool flush = true;   // EXL3_MOE_MEMOPS_FLUSH (default 1)
+    bool submit = true;  // EXL3_MOE_MEMOPS_SUBMIT (default 1)
+    bool log = false;    // EXL3_MOE_MEMOPS_LOG (default 0)
+};
+
+MemOpsCfg& memops_cfg()
+{
+    static MemOpsCfg c;
+    static std::once_flag once;
+    std::call_once(once, []{
+        if (const char* e = std::getenv("EXL3_MOE_MEMOPS_FLUSH")) c.flush = e[0] != '0';
+        if (const char* e = std::getenv("EXL3_MOE_MEMOPS_SUBMIT")) c.submit = e[0] != '0';
+        c.log = std::getenv("EXL3_MOE_MEMOPS_LOG") != nullptr;
+    });
+    return c;
+}
+
+void memops_latch_fallback(const char* what)
+{
+    bool expected = true;
+    if (g_memops_ok.compare_exchange_strong(expected, false) && memops_cfg().log)
+        std::fprintf(stderr, "[exl3][memops] %s failed, latching to kernel fallback\n", what);
+}
+
+// Device owning the calling thread's current context (-1 when it cannot be determined;
+// callers then treat flush as unsupported, which is always safe: plain ops are correct,
+// just potentially slower).
+int memops_current_dev(MemOps& m)
+{
+    CUdevice d = 0;
+    if (m.ctx_dev && m.ctx_dev(&d) == CUDA_SUCCESS && d >= 0) return (int) d;
+    return -1;
+}
+
+// CAN_FLUSH_REMOTE_WRITES, queried once per device (attribute queries are driver calls and
+// must not run per flag op). Benign races: concurrent first-use queries on two devices may
+// repeat a query; the cached pair is only ever (dev, support-for-dev).
+bool memops_can_flush(MemOps& m, int dev)
+{
+    static std::atomic<int> cached_dev { -2 };
+    static std::atomic<bool> cached_sup { false };
+    if (dev >= 0 && cached_dev.load(std::memory_order_relaxed) == dev)
+        return cached_sup.load(std::memory_order_relaxed);
+    bool sup = false;
+#ifdef MEMOPS_HAVE_FLUSH
+    if (m.dev_attr && dev >= 0)
+    {
+        int v = 0;
+        if (m.dev_attr(&v, CU_DEVICE_ATTRIBUTE_CAN_FLUSH_REMOTE_WRITES, (CUdevice) dev)
+            == CUDA_SUCCESS && v)
+            sup = true;
+    }
+#endif
+    if (dev >= 0)
+    {
+        cached_sup.store(sup, std::memory_order_relaxed);
+        cached_dev.store(dev, std::memory_order_relaxed);
+    }
+    return sup;
+}
+
+void memops_log_once(MemOps& m)
+{
+    bool expected = false;
+    if (!g_memops_logged.compare_exchange_strong(expected, true)) return;
+    MemOpsCfg& c = memops_cfg();
+    int dev = memops_current_dev(m);
+    std::fprintf(stderr,
+        "[exl3][memops] wait/write %s, batch %s, can_flush_remote_writes(dev %d) %d, "
+        "flush %d, submit %d, enabled %d\n",
+        (m.wait && m.write) ? "ok" : "MISSING",
+#ifdef MEMOPS_HAVE_FLUSH
+        m.batch ? "ok" : "missing",
+#else
+        "unsupported-by-build",
+#endif
+        dev, (dev >= 0 && memops_can_flush(m, dev)) ? 1 : 0,
+        c.flush ? 1 : 0, c.submit ? 1 : 0,
+        g_memops_enabled.load(std::memory_order_relaxed) ? 1 : 0);
+}
+
+// Push the WDDM software queue without any host sync: the record enqueues a marker behind
+// the write, and the query forces the driver to submit the queued work to answer it. The
+// event is never waited on or synchronized; a cross-device record error is ignored by
+// design (the push is best-effort, correctness never depends on it). One cached event per
+// device; creation is locked, record/query are thread-safe.
+void memops_push_submit(cudaStream_t stream)
+{
+    static cudaEvent_t evs[8] = {};
+    static std::mutex mtx;
+    int dev = 0;
+    if (::cudaGetDevice(&dev) != cudaSuccess || dev < 0 || dev >= 8) return;
+    cudaEvent_t ev = evs[dev];
+    if (!ev)
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        ev = evs[dev];
+        if (!ev)
+        {
+            if (::cudaEventCreateWithFlags(&ev, cudaEventDisableTiming) != cudaSuccess) return;
+            evs[dev] = ev;
+        }
+    }
+    if (::cudaEventRecord(ev, stream) != cudaSuccess) return;
+    (void) ::cudaEventQuery(ev);  // NotReady until the stream drains: expected, ignored
+}
+
+// Enqueue one flag write via memops. Returns true when the write is on the stream (caller
+// then optionally pushes submission); false selects the kernel fallback (latching first
+// when even the plain op failed).
+bool memops_write(CUstream stream, CUdeviceptr flag, cuuint32_t value)
+{
+    MemOps& m = memops();
+    MemOpsCfg& c = memops_cfg();
+    if (c.log) memops_log_once(m);
+#ifdef MEMOPS_HAVE_FLUSH
+    if (c.flush && m.batch && g_memops_batch_ok.load(std::memory_order_relaxed)
+        && memops_can_flush(m, memops_current_dev(m)))
+    {
+        MEMOPS_BATCH_STRUCT p[2];
+        std::memset(p, 0, sizeof(p));
+        p[0].writeValue.operation = CU_STREAM_MEM_OP_WRITE_VALUE_32;
+        p[0].writeValue.address = flag;
+        p[0].writeValue.value = value;
+        p[0].writeValue.flags = 0;
+        p[1].flushRemoteWrites.operation = CU_STREAM_MEM_OP_FLUSH_REMOTE_WRITES;
+        p[1].flushRemoteWrites.flags = 0;
+        if (m.batch(stream, 2, p, 0) == CUDA_SUCCESS) return true;
+        // Flush-only failure (e.g. no HW support on this device): stop trying the batch,
+        // retry plain before ever latching -- a flush problem must not disable memops.
+        g_memops_batch_ok.store(false, std::memory_order_relaxed);
+        if (c.log)
+            std::fprintf(stderr, "[exl3][memops] batch write+flush rejected, using plain writes\n");
+    }
+#endif
+    if (m.write(stream, flag, value, 0) == CUDA_SUCCESS) return true;
+    memops_latch_fallback("write");
+    return false;
+}
+
+// Enqueue one flag wait via memops. Same latch contract as memops_write.
+bool memops_wait(CUstream stream, CUdeviceptr flag, cuuint32_t value)
+{
+    MemOps& m = memops();
+    MemOpsCfg& c = memops_cfg();
+    if (c.log) memops_log_once(m);
+#ifdef MEMOPS_HAVE_FLUSH
+    if (c.flush && g_memops_wait_flush_ok.load(std::memory_order_relaxed)
+        && memops_can_flush(m, memops_current_dev(m)))
+    {
+        if (m.wait(stream, flag, value,
+                   (unsigned)(CU_STREAM_WAIT_VALUE_GEQ | CU_STREAM_WAIT_VALUE_FLUSH))
+            == CUDA_SUCCESS)
+            return true;
+        g_memops_wait_flush_ok.store(false, std::memory_order_relaxed);
+        if (c.log)
+            std::fprintf(stderr, "[exl3][memops] FLUSH wait rejected, using plain waits\n");
+    }
+#endif
+    if (m.wait(stream, flag, value, CU_STREAM_WAIT_VALUE_GEQ) == CUDA_SUCCESS) return true;
+    memops_latch_fallback("wait");
+    return false;
+}
 
 } // namespace
 
@@ -112,9 +338,11 @@ void exl3_moe_flag_write(uintptr_t flag, int64_t value)
     if (m.resolved && g_memops_enabled.load(std::memory_order_relaxed)
         && g_memops_ok.load(std::memory_order_relaxed))
     {
-        CUresult r = m.write((CUstream) stream, (CUdeviceptr) flag, (cuuint32_t) value, 0);
-        if (r == CUDA_SUCCESS) return;
-        g_memops_ok.store(false, std::memory_order_relaxed);
+        if (memops_write((CUstream) stream, (CUdeviceptr) flag, (cuuint32_t) value))
+        {
+            if (memops_cfg().submit) memops_push_submit(stream);
+            return;
+        }
     }
     moe_flag_write_kernel<<<1, 1, 0, stream>>>(reinterpret_cast<uint32_t*>(flag), static_cast<uint32_t>(value));
 }
@@ -126,14 +354,7 @@ void exl3_moe_flag_wait(uintptr_t flag, int64_t value, uintptr_t abort_flag)
     if (m.resolved && g_memops_enabled.load(std::memory_order_relaxed)
         && g_memops_ok.load(std::memory_order_relaxed))
     {
-        CUresult r = m.wait(
-            (CUstream) stream,
-            (CUdeviceptr) flag,
-            (cuuint32_t) value,
-            CU_STREAM_WAIT_VALUE_GEQ
-        );
-        if (r == CUDA_SUCCESS) return;
-        g_memops_ok.store(false, std::memory_order_relaxed);
+        if (memops_wait((CUstream) stream, (CUdeviceptr) flag, (cuuint32_t) value)) return;
     }
     moe_flag_wait_kernel<<<1, 1, 0, stream>>>
     (
