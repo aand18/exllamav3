@@ -134,15 +134,33 @@ class _HugeArena:
 
     def _new_chunk_large(self, size):
         """One 2MB-large-page mapping attempt (Windows, EXL3_MOE_ARENA_LARGEPAGES=1).
-        Needs SeLockMemoryPrivilege, so without admin setup this fails and the caller
-        falls back to 4KB pages. Returns a bytes-like object supporting len() and
-        buffer access, or None."""
+        Needs SeLockMemoryPrivilege enabled in this process token (granted via
+        "Lock pages in memory" + logoff/logon; UAC-filtered tokens may additionally
+        need elevation). Enables it via AdjustTokenPrivileges first, then maps.
+        Returns a bytes-like object supporting len() and buffer access, or None on
+        any failure so the caller falls back to 4KB pages."""
         try:
             import ctypes
+            from ctypes import wintypes
             k32 = ctypes.WinDLL("kernel32")
+            adv = ctypes.WinDLL("advapi32")
             gran = k32.GetLargePageMinimum()
             if not gran:
                 return None
+            # Enable SeLockMemoryPrivilege in this process token (no-op if absent)
+            class _LUID(ctypes.Structure):
+                _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
+            class _LUID_AND_ATTR(ctypes.Structure):
+                _fields_ = [("Luid", _LUID), ("Attributes", wintypes.DWORD)]
+            class _TOKPRIV(ctypes.Structure):
+                _fields_ = [("PrivilegeCount", wintypes.DWORD),
+                            ("Privileges", _LUID_AND_ATTR * 1)]
+            tok = wintypes.HANDLE()
+            if adv.OpenProcessToken(k32.GetCurrentProcess(), 0x28, ctypes.byref(tok)):
+                luid = _LUID()
+                if adv.LookupPrivilegeValueW(None, "SeLockMemoryPrivilege", ctypes.byref(luid)):
+                    tp = _TOKPRIV(1, (_LUID_AND_ATTR(luid, 0x2),))
+                    adv.AdjustTokenPrivileges(tok, False, ctypes.byref(tp), 0, None, None)
             aligned = (size + gran - 1) & ~(gran - 1)
             # MEM_COMMIT|MEM_RESERVE|MEM_LARGE_PAGES, PAGE_READWRITE
             addr = k32.VirtualAlloc(None, aligned, 0x3000 | 0x20000000, 0x04)
@@ -155,6 +173,7 @@ class _HugeArena:
     def _new_chunk(self, min_bytes):
         import mmap, os
         size = max(self.CHUNK_BYTES, (min_bytes + (2 << 20) - 1) & ~((2 << 20) - 1))
+        kind = "mmap"
         if os.name == "nt":
             # mmap.MAP_PRIVATE / mmap.PROT_* don't exist on Windows; an anonymous mapping is
             # writable by default there. Hugepage promotion doesn't apply (promote_hugepages
@@ -162,7 +181,10 @@ class _HugeArena:
             m = None
             if TUNING.arena_largepages:
                 m = self._new_chunk_large(size)
+                kind = "large pages" if m is not None else "4K pages (large failed)"
             if m is None:
+                if kind == "mmap":
+                    kind = "4K pages"
                 m = mmap.mmap(-1, size)
         else:
             m = mmap.mmap(-1, size, mmap.MAP_PRIVATE, mmap.PROT_READ | mmap.PROT_WRITE)
@@ -171,7 +193,7 @@ class _HugeArena:
         self.cur_off = 0
         if os.environ.get("EXL3_MOE_ARENA_DEBUG"):
             total = sum(len(c) for c in self.chunks)
-            print(f" -- arena: new chunk {size/1e6:.1f} MB, {len(self.chunks)} chunks, "
+            print(f" -- arena: new chunk {size/1e6:.1f} MB [{kind}], {len(self.chunks)} chunks, "
                   f"{total/1e9:.3f} GB total", flush = True)
 
     def promote_hugepages(self):
