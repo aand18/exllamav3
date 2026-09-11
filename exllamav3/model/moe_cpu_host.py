@@ -139,13 +139,22 @@ class _HugeArena:
         need elevation). Enables it via AdjustTokenPrivileges first, then maps.
         Returns a bytes-like object supporting len() and buffer access, or None on
         any failure so the caller falls back to 4KB pages."""
+        dbg = []
         try:
             import ctypes
             from ctypes import wintypes
-            k32 = ctypes.WinDLL("kernel32")
-            adv = ctypes.WinDLL("advapi32")
+            k32 = ctypes.WinDLL("kernel32", use_last_error = True)
+            adv = ctypes.WinDLL("advapi32", use_last_error = True)
+            # Pointer-sized prototypes: without these, 64-bit addresses truncate
+            # to 32 bits (silent corruption, not just failure)
+            k32.GetLargePageMinimum.restype = ctypes.c_size_t
+            k32.GetCurrentProcess.restype = wintypes.HANDLE
+            k32.VirtualAlloc.restype = ctypes.c_void_p
+            k32.VirtualAlloc.argtypes = [ctypes.c_void_p, ctypes.c_size_t,
+                                         wintypes.DWORD, wintypes.DWORD]
             gran = k32.GetLargePageMinimum()
             if not gran:
+                dbg.append("no-large-page-minimum")
                 return None
             # Enable SeLockMemoryPrivilege in this process token (no-op if absent)
             class _LUID(ctypes.Structure):
@@ -160,15 +169,30 @@ class _HugeArena:
                 luid = _LUID()
                 if adv.LookupPrivilegeValueW(None, "SeLockMemoryPrivilege", ctypes.byref(luid)):
                     tp = _TOKPRIV(1, (_LUID_AND_ATTR(luid, 0x2),))
-                    adv.AdjustTokenPrivileges(tok, False, ctypes.byref(tp), 0, None, None)
+                    if not adv.AdjustTokenPrivileges(tok, False, ctypes.byref(tp),
+                                                     0, None, None) \
+                            or ctypes.get_last_error() == 1300:
+                        dbg.append("privilege-not-enabled")
+                        return None
+                else:
+                    dbg.append("privilege-lookup-failed")
+                    return None
+            else:
+                dbg.append("token-open-failed")
+                return None
             aligned = (size + gran - 1) & ~(gran - 1)
             # MEM_COMMIT|MEM_RESERVE|MEM_LARGE_PAGES, PAGE_READWRITE
             addr = k32.VirtualAlloc(None, aligned, 0x3000 | 0x20000000, 0x04)
             if not addr:
+                dbg.append(f"alloc-failed-err{ctypes.get_last_error()}")
                 return None
             return (ctypes.c_char * aligned).from_address(addr)
-        except Exception:
+        except Exception as ex:
+            dbg.append(f"exception-{type(ex).__name__}")
             return None
+        finally:
+            if dbg and os.environ.get("EXL3_MOE_ARENA_DEBUG"):
+                print(f" -- arena: large-page attempt: {','.join(dbg)}", flush = True)
 
     def _new_chunk(self, min_bytes):
         import mmap, os
