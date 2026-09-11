@@ -299,10 +299,69 @@ unaffected. Set to `0` to keep the native layout.
 
 The parent enqueues its wait/publish handshake with the worker as CUDA stream memory operations
 (`cuStreamWaitValue32`/`WriteValue32`, front-end executed: no SM occupancy, no per-op launch
-cost) rather than the older spin-wait kernels. Set to `0` to force the kernel fallback, kept
-around specifically because the memop path is not yet exercised on Windows. The kernel path's
-30-second stall timeout does not apply to the memop path; a dead worker there is instead detected
-by a host-side watchdog that unblocks any pending wait.
+cost) rather than the older spin-wait kernels. Set to `0` to force the kernel fallback. The
+kernel path's 30-second stall timeout does not apply to the memop path; a dead worker there is
+instead detected by a host-side watchdog that unblocks any pending wait.
+
+Three companion knobs tune the memop path itself (C++-side, read once on first use):
+
+- `EXL3_MOE_MEMOPS_FLUSH` (default: `1`): enqueue each flag write as a single 2-op batch
+  `[write32 + flush-remote-writes barrier]` and set `WAIT_VALUE_FLUSH` on waits, so the
+  worker promptly observes published flags and the GPU promptly observes the worker's
+  prior writes downstream of a wait. Same number of driver calls as plain ops. Requires
+  `CAN_FLUSH_REMOTE_WRITES` (queried once per device); without it the code degrades to
+  plain single ops. `0` forces plain single ops (the pre-fix behavior, for A/B testing).
+- `EXL3_MOE_MEMOPS_SUBMIT` (default: `1`): after each flag write, record + query a dummy
+  event to push the WDDM software queue (which otherwise holds memop-only streams
+  unsubmitted across the Python gap between issue and collect). `0` disables the push.
+- `EXL3_MOE_MEMOPS_LOG` (default: `0`): print a one-time stderr line with the resolved
+  symbols, flush support, and knob settings, plus a line if the kernel-fallback latch
+  ever trips. A batch/flush-only rejection never latches by itself (the op is retried
+  plain first); only a plain-op failure latches, after which `MEMOPS=1` behaves exactly
+  like `MEMOPS=0`.
+
+### `EXL3_MOE_ZERO_COPY` (default: `0`)
+
+Whole-layer offload only: stage the layer inputs into the worker slot with the fused
+issue kernel's zero-copy stores (instead of three `cudaMemcpyAsync` launches) and fold
+the worker's output back with the fused collect kernel (instead of the H2D readback),
+so a layer handshake is flag-ops plus two small kernels and no DMA at all. Only
+applies to single-chunk jobs (`rows <= EXL3_MOE_CPU_SLOT_ROWS`); anything else keeps
+the copy path. Experimental; validate acceptance before using beyond testing.
+
+### `EXL3_MOE_TIMER_RES` (default: `0`)
+
+Windows only: request a 0.5 ms timer quantum for the CPU worker process (via
+`NtSetTimerResolution`) instead of the 1 ms set at startup, halving the cost of
+every timed nap in the worker's poll loops. Best-effort; falls back silently.
+Set to `1` to enable.
+
+### `EXL3_MOE_THREAD_PRIO` (default: `0`)
+
+Windows only: run the CPU worker pool threads above normal priority and opt out
+of power throttling, so the Balanced power plan can't park or dull them
+mid-decode. Set to `1` to enable.
+
+### `EXL3_MOE_BLOCKING_SYNC` (default: `0`)
+
+Windows only: set `cudaDeviceScheduleBlockingSync` at extension init so host-side
+waits sleep instead of spin-polling, cutting main-process CPU burn with no
+throughput cost on stream-ordered workloads. Must precede context creation; if
+something already created one the call fails silently. Set to `1` to enable.
+
+### `EXL3_MOE_CPU_PIN_OFFSET` (default: `0`)
+
+Rotate the start index into the physical-core pin order: on dual-CCD parts the
+first half of the order is typically one CCD and the second half the other, so
+an offset of half the physical core count moves the pool onto the other CCD
+for A/B testing cache-vs-frequency placement. `0` keeps the default order.
+
+### `EXL3_MOE_ARENA_LARGEPAGES` (default: `0`)
+
+Windows only: back the CPU worker's expert arena with 2 MB large pages instead
+of 4 KB pages, cutting TLB pressure on every GEMV sweep. Needs
+SeLockMemoryPrivilege; without it (the common case) loading silently falls back
+to 4 KB pages. Set to `1` to attempt.
 
 ### `EXL3_MOE_STREAM_DEBUG` (default: `0`)
 
