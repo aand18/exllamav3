@@ -1442,6 +1442,7 @@ class CacheLayer_kvarn(CacheLayer):
                 "tail_tokens": self.tail_requested_raw,
                 "tail_type": self.tail_type_name,
                 "is_swa": self.is_swa,
+                "sinkhorn_iters": self.sinkhorn_iters,
                 "kvarn_version": KVAR_N_STATE_VERSION,
             }
         }
@@ -1491,6 +1492,7 @@ class CacheLayer_kvarn_qsa(QSAPlanes, CacheLayer_kvarn):
                 "tail_tokens": self.tail_requested_raw,
                 "tail_type": self.tail_type_name,
                 "is_swa": self.is_swa,
+                "sinkhorn_iters": self.sinkhorn_iters,
                 "kvarn_version": KVAR_N_STATE_VERSION,
             }
         }
