@@ -614,7 +614,10 @@ def kvarn_quantize_tile(tile: torch.Tensor, bits: int,
     lo = balanced.amin(dim=-1)
     hi = balanced.amax(dim=-1)
     scale = ((hi - lo) / qmax).clamp_min(1e-10)
-    q = torch.round((balanced - lo.unsqueeze(-1)) / scale.unsqueeze(-1)) \
+    # Bee uses std::round (half away from zero); torch.round is banker's
+    # (half to even) and differs on exact .5 fractions. The argument is
+    # always non-negative (lo is the row min), so floor(x + 0.5) matches Bee.
+    q = torch.floor((balanced - lo.unsqueeze(-1)) / scale.unsqueeze(-1) + 0.5) \
         .clamp(0, qmax).to(torch.uint8)
     return q, s_row * scale, s_row * lo, s_col
 
