@@ -132,9 +132,13 @@ def attn_dispatch(
         if (
             _qc_attn and
             isinstance(layer, CacheLayer_quant) and
-            not isinstance(layer, CacheLayer_kvarn) and  # M1: KVarN always takes the
-                                                         # dequant path (q_cache=None);
-                                                         # online kernels are M2
+            not isinstance(layer, CacheLayer_kvarn) and  # KVarN always takes the
+                                                          # dequant path (q_cache=None):
+                                                          # get_kv serves one merged
+                                                          # image (sealed body +
+                                                          # exact sink/tail overlay)
+                                                          # for single-softmax SDPA;
+                                                          # online kernels are later work
             layer.compand_a == 0.0 and
             q.dtype == torch.float16 and
             dim <= 512 and dim % 32 == 0 and   # packed groups of 32; non-pow2 dims run zero-padded

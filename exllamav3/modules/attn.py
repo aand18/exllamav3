@@ -992,8 +992,8 @@ class Attention(Module):
         if not isinstance(layer, QSAPlanes):
             return
         if isinstance(layer, CacheLayer_kvarn):
-            return  # M1: the synthetic zero-page measurement would corrupt seal
-                    # bookkeeping; KVarN autosplit/BC support is M2
+            return  # KVarN: the synthetic zero-page measurement would corrupt seal
+                    # bookkeeping; KVarN autosplit/BC support is later work
         quant = isinstance(layer, CacheLayer_quant)
         chunk = params["batch_shape"][1]
 
