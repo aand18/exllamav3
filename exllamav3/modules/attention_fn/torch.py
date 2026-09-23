@@ -48,6 +48,46 @@ def fn_torch_sdpa_fallback_nocache(args: AttnArgs) -> torch.Tensor | None:
     ).transpose(1, 2)
 
 
+def fn_torch_sdpa_paged_cpu_cache(args: AttnArgs) -> torch.Tensor | None:
+    """
+    CPU-only paged-cache fallback for any head dim (the bighead torch/xformers
+    fallbacks require dim >= 512, and Triton is GPU-only). Gathers this
+    sequence's pages into a contiguous buffer, runs SDPA (with GQA), and writes
+    the new rows back to the paged cache. Added for KVarN M1 CPU validation;
+    generic over fp16 and dequantized caches. Only fires on CPU tensors so GPU
+    dispatch order is unchanged.
+    """
+    if (
+        args.is_varlen() or
+        not args.has_kv_cache() or
+        args.softcap != 0.0 or
+        args.sinks is not None or
+        args.is_swa()
+    ):
+        return None
+    if args.q.device.type != "cpu" or args.k_cache.device.type != "cpu":
+        return None
+
+    if not args.non_causal_spans:
+        return _torch_bighead_fallback(
+            q = args.q,
+            k = args.k,
+            v = args.v,
+            k_cache = args.k_cache,
+            v_cache = args.v_cache,
+            block_table = args.block_table,
+            cache_seqlens = args.cache_seqlens,
+            causal = args.causal,
+            softmax_scale = args.sm_scale,
+            window_size = args.get_window_size(),
+            softcap = args.softcap
+        )
+    else:
+        arglist = get_non_causal_span_arglist(args)
+        o = [_torch_bighead_fallback(**a) for a in arglist]
+        return torch.cat(o, dim = 1)
+
+
 def fn_torch_sdpa_fallback_cache(args: AttnArgs) -> torch.Tensor | None:
     if (
         args.is_varlen() or

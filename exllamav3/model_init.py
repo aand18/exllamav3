@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from . import Model, Config, Cache, Tokenizer
 from .loader import SafetensorsCollection, VariantSafetensorsCollection
-from .cache import CacheLayer_fp16, CacheLayer_quant
+from .cache import CacheLayer_fp16, CacheLayer_quant, CacheLayer_kvarn
 from .generator.sampler import ComboSampler
 from argparse import ArgumentParser
 import yaml
@@ -109,7 +109,7 @@ def add_args(
 
     if cache:
         parser.add_argument("-cs", "--cache_size", type = int, help = f"Total cache size in tokens, default: {default_cache_size}", default = default_cache_size)
-        parser.add_argument("-cq", "--cache_quant", type = str, help = "Use quantized cache. Specify either kv_bits or k_bits,v_bits pair")
+        parser.add_argument("-cq", "--cache_quant", type = str, help = "Use quantized cache. Specify either kv_bits or k_bits,v_bits pair, or kvarn4 / kvarn4,kvarn4 for the KVarN preset")
         parser.add_argument("-cca", "--cache_compand_a", type = float, help = "Compand a value for simulated cache, default: 0.0", default = 0.0)
         parser.add_argument("-ccs", "--cpu_cache_size", type = float, help = f"CPU second-tier cache size, in GB, default: {default_cpu_cache_size}", default = default_cpu_cache_size)
         parser.add_argument("-rcs", "--recurrent_cache_size", type = float, help = f"CPU second-tier cache size, in GB, default: {default_recurrent_cache_size}", default = default_recurrent_cache_size)
@@ -275,30 +275,49 @@ def init(
     )
     if "cache_size" in vars(args):
         if args.cache_quant is not None:
-            split = [int(bits) for bits in args.cache_quant.split(",")]
-            if len(split) == 1:
-                k_bits = v_bits = split[0]
-            elif len(split) == 2:
-                k_bits, v_bits = tuple(split)
+            cq = args.cache_quant.strip().lower()
+            if cq in ("kvarn4", "kvarn4,kvarn4"):
+                cache = Cache(
+                    model,
+                    max_num_tokens = args.cache_size,
+                    layer_type = CacheLayer_kvarn,
+                    k_bits = 4,
+                    v_bits = 4,
+                    max_history = max_history,
+                    max_batch_size = args.autosplit_max_batch_size,
+                )
+                draft_cache = Cache(
+                    draft_model,
+                    max_num_tokens = args.cache_size,
+                    layer_type = CacheLayer_kvarn,
+                    k_bits = 4,
+                    v_bits = 4
+                ) if draft_model_dir else None
             else:
-                raise ValueError("Specify either one or two bitrates for cache quantization")
-            cache = Cache(
-                model,
-                max_num_tokens = args.cache_size,
-                layer_type = CacheLayer_quant,
-                k_bits = k_bits,
-                v_bits = v_bits,
-                compand_a = args.cache_compand_a,
-                max_history = max_history,
-                max_batch_size = args.autosplit_max_batch_size,
-            )
-            draft_cache = Cache(
-                draft_model,
-                max_num_tokens = args.cache_size,
-                layer_type = CacheLayer_quant,
-                k_bits = k_bits,
-                v_bits = v_bits
-            ) if draft_model_dir else None
+                split = [int(bits) for bits in args.cache_quant.split(",")]
+                if len(split) == 1:
+                    k_bits = v_bits = split[0]
+                elif len(split) == 2:
+                    k_bits, v_bits = tuple(split)
+                else:
+                    raise ValueError("Specify either one or two bitrates for cache quantization")
+                cache = Cache(
+                    model,
+                    max_num_tokens = args.cache_size,
+                    layer_type = CacheLayer_quant,
+                    k_bits = k_bits,
+                    v_bits = v_bits,
+                    compand_a = args.cache_compand_a,
+                    max_history = max_history,
+                    max_batch_size = args.autosplit_max_batch_size,
+                )
+                draft_cache = Cache(
+                    draft_model,
+                    max_num_tokens = args.cache_size,
+                    layer_type = CacheLayer_quant,
+                    k_bits = k_bits,
+                    v_bits = v_bits
+                ) if draft_model_dir else None
         else:
             cache = Cache(
                 model,
