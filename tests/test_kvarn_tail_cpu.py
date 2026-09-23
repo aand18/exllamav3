@@ -329,6 +329,46 @@ def test_get_kvarn_records_m2():
 # --------------------------------------------------------------------------
 
 @torch.inference_mode()
+def test_page_reuse_owner_drops_to_new_writer():
+    """A freed page reused by a shorter sequence must not evict the new
+    tail: the page owner drops to the new writer on base-change reset.
+    Without the reset, the dead sequence's owner keeps the eviction
+    threshold high and the new tail rows silently fall back to the
+    quantized body."""
+    torch.manual_seed(23)
+    # tail 256: sink [0,128) + tail [44,300) cover the whole span, so it
+    # must read back bit-exact; the sealed body group is what the owner
+    # bug would have wrongly served (owner 700, floor 384: 128+128 <=
+    # 700-384 would evict it).
+    layer = _layer(2, 128, 1024, tail_tokens=256)
+    bt = _ids(1024)
+    k = torch.randn(700, 2, 128).half()
+    v = torch.randn(700, 2, 128).half()
+    layer.update_kv_direct(torch.zeros(1, dtype=torch.int32), bt,
+                           k.unsqueeze(0), v.unsqueeze(0), 700)
+    assert int(layer.page_owner_n[1]) == 700
+    assert int(layer.page_owner_n[2]) == 700
+    # Reuse physical pages 1,2 for a new 300-token sequence at base 0.
+    bt2 = bt.clone()
+    bt2[0, 0] = 1
+    bt2[0, 1] = 2
+    k2 = torch.randn(300, 2, 128).half()
+    v2 = torch.randn(300, 2, 128).half()
+    layer.update_kv_direct(torch.zeros(1, dtype=torch.int32), bt2,
+                           k2.unsqueeze(0), v2.unsqueeze(0), 300)
+    assert int(layer.page_owner_n[1]) == 300
+    assert int(layer.page_owner_n[2]) == 300
+    # Whole committed span reads back bit-exact (sink + sealed tail
+    # group + staging); without the owner reset the sealed tail group
+    # would have been evicted and served lossy.
+    kk, vv = layer.get_kv(torch.tensor([300], dtype=torch.int32), bt2)
+    got_k = kk[bt2[0]].reshape(-1, 2, 128)[:300]
+    got_v = vv[bt2[0]].reshape(-1, 2, 128)[:300]
+    assert torch.equal(got_k, k2)
+    assert torch.equal(got_v, v2)
+
+
+@torch.inference_mode()
 def test_copy_page_sink_tail():
     torch.manual_seed(16)
     layer = _layer(2, 128, 512)

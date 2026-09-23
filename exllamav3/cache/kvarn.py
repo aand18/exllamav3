@@ -1028,10 +1028,25 @@ class CacheLayer_kvarn(CacheLayer):
                 self.group_base[gi] = bnew
                 page = gi // (PAGE_SIZE // KVAR_N_GROUP)
                 self.page_pinned[page] = False
+                # The page's owner drops to the new writer: a reused page
+                # otherwise keeps its dead sequence's length and the
+                # end-of-call eviction (owner - N - R) would discard the
+                # just-written tail as if it were ancient history. min()
+                # is the safe direction (a low owner only keeps more
+                # exact rows); untouched pages (-1) take the new length.
+                cur_owner = int(self.page_owner_n[page])
+                self.page_owner_n[page] = n_new if cur_owner < 0 \
+                    else min(cur_owner, n_new)
             elif bool(self.sealed[gi]):
                 # Overwrite of sealed content: unseal so the fresh rows
-                # reseal below (records never go stale).
+                # reseal below (records never go stale). The owner drops
+                # to the new writer for the same reason as above
+                # (page reuse at the same base with a shorter sequence).
                 self.sealed[gi] = False
+                page = gi // (PAGE_SIZE // KVAR_N_GROUP)
+                cur_owner = int(self.page_owner_n[page])
+                if cur_owner >= 0:
+                    self.page_owner_n[page] = min(cur_owner, n_new)
             blk = self.stage_blocks.get(gi)
             if blk is None:
                 blk = self._alloc_stage_block(gi)
