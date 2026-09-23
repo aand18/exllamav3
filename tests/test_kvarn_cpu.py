@@ -384,9 +384,12 @@ def test_sdpa_close_to_fp16():
 # --------------------------------------------------------------------------
 
 def _load_dispatch():
-    if "exllamav3.modules.attention_fn.dispatch" in sys.modules:
-        import importlib as _il
-        return _il.import_module("exllamav3.modules.attention_fn.dispatch")
+    # Always fully reload (no early return): dispatch binds CacheLayer by
+    # class identity at exec time, so reusing a dispatch module loaded by
+    # another test file (with its own stub-generation CacheLayer base)
+    # breaks isinstance. Full reload (including the cache.cache base)
+    # keeps every dispatch test self-contained regardless of
+    # collection/execution order.
     import numpy  # noqa: F401  (fp16/quant/mla use numpy)
     _stub("exllamav3.model").Config = object
     _extm = _stub("exllamav3.ext")
@@ -397,6 +400,8 @@ def _load_dispatch():
     # satisfy fp16/quant imports), then exec the real cache/__init__ so that
     # `from ...cache import ...` in dispatch resolves package attributes.
     for name, rel in [
+        ("exllamav3.constants", "constants.py"),
+        ("exllamav3.cache.cache", "cache/cache.py"),
         ("exllamav3.cache.fp16", "cache/fp16.py"),
         ("exllamav3.cache.quant", "cache/quant.py"),
         ("exllamav3.cache.mla", "cache/mla.py"),
