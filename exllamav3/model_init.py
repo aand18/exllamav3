@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from . import Model, Config, Cache, Tokenizer
 from .loader import SafetensorsCollection, VariantSafetensorsCollection
 from .cache import CacheLayer_fp16, CacheLayer_quant, CacheLayer_kvarn
+from .cache.kvarn import kvarn_parse_preset
 from .generator.sampler import ComboSampler
 from argparse import ArgumentParser
 import yaml
@@ -109,7 +110,7 @@ def add_args(
 
     if cache:
         parser.add_argument("-cs", "--cache_size", type = int, help = f"Total cache size in tokens, default: {default_cache_size}", default = default_cache_size)
-        parser.add_argument("-cq", "--cache_quant", type = str, help = "Use quantized cache. Specify either kv_bits or k_bits,v_bits pair, or kvarn4 / kvarn4,kvarn4 for the KVarN preset")
+        parser.add_argument("-cq", "--cache_quant", type = str, help = "Use quantized cache. Specify either kv_bits or k_bits,v_bits pair, or a KVarN preset: kvarn4 / kvarn4,kvarn4, kvarn5 / kvarn5,kvarn5, kvarn5,kvarn4 (Bee balanced default)")
         parser.add_argument("-cca", "--cache_compand_a", type = float, help = "Compand a value for simulated cache, default: 0.0", default = 0.0)
         parser.add_argument("-ccs", "--cpu_cache_size", type = float, help = f"CPU second-tier cache size, in GB, default: {default_cpu_cache_size}", default = default_cpu_cache_size)
         parser.add_argument("-rcs", "--recurrent_cache_size", type = float, help = f"CPU second-tier cache size, in GB, default: {default_recurrent_cache_size}", default = default_recurrent_cache_size)
@@ -278,10 +279,14 @@ def init(
     if "cache_size" in vars(args):
         if args.cache_quant is not None:
             cq = args.cache_quant.strip().lower()
-            if cq in ("kvarn4", "kvarn4,kvarn4"):
+            if cq.startswith("kvarn"):
+                try:
+                    k_bits, v_bits = kvarn_parse_preset(cq)
+                except ValueError as e:
+                    raise ValueError(str(e)) from None
                 kvarn_kwargs = dict(
-                    k_bits = 4,
-                    v_bits = 4,
+                    k_bits = k_bits,
+                    v_bits = v_bits,
                     tail_tokens = getattr(args, "kv_tail_tokens", 0) or 0,
                     tail_type = getattr(args, "kv_tail_type", "f16") or "f16",
                 )
