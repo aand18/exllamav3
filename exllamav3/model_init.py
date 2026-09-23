@@ -342,7 +342,8 @@ def init(
                     max_num_tokens = args.cache_size,
                     layer_type = CacheLayer_quant,
                     k_bits = k_bits,
-                    v_bits = v_bits
+                    v_bits = v_bits,
+                    compand_a = args.cache_compand_a,
                 ) if draft_model_dir else None
         else:
             cache = Cache(
