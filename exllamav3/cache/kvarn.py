@@ -1215,11 +1215,20 @@ class CacheLayer_kvarn(CacheLayer):
         # capped at the learned swa_window at construction. Sink/tail
         # exactness is applied here as an overlay, so the temps form one
         # merged image for the single downstream softmax.
-        k = torch.empty((self.num_pages, PAGE_SIZE, self.num_kv_heads, self.head_dim),
+        k = torch.zeros((self.num_pages, PAGE_SIZE, self.num_kv_heads, self.head_dim),
                         dtype=torch.half, device=self.device)
-        v = torch.empty_like(k)
-        for g in range(self.num_groups):
-            self._group_block(g, k, v)
+        v = torch.zeros_like(k)
+        # Materialize only the pages the batch actually references (the
+        # fallback gathers just these rows). Unreferenced pages stay zero
+        # and are never read, so decode pays for its context, not the
+        # whole cache allocation.
+        gps = PAGE_SIZE // KVAR_N_GROUP
+        for p in torch.unique(block_table.long()).tolist():
+            p = int(p)
+            if p < 0 or p >= self.num_pages:
+                continue
+            for hh in range(gps):
+                self._group_block(p * gps + hh, k, v)
         self._apply_exact_overlay(k, v, cache_seqlens, block_table)
         return k, v
 
