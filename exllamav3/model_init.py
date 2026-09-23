@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from . import Model, Config, Cache, Tokenizer
 from .loader import SafetensorsCollection, VariantSafetensorsCollection
 from .cache import CacheLayer_fp16, CacheLayer_quant, CacheLayer_kvarn
-from .cache.kvarn import kvarn_parse_preset
+from .cache.kvarn import kvarn_parse_preset, kvarn_parse_swa_pair
 from .generator.sampler import ComboSampler
 from argparse import ArgumentParser
 import yaml
@@ -116,6 +116,8 @@ def add_args(
         parser.add_argument("-rcs", "--recurrent_cache_size", type = float, help = f"CPU second-tier cache size, in GB, default: {default_recurrent_cache_size}", default = default_recurrent_cache_size)
         parser.add_argument("-kvt", "--kv_tail_tokens", type = int, help = "KVarN exact tail size in tokens (0/omitted => intrinsic 128 floor, positive values ceil to 128-groups, capped at cache size, SWA layers capped at the sliding window; full-window => native exact). Ignored for non-KVarN caches.", default = 0)
         parser.add_argument("-kvt_type", "--kv_tail_type", type = str, help = "KVarN exact tail dtype: f16 (default) or bf16. Ignored for non-KVarN caches.", default = "f16")
+        parser.add_argument("-kvsk", "--kv_swa_k", "--kv-swa-k", type = str, help = "KVarN SWA-layer K preset override: kvarnN or bare N with N in {2,3,4,5,6,8} (e.g. kvarn8 or 8). Requires --kv-swa-v; omit both to reuse the -cq preset for SWA layers. Ignored for non-KVarN caches.", default = None)
+        parser.add_argument("-kvsv", "--kv_swa_v", "--kv-swa-v", type = str, help = "KVarN SWA-layer V preset override: kvarnN or bare N with N in {2,3,4,5,6,8} (e.g. kvarn6 or 6). Requires --kv-swa-k; omit both to reuse the -cq preset for SWA layers. Ignored for non-KVarN caches.", default = None)
 
     if add_draft_model_args:
         parser.add_argument("-dm", "--draft_model_dir", type = str, help = "Path to draft model directory", default = None)
@@ -284,11 +286,24 @@ def init(
                     k_bits, v_bits = kvarn_parse_preset(cq)
                 except ValueError as e:
                     raise ValueError(str(e)) from None
+                try:
+                    swa_k_bits, swa_v_bits = kvarn_parse_swa_pair(
+                        getattr(args, "kv_swa_k", None),
+                        getattr(args, "kv_swa_v", None),
+                        (k_bits, v_bits),
+                    )
+                except ValueError as e:
+                    raise ValueError(str(e)) from None
+                # No override requested: inherit the main preset on every
+                # layer (each layer self-selects from is_swa anyway).
+                swa_override = (swa_k_bits, swa_v_bits) != (k_bits, v_bits)
                 kvarn_kwargs = dict(
                     k_bits = k_bits,
                     v_bits = v_bits,
                     tail_tokens = getattr(args, "kv_tail_tokens", 0) or 0,
                     tail_type = getattr(args, "kv_tail_type", "f16") or "f16",
+                    **({"swa_k_bits": swa_k_bits, "swa_v_bits": swa_v_bits}
+                       if swa_override else {}),
                 )
                 cache = Cache(
                     model,

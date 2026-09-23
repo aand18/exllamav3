@@ -992,8 +992,15 @@ class Attention(Module):
         if not isinstance(layer, QSAPlanes):
             return
         if isinstance(layer, CacheLayer_kvarn):
-            return  # KVarN: the synthetic zero-page measurement would corrupt seal
-                    # bookkeeping; KVarN autosplit/BC support is later work
+            # KVarN M5: decline the synthetic zero-page sparse-regime
+            # probe (see kvarn_autosplit_probe_supported: it would seal
+            # garbage groups and touch page tensors KVarN does not have).
+            # The load-time measuring forward through the real cached
+            # path already accounts the fp16-size get_kv transient
+            # (kvarn_autosplit_transient_bytes), and seal bookkeeping is
+            # rewrite-safe, so skipping the probe is conservative and
+            # cannot corrupt seals.
+            return
         quant = isinstance(layer, CacheLayer_quant)
         chunk = params["batch_shape"][1]
 
