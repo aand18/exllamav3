@@ -1012,8 +1012,8 @@ class Attention(Module):
         layer = cache if isinstance(cache, CacheLayer) else \
             cache.layers[self.layer_idx, params.get("layer_instance") or 0]
         if isinstance(layer, CacheLayer_kvarn):
-            return  # M1: the synthetic zero-page measurement would corrupt seal
-                    # bookkeeping; KVarN autosplit/BC support is M2
+            return  # KVarN: the synthetic zero-page measurement would corrupt seal
+                    # bookkeeping; KVarN autosplit/BC support is later work
         quant = isinstance(layer, CacheLayer_quant)
         return layer, quant
 

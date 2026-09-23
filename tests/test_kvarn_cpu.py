@@ -212,7 +212,8 @@ def test_paging_roundtrip_and_seal():
     k = torch.randn(ntok, kvh, hd).half()
     v = torch.randn(ntok, kvh, hd).half()
     layer.update_kv_direct(torch.zeros(1, dtype=torch.int32), bt, k.unsqueeze(0), v.unsqueeze(0), ntok)
-    assert bool(layer.sealed[:2].all())          # groups 0,1 sealed (256 tokens)
+    assert not bool(layer.sealed[0])           # M2: group 0 is the permanent sink
+    assert bool(layer.sealed[1])               # group 1 sealed (256 tokens)
     assert not bool(layer.sealed[2])             # group 2 partial -> fp16 staging
     assert not bool(layer.sealed[3])
     kk, vv = layer.get_kv(torch.tensor([ntok], dtype=torch.int32), bt)
@@ -231,7 +232,7 @@ def test_multislice_head_dim_256():
     k = torch.randn(ntok, kvh, hd).half()
     v = torch.randn(ntok, kvh, hd).half()
     layer.update_kv_direct(torch.zeros(1, dtype=torch.int32), bt, k.unsqueeze(0), v.unsqueeze(0), ntok)
-    assert bool(layer.sealed[0]) and not bool(layer.sealed[1])
+    assert not bool(layer.sealed[0]) and not bool(layer.sealed[1])  # M2: group 0 sink
     assert layer.records.shape == (2, 2, 17920)  # 2 slices per head
     kk, vv = layer.get_kv(torch.tensor([ntok], dtype=torch.int32), bt)
     got_k = kk[bt[0]].reshape(-1, kvh, hd)[:ntok]
@@ -267,12 +268,20 @@ def test_copy_page():
     layer.update_kv_direct(torch.zeros(1, dtype=torch.int32), bt, k.unsqueeze(0), v.unsqueeze(0), 300)
 
     dst = _layer(2, 128, 512)
-    dst.copy_page(layer, 0, 1, 256)   # full page: sealed groups travel
-    assert bool(dst.sealed[2]) and bool(dst.sealed[3])
-    assert torch.equal(dst.records[2], layer.records[0])
-    kk, _ = dst.get_kv(torch.tensor([300], dtype=torch.int32), bt)
+    dst.copy_page(layer, 0, 1, 256)   # full page: sealed group travels, sink stays unsealed
+    assert not bool(dst.sealed[2])    # M2: sink group never sealed
+    assert bool(dst.sealed[3])
+    assert torch.equal(dst.records[3], layer.records[1])
+    # M2: the exact overlay is logical (per block_table), so compare the
+    # shared page through a remapped block table, not raw page tensors.
+    bt2 = bt.clone()
+    bt2[0, 0] = 1
+    kk, _ = dst.get_kv(torch.tensor([300], dtype=torch.int32), bt2)
     ref, _ = layer.get_kv(torch.tensor([300], dtype=torch.int32), bt)
-    assert torch.equal(kk[1], ref[0])
+    # Only the copied 256-token span is comparable (the copy overwrote dst
+    # page 1, which used to back positions 256..299).
+    assert torch.equal(kk[bt2[0]].reshape(-1, 2, 128)[:256],
+                       ref[bt[0]].reshape(-1, 2, 128)[:256])
 
     dst2 = _layer(2, 128, 512)
     dst2.copy_page(layer, 1, 0, 44)   # partial page: staging travels unsealed
@@ -288,15 +297,16 @@ def test_storage_size_beats_fp16_and_quant():
     assert got < 0.5 * fp16_bytes, (got, fp16_bytes)
     # records dominate: 32 groups * 4 heads * 17920 B
     assert got == 32 * 4 * 17920
-    assert layer.overhead_size() > 0  # fp16 staging buffer
-    assert len(layer.get_tensors()) == 3
+    assert layer.overhead_size() > 0  # fp16 staging + exact tail buffers
+    assert len(layer.get_tensors()) == 5
 
 
 def test_tp_export():
     layer = _layer(2, 128, 512)
     d = layer.tp_export(None)
     assert d["cls"] is kvarn.CacheLayer_kvarn
-    assert d["args"] == {"cache_id": 0, "max_num_tokens": 512, "k_bits": 4, "v_bits": 4}
+    assert d["args"] == {"cache_id": 0, "max_num_tokens": 512, "k_bits": 4, "v_bits": 4,
+                         "tail_tokens": 0, "tail_type": "f16", "is_swa": False}
     q = kvarn.CacheLayer_kvarn_qsa(None, _attn(2, 128,
         SimpleNamespace(head_dim=32, compress_ratio=4)), 7, 512)
     dq = q.tp_export(None)
@@ -365,7 +375,7 @@ def test_sdpa_close_to_fp16():
         torch.cat([kp, kq], dim=1).transpose(1, 2).float(),
         torch.cat([vp, vq], dim=1).transpose(1, 2).float(),
         is_causal=True, enable_gqa=True).transpose(1, 2)
-    # 4-bit KVarN without sink floor: output error is quantization-dominated.
+    # 4-bit KVarN with sink + 128 tail floor: output error is quantization-dominated.
     assert _rmse(o_q, o_ref) < 0.12, _rmse(o_q, o_ref)
 
 
