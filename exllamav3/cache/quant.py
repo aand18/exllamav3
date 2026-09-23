@@ -156,5 +156,6 @@ class CacheLayer_quant(CacheLayer):
                 "max_num_tokens": self.max_num_tokens,
                 "k_bits": self.k_bits,
                 "v_bits": self.v_bits,
+                "compand_a": self.compand_a,
             }
         }
