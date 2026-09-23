@@ -966,6 +966,9 @@ class Attention(Module):
         from ..cache.fp16 import CacheLayer_fp16
         from ..cache.quant import CacheLayer_quant
         from ..cache.qsa import CacheLayer_qsa, CacheLayer_qsa_quant
+        from ..cache.kvarn import CacheLayer_kvarn, CacheLayer_kvarn_qsa
+        if issubclass(default, CacheLayer_kvarn):
+            return CacheLayer_kvarn_qsa, kwargs
         if issubclass(default, CacheLayer_quant):
             return CacheLayer_qsa_quant, kwargs
         assert issubclass(default, CacheLayer_fp16), \
@@ -983,10 +986,14 @@ class Attention(Module):
             return
         from ..cache import CacheLayer, CacheLayer_quant
         from ..cache.qsa import QSAPlanes
+        from ..cache.kvarn import CacheLayer_kvarn
         layer = cache if isinstance(cache, CacheLayer) else \
             cache.layers[self.layer_idx, params.get("layer_instance") or 0]
         if not isinstance(layer, QSAPlanes):
             return
+        if isinstance(layer, CacheLayer_kvarn):
+            return  # M1: the synthetic zero-page measurement would corrupt seal
+                    # bookkeeping; KVarN autosplit/BC support is M2
         quant = isinstance(layer, CacheLayer_quant)
         chunk = params["batch_shape"][1]
 
