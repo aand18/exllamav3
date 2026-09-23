@@ -1290,6 +1290,16 @@ class CacheLayer_kvarn(CacheLayer):
         assert (self.k_bits, self.v_bits) == (source.k_bits, source.v_bits), \
             "KVarN copy_page requires matching K/V widths (records are " \
             "not comparable across presets)"
+        assert (self.num_kv_heads, self.slices, self.head_dim) == \
+            (source.num_kv_heads, source.slices, source.head_dim), \
+            "KVarN copy_page requires matching geometry (records.shape " \
+            "alone is ambiguous: e.g. kvh8/hd128 and kvh4/hd256 share " \
+            "ncols and tile bytes but slice differently)"
+        assert self.tail_effective == source.tail_effective and \
+            self.tail_window == source.tail_window, \
+            "KVarN copy_page requires matching tail policy (a different " \
+            "effective tail would leave the destination without exact " \
+            "rows the source was served)"
         assert self.swa_override == source.swa_override and \
             self.is_swa == source.is_swa, \
             "KVarN copy_page requires matching SWA group (is_swa) and " \
