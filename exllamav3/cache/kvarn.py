@@ -50,10 +50,31 @@ M4 scope (full CPU parity except CUDA kernels):
   can never go stale. Prompt-cache state compat is still M2-provisional
   (no version bump).
 
-M4 still explicitly out of scope (M5): Triton/CUDA online-dequant
-kernels (``get_kvarn_records`` exposes the records for them; attention
-stays dequant-then-SDPA on CPU), SWA K/V pair overrides, the model KLD
-parity harness, BC/autosplit integration, prompt-cache versioning.
+M5 scope (CPU-testable; Triton/CUDA online kernels still OUT):
+- SWA K/V pair overrides (``--kv-swa-k`` / ``--kv-swa-v``, Bee
+  ``--cache-type-k-swa`` / ``--cache-type-v-swa``): SWA layers use a
+  different KVarN preset than full-attention layers (both-or-neither,
+  same 36-combo validation; default is the main preset). Each layer
+  self-selects its effective preset from ``is_swa``; QSA mapping and
+  the tail policy (SWA window cap) respect the per-group preset.
+- Autosplit/BC integration (CPU-verifiable half): the BC graph path
+  declines KVarN layers per layer (``kvarn_bc_attn_supported`` documents
+  why; ``build_bc_attn`` returns None -> dispatch fallback, never
+  silent). The QSA synthetic zero-page probe is declined for KVarN
+  (``kvarn_autosplit_probe_supported``); the load-time measuring forward
+  already covers the fp16-size ``get_kv`` transient
+  (``kvarn_autosplit_transient_bytes``) and seal bookkeeping is
+  rewrite-safe, so dummy writes cannot corrupt seals.
+- Prompt-cache/state versioning: ``tp_export`` carries a
+  ``kvarn_version`` tag (``KVAR_N_STATE_VERSION``) plus the SWA override
+  pair; ``copy_page`` asserts version + effective widths and carries
+  seal/sink/tail metadata, so prompt-cache reuse across the generator
+  paths preserves exactness.
+- Still OUT (documented fallbacks, force fp16): Triton/CUDA
+  online-dequant kernels, the model KLD parity harness, TP loader
+  composition beyond ``tp_export`` (``get_tensors`` is not page-major),
+  and the CPU second-tier page cache (requires page-major CUDA
+  tensors).
 
 M4 non-comparability note: widths change the record payload, so
 records sealed under one preset are NOT comparable / interchangeable
@@ -172,6 +193,113 @@ def kvarn_parse_preset(spec) -> tuple:
         f"Unsupported KVarN preset {spec!r}: M4 supports kvarnN and "
         f"kvarnK,kvarnV for K,V in {list(KVAR_N_VALID_BITS)} "
         f"(36 combos, e.g. kvarn4, kvarn5, kvarn5,kvarn4).")
+
+
+# M5: prompt-cache / TP state version. Bump whenever the sealed-record
+# layout, seal/sink/tail metadata, or tp_export args change incompatibly.
+# tp_export carries this tag; the constructor rejects stale versions
+# (fail-closed: rebuild the cache / re-export instead of silently
+# misreading another preset's records).
+KVAR_N_STATE_VERSION = 5
+
+
+def kvarn_parse_bits(spec) -> int:
+    """
+    Parse one side of an SWA K/V override: ``kvarnN`` or bare ``N``
+    (case-insensitive) for N in {2,3,4,5,6,8}. Anything else raises
+    ValueError (fail-closed).
+    """
+    key = str(spec).strip().lower().replace(" ", "")
+    name = key[5:] if key.startswith("kvarn") else key
+    if name.isdigit() and int(name) in KVAR_N_VALID_BITS:
+        return int(name)
+    raise ValueError(
+        f"Unsupported KVarN SWA bit width {spec!r}: expected kvarnN or "
+        f"bare N with N in {list(KVAR_N_VALID_BITS)} (e.g. kvarn8, 6).")
+
+
+def kvarn_parse_swa_pair(k_spec, v_spec, default_pair: tuple) -> tuple:
+    """
+    Resolve the ``--kv-swa-k`` / ``--kv-swa-v`` override pair (Bee
+    ``--cache-type-k-swa`` / ``--cache-type-v-swa`` semantics).
+
+    - Both omitted (None/empty) -> ``default_pair`` (the main preset).
+    - Exactly one given -> ValueError (Bee requires the pair; a lone
+      side would silently mix precisions).
+    - Both given -> each parsed with ``kvarn_parse_bits`` and the pair
+      validated against the full 36-combo table (``kvarn_valid_pair``).
+    """
+    empty = lambda s: s is None or str(s).strip() == ""
+    if empty(k_spec) and empty(v_spec):
+        assert kvarn_valid_pair(*default_pair), \
+            f"KVarN SWA default pair must be a valid preset, got {default_pair}"
+        return (int(default_pair[0]), int(default_pair[1]))
+    if empty(k_spec) or empty(v_spec):
+        raise ValueError(
+            "KVarN SWA overrides require both --kv-swa-k and --kv-swa-v "
+            f"(got k={k_spec!r}, v={v_spec!r}); omit both to reuse the "
+            "main -cq preset for SWA layers.")
+    try:
+        kb = kvarn_parse_bits(k_spec)
+    except ValueError as e:
+        raise ValueError(f"Invalid --kv-swa-k: {e}") from None
+    try:
+        vb = kvarn_parse_bits(v_spec)
+    except ValueError as e:
+        raise ValueError(f"Invalid --kv-swa-v: {e}") from None
+    if not kvarn_valid_pair(kb, vb):
+        raise ValueError(
+            f"Unsupported KVarN SWA pair (kvarn{kb},kvarn{vb}): K,V must "
+            f"each be in {list(KVAR_N_VALID_BITS)} (36 combos).")
+    return (kb, vb)
+
+
+def kvarn_bc_attn_supported() -> tuple:
+    """
+    M5 BC-integration decision (CPU-testable): the graph-captured BC
+    attention path does NOT support KVarN layers.
+
+    BC bakes page-major K/V tensors into CUDA graphs; KVarN serves
+    dequantized fp16 temps from sealed records plus an exact sink+tail
+    overlay, and its online-dequant kernels are out of scope (no CUDA
+    on this box). Callers (``build_bc_attn``) decline per layer
+    (return None -> dispatch fallback). Returns (False, reason).
+    """
+    return (False,
+            "KVarN has no page-major K/V tensors to bake into BC graphs "
+            "(dequant-then-SDPA temps + exact overlay); online-dequant "
+            "kernels are out of scope. Decline per layer, use dispatch.")
+
+
+def kvarn_autosplit_probe_supported() -> tuple:
+    """
+    M5 autosplit decision (CPU-testable): the QSA synthetic zero-page
+    sparse-regime probe (zero page 0, run a measuring forward) is NOT
+    run on KVarN layers.
+
+    It would seal garbage groups and touch page tensors KVarN does not
+    have (``layer.k``/``layer.qk``); the load-time measuring forward
+    through the real cached path already accounts the transient, so the
+    probe is skipped and seal state stays intact. Returns
+    (False, reason).
+    """
+    return (False,
+            "QSA synthetic zero-page probe would seal garbage groups on "
+            "KVarN layers; the load forward already measures the "
+            "fp16-size transient. Skip probe, keep seals intact.")
+
+
+def kvarn_autosplit_transient_bytes(num_pages: int, num_kv_heads: int,
+                                    head_dim: int) -> int:
+    """
+    Conservative autosplit transient for a KVarN layer: the fp16-size
+    ``get_kv`` materialization (K+V temps over every page). The real
+    transient never exceeds this (records + compact exact residency are
+    far smaller), so measuring the layer as fp16-size is a safe upper
+    bound that cannot corrupt seal bookkeeping (no synthetic writes).
+    """
+    return int(num_pages) * PAGE_SIZE * int(num_kv_heads) * int(head_dim) \
+        * 2 * torch.half.itemsize
 
 
 def kvarn_tail_policy_for(raw_requested_tokens: int, window: int) -> dict:
@@ -597,13 +725,15 @@ class CacheLayer_kvarn(CacheLayer):
     attention sees one merged image (single softmax, each key counted
     once).
 
-    M4 policy per layer:
+    M5 policy per layer:
     - ``has_sink`` (non-SWA only): the logical sink group (base 0) is
       never sealed and the first 128 committed tokens of every sequence
       are served exact.
     - ``tail_effective`` exact tokens at the committed-prefix end,
       served from the exact blocks (``tail_dtype``). SWA layers cap the
-      policy window at ``swa_window`` (same preset, window-capped).
+      policy window at ``swa_window`` and use the SWA override preset
+      when one is configured (``swa_override``); dense layers always
+      use the main preset. QSA indexer planes stay fp16 either way.
     - ``tail_native_exact`` (full-window request): nothing is sealed.
     """
 
@@ -619,14 +749,46 @@ class CacheLayer_kvarn(CacheLayer):
         tail_tokens: int = 0,
         tail_type="f16",
         is_swa: bool | None = None,
+        swa_k_bits: int | str | None = None,
+        swa_v_bits: int | str | None = None,
+        kvarn_version: int = KVAR_N_STATE_VERSION,
     ):
         super().__init__(config, attention, cache_id, max_num_tokens)
+        if int(kvarn_version) != KVAR_N_STATE_VERSION:
+            raise ValueError(
+                f"Stale KVarN state (kvarn_version={kvarn_version!r}, "
+                f"current={KVAR_N_STATE_VERSION}): records sealed under "
+                f"another layout version are NOT comparable. Rebuild the "
+                f"cache / re-export instead of reusing this state.")
         assert max_num_tokens % PAGE_SIZE == 0, \
             f"max_num_tokens must be a multiple of {PAGE_SIZE}."
         assert PAGE_SIZE % KVAR_N_GROUP == 0
         assert kvarn_valid_pair(k_bits, v_bits), \
             f"KVarN M4 supports the full Bee 36-combo table K,V in " \
             f"{list(KVAR_N_VALID_BITS)}, got {(k_bits, v_bits)}"
+        # M5 SWA pair override (both-or-neither, same 36-combo table;
+        # None/None inherits the main preset). Parsed here so Cache and
+        # TP-import call sites share one validation path.
+        if (swa_k_bits is None) != (swa_v_bits is None):
+            raise ValueError(
+                "KVarN SWA overrides require both swa_k_bits and "
+                f"swa_v_bits (got {swa_k_bits!r}, {swa_v_bits!r}); pass "
+                f"neither to reuse the main preset {(k_bits, v_bits)}.")
+        if swa_k_bits is None:
+            self.swa_override = None
+        else:
+            try:
+                sk = kvarn_parse_bits(swa_k_bits)
+            except ValueError as e:
+                raise ValueError(f"Invalid swa_k_bits: {e}") from None
+            try:
+                sv = kvarn_parse_bits(swa_v_bits)
+            except ValueError as e:
+                raise ValueError(f"Invalid swa_v_bits: {e}") from None
+            assert kvarn_valid_pair(sk, sv), \
+                f"KVarN SWA pair must be in the 36-combo table K,V in " \
+                f"{list(KVAR_N_VALID_BITS)}, got {(sk, sv)}"
+            self.swa_override = (sk, sv)
 
         head_dim = attention.head_dim
         self.slices = kvarn_head_slices(head_dim)
@@ -635,10 +797,9 @@ class CacheLayer_kvarn(CacheLayer):
             f"(need one of {KVAR_N_SUPPORTED_HEAD_DIMS})"
         self.head_dim = head_dim
         self.num_kv_heads = attention.num_kv_heads
-        self.k_bits = k_bits
-        self.v_bits = v_bits
+        self.main_k_bits = int(k_bits)
+        self.main_v_bits = int(v_bits)
         self.sinkhorn_iters = sinkhorn_iters
-        self.layout = kvarn_make_layout(128, 128, k_bits, v_bits)
 
         # M4 SWA: learn the sliding window from the attention module
         # (attn.py uses -1 for dense). The tail policy runs against the
@@ -653,6 +814,15 @@ class CacheLayer_kvarn(CacheLayer):
                 sw = 0
             is_swa = sw > 0
         self.is_swa = bool(is_swa)
+        # M5: per-group preset -- SWA layers use the override pair when
+        # one was configured, full-attention layers always use the main
+        # preset. The window cap and the QSA planes (fp16, untouched)
+        # are orthogonal to the widths.
+        if self.is_swa and self.swa_override is not None:
+            self.k_bits, self.v_bits = self.swa_override
+        else:
+            self.k_bits, self.v_bits = self.main_k_bits, self.main_v_bits
+        self.layout = kvarn_make_layout(128, 128, self.k_bits, self.v_bits)
         self.has_sink = not self.is_swa
         try:
             sw = int(getattr(attention, "sliding_window", -1) or 0)
@@ -731,6 +901,11 @@ class CacheLayer_kvarn(CacheLayer):
             "layout": self.layout,
             "k_bits": self.k_bits,
             "v_bits": self.v_bits,
+            "main_k_bits": self.main_k_bits,
+            "main_v_bits": self.main_v_bits,
+            "swa_override": self.swa_override,
+            "is_swa": self.is_swa,
+            "kvarn_version": KVAR_N_STATE_VERSION,
             "sealed": self.sealed,
             "present": self.present,
             "has_sink": self.has_sink,
@@ -1088,6 +1263,10 @@ class CacheLayer_kvarn(CacheLayer):
         assert (self.k_bits, self.v_bits) == (source.k_bits, source.v_bits), \
             "KVarN copy_page requires matching K/V widths (records are " \
             "not comparable across presets)"
+        assert self.swa_override == source.swa_override and \
+            self.is_swa == source.is_swa, \
+            "KVarN copy_page requires matching SWA group (is_swa) and " \
+            "SWA override pair (per-group presets are not comparable)"
         assert self.tail_dtype == source.tail_dtype and \
             self.has_sink == source.has_sink, \
             "KVarN copy_page requires matching tail dtype and sink policy"
@@ -1178,9 +1357,13 @@ class CacheLayer_kvarn(CacheLayer):
 
     @override
     def get_tensors(self):
-        # NOTE: group records and compact blocks are not page-major (the
-        # CPU page-cache tier assumes page-major tensors); M4 CPU-tier /
-        # TP composition is M5 work, same caveat as M2 records.
+        # M5 decision (documented fallback, forces fp16 elsewhere): group
+        # records and compact blocks are not page-major, so the CPU
+        # second-tier page cache (page-major CUDA slices per layer
+        # tensor) and TP loader composition beyond tp_export cannot
+        # consume KVarN layers. Those paths must fall back to fp16 (or
+        # stay out of scope); the GPU-tier prompt-cache path (copy_page)
+        # is fully supported and version-checked.
         out = [self.records]
         for g in sorted(self.stage_blocks.keys()):
             out += self.stage_blocks[g]
@@ -1215,16 +1398,24 @@ class CacheLayer_kvarn(CacheLayer):
 
     @override
     def tp_export(self, plan):
+        # M5: version tag + main/SWA pairs. The main pair plus the
+        # override reconstruct the identical per-group preset on import
+        # (is_swa re-derives from the attention module there); a stale
+        # version fails closed in the constructor.
+        swa_k, swa_v = self.swa_override if self.swa_override else (None, None)
         return {
             "cls": CacheLayer_kvarn,
             "args": {
                 "cache_id": self.cache_id,
                 "max_num_tokens": self.max_num_tokens,
-                "k_bits": self.k_bits,
-                "v_bits": self.v_bits,
+                "k_bits": self.main_k_bits,
+                "v_bits": self.main_v_bits,
+                "swa_k_bits": swa_k,
+                "swa_v_bits": swa_v,
                 "tail_tokens": self.tail_requested_raw,
                 "tail_type": self.tail_type_name,
                 "is_swa": self.is_swa,
+                "kvarn_version": KVAR_N_STATE_VERSION,
             }
         }
 
@@ -1248,23 +1439,31 @@ class CacheLayer_kvarn_qsa(QSAPlanes, CacheLayer_kvarn):
         tail_tokens: int = 0,
         tail_type="f16",
         is_swa: bool | None = None,
+        swa_k_bits: int | str | None = None,
+        swa_v_bits: int | str | None = None,
+        kvarn_version: int = KVAR_N_STATE_VERSION,
     ):
         super().__init__(config, attention, cache_id, max_num_tokens,
                          k_bits, v_bits, sinkhorn_iters,
-                         tail_tokens, tail_type, is_swa)
+                         tail_tokens, tail_type, is_swa,
+                         swa_k_bits, swa_v_bits, kvarn_version)
         self._init_planes(attention, max_num_tokens)
 
     @override
     def tp_export(self, plan):
+        swa_k, swa_v = self.swa_override if self.swa_override else (None, None)
         return {
             "cls": CacheLayer_kvarn_qsa,
             "args": {
                 "cache_id": self.cache_id,
                 "max_num_tokens": self.max_num_tokens,
-                "k_bits": self.k_bits,
-                "v_bits": self.v_bits,
+                "k_bits": self.main_k_bits,
+                "v_bits": self.main_v_bits,
+                "swa_k_bits": swa_k,
+                "swa_v_bits": swa_v,
                 "tail_tokens": self.tail_requested_raw,
                 "tail_type": self.tail_type_name,
                 "is_swa": self.is_swa,
+                "kvarn_version": KVAR_N_STATE_VERSION,
             }
         }

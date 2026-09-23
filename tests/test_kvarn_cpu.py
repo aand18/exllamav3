@@ -313,7 +313,9 @@ def test_tp_export():
     d = layer.tp_export(None)
     assert d["cls"] is kvarn.CacheLayer_kvarn
     assert d["args"] == {"cache_id": 0, "max_num_tokens": 512, "k_bits": 4, "v_bits": 4,
-                         "tail_tokens": 0, "tail_type": "f16", "is_swa": False}
+                         "swa_k_bits": None, "swa_v_bits": None,
+                         "tail_tokens": 0, "tail_type": "f16", "is_swa": False,
+                         "kvarn_version": kvarn.KVAR_N_STATE_VERSION}
     q = kvarn.CacheLayer_kvarn_qsa(None, _attn(2, 128,
         SimpleNamespace(head_dim=32, compress_ratio=4)), 7, 512)
     dq = q.tp_export(None)

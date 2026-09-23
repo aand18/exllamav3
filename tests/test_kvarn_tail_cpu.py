@@ -301,8 +301,10 @@ def test_tp_export_m2_roundtrip():
         assert d["cls"] is kvarn.CacheLayer_kvarn
         assert d["args"] == {"cache_id": 0, "max_num_tokens": 512,
                              "k_bits": 4, "v_bits": 4,
+                             "swa_k_bits": None, "swa_v_bits": None,
                              "tail_tokens": 300, "tail_type": "bf16",
-                             "is_swa": False}
+                             "is_swa": False,
+                             "kvarn_version": kvarn.KVAR_N_STATE_VERSION}
         rebuilt = kvarn.CacheLayer_kvarn(None, _attn(2, 128), **d["args"])
         assert rebuilt.tail_effective == 384
         assert rebuilt.tail_dtype == torch.bfloat16
