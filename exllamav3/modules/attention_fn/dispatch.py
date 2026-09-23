@@ -63,6 +63,14 @@ attn_fns: list[AttnFn] = _fns_triton_fast + _triton_fallbacks + [
     fn_torch_sdpa_fallback_nocache
 ]
 
+# Every Triton entry point is CUDA-only: _check_tensor raises ValueError on
+# CPU tensors instead of declining with None, which breaks the dispatch
+# contract ("candidate functions return None on incompatible arguments").
+# triton-windows is a mandatory Windows dependency, so without this guard
+# every CPU-tensor dispatch on a GPU-less box crashes instead of reaching
+# the torch/xformers fallbacks. GPU behavior is untouched (q is CUDA).
+_fns_triton_all = frozenset(_fns_triton_fast + _triton_fallbacks + _fns_qc)
+
 def _tensor_desc(t: torch.Tensor | None) -> str:
     if t is None:
         return "None"
@@ -178,10 +186,17 @@ def attn_dispatch(
     # and would accept them as cache-less)
     candidates = _fns_qc if q_cache is not None else attn_fns
     hint_key = "fn_qc" if q_cache is not None else "fn"
+    if q.device.type == "cpu":
+        # See _fns_triton_all: Triton entries raise (not decline) on CPU
+        # tensors, so they must be excluded before the scan, and a stale
+        # hint at one of them must not be retried either.
+        candidates = [fn for fn in candidates if fn not in _fns_triton_all]
 
     # Retry the backend that matched last time for this caller before scanning the full list.
     # Candidate functions return None on incompatible arguments, so a stale hint self-corrects
     fn = dispatch_cache.get(hint_key) if dispatch_cache is not None else None
+    if fn is not None and fn not in candidates:
+        fn = None
     o = fn(args) if fn is not None else None
 
     if o is None:
