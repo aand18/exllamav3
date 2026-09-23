@@ -304,6 +304,7 @@ def test_tp_export_m2_roundtrip():
                              "swa_k_bits": None, "swa_v_bits": None,
                              "tail_tokens": 300, "tail_type": "bf16",
                              "is_swa": False,
+                             "sinkhorn_iters": kvarn.KVAR_N_SINKHORN_ITERS,
                              "kvarn_version": kvarn.KVAR_N_STATE_VERSION}
         rebuilt = kvarn.CacheLayer_kvarn(None, _attn(2, 128), **d["args"])
         assert rebuilt.tail_effective == 384
