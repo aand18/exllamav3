@@ -388,27 +388,45 @@ def test_cli_preset_parse_accept():
     assert p("Kvarn5/Kvarn4") == (5, 4)
     # Bare numeric pair restricted to the M3 set.
     assert p("5,4") == (5, 4)
+    # M4: the full Bee 36-combo table parses (symmetric + asymmetric,
+    # any separator, any case, bare numerics).
+    bits = (2, 3, 4, 5, 6, 8)
+    seen = set()
+    for kb in bits:
+        assert p(f"kvarn{kb}") == (kb, kb)
+        assert p(f"{kb}") == (kb, kb)
+        for vb in bits:
+            assert p(f"kvarn{kb},kvarn{vb}") == (kb, vb)
+            assert p(f"kvarn{kb}/kvarn{vb}") == (kb, vb)
+            assert p(f"KVARN{kb},Kvarn{vb}") == (kb, vb)
+            assert p(f"{kb},{vb}") == (kb, vb)
+            seen.add((kb, vb))
+    assert seen == kvarn.KVAR_N_SUPPORTED_PRESETS
+    assert len(seen) == 36
 
 
 def test_cli_preset_parse_reject():
     p = kvarn.kvarn_parse_preset
-    for bad in ("kvarn6", "kvarn2", "kvarn3", "kvarn4,kvarn5", "kvarn5,kvarn6",
-                "kvarn8,kvarn8", "kvarn", "kvarn5,kvarn4,kvarn4", ""):
+    for bad in ("kvarn7", "kvarn1", "kvarn0", "kvarn9", "kvarn4,kvarn7",
+                "kvarn7,kvarn4", "kvarn", "kvarn5,kvarn4,kvarn4", "",
+                "kvarn4,kvarn", "abc", "2,7", "7", "4,4,4", "kvarn4,4,4"):
         with pytest.raises(ValueError):
             p(bad)
-    # The error names the supported M3 presets.
-    with pytest.raises(ValueError, match="kvarn5,kvarn4"):
-        p("kvarn6")
+    # The error names the supported width set.
+    with pytest.raises(ValueError, match="36 combos"):
+        p("kvarn7")
     # Non-kvarn numerics stay on the quant-cache path (no 'kvarn' prefix).
     assert not "4".startswith("kvarn") and not "4,4".startswith("kvarn")
 
 
 def test_layer_construction_fail_closed():
-    for bits in ((4, 5), (6, 6), (2, 2), (8, 8), (3, 3)):
+    for bits in ((4, 7), (7, 4), (1, 4), (0, 4), (9, 9), (7, 7), (4, 1)):
         with pytest.raises(AssertionError):
             kvarn.CacheLayer_kvarn(None, _attn(2, 128), 0, 512,
                                    k_bits=bits[0], v_bits=bits[1])
-    for bits in ((4, 4), (5, 5), (5, 4)):
+    # M4: every Bee table pair constructs (spot-check alloc/free here;
+    # the full 36-combo matrix is exercised in test_kvarn_m4_cpu.py).
+    for bits in ((4, 4), (5, 5), (5, 4), (2, 2), (8, 8), (3, 6), (6, 3)):
         layer = kvarn.CacheLayer_kvarn(None, _attn(2, 128), 0, 512,
                                        k_bits=bits[0], v_bits=bits[1])
         layer.alloc(torch.device("cpu"))

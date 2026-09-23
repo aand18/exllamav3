@@ -286,7 +286,11 @@ def test_copy_page():
     dst2 = _layer(2, 128, 512)
     dst2.copy_page(layer, 1, 0, 44)   # partial page: staging travels unsealed
     assert not bool(dst2.sealed[0])
-    assert torch.equal(dst2.stage_k[0, :44], layer.stage_k[1, :44])
+    # M4: compact per-group blocks travel remapped (src page-1 head group
+    # is physical group 2, dst page-0 head group is physical group 0).
+    assert torch.equal(dst2.stage_blocks[0][0][:44], layer.stage_blocks[2][0][:44])
+    assert torch.equal(dst2.stage_blocks[0][1][:44], layer.stage_blocks[2][1][:44])
+    assert torch.equal(dst2.exact_blocks[0][0][:44], layer.exact_blocks[2][0][:44])
 
 
 def test_storage_size_beats_fp16_and_quant():
@@ -295,10 +299,13 @@ def test_storage_size_beats_fp16_and_quant():
     # quant4 reference geometry: token_dim//32*k_bits int32-equivalent bytes/token approx
     got = layer.storage_size()
     assert got < 0.5 * fp16_bytes, (got, fp16_bytes)
-    # records dominate: 32 groups * 4 heads * 17920 B
+    # records dominate: 32 groups * 4 heads * 17920 B (fresh layer: no
+    # resident exact blocks yet, so storage is records only).
     assert got == 32 * 4 * 17920
-    assert layer.overhead_size() > 0  # fp16 staging + exact tail buffers
-    assert len(layer.get_tensors()) == 5
+    assert layer.overhead_size() > 0  # flags + per-group/per-page metadata
+    # M4: compact blocks only (records + resident blocks), not page-major.
+    assert layer.get_tensors()[0] is layer.records
+    assert len(layer.get_tensors()) == 1  # fresh: no resident blocks
 
 
 def test_tp_export():

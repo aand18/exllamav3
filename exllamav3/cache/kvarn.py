@@ -1,64 +1,65 @@
 """
-KVarN compressed KV cache, M3 (CPU-testable, upstream-mergeable).
+KVarN compressed KV cache, M4 (CPU-testable, upstream-mergeable).
 
 Reference: BeeLlama KVarN (Huawei arXiv:2606.03458), ported from
 beellama ``src/llama-kvarn.h`` / ``src/llama-kvarn.cpp``,
 ``src/llama-kv-cache-kvarn.h`` (tail policy) /
-``src/llama-kv-cache-kvarn.cpp`` (sink + stage depth) and the CPU
-reference kernels in ``ggml/src/ggml-cpu/ops.cpp``.
+``src/llama-kv-cache-kvarn.cpp`` (sink + stage depth + SWA ring) and the
+CPU reference kernels in ``ggml/src/ggml-cpu/ops.cpp``.
 
-M3 scope (presets ``kvarn4`` (4,4 symmetric), ``kvarn5`` (5,5 symmetric)
-and ``kvarn5,kvarn4`` (5-bit K / 4-bit V asymmetric, Bee balanced
-default); K and V widths are independent per side, sealed together per
-128-group with different payload widths):
-- Permanent 128-token sink (physical group 0) kept exact on non-SWA
-  layers only; SWA layers get no sink (ring). Mirrors Bee's
-  ``sink_tokens = 128`` (``llama-kvarn.cpp`` validation) and the
-  non-SWA sink slot / SWA no-sink stage accounting
-  (``llama-kv-cache-kvarn.h:304-315``). Logical sink exactness (first
-  128 committed tokens per sequence) is guaranteed by the get_kv
-  overlay regardless of paging; the seal skip targets physical group 0,
-  which coincides with the logical sink when sequences start at page 0
-  (true for single-sequence CPU validation and the paged generator's
-  per-sequence page assignment).
-- Configurable exact tail: ``tail_tokens`` (raw ``--kv-tail-tokens``)
-  and ``tail_type`` (``--kv-tail-type f16/bf16``, default f16 for KVarN)
-  plumbed through ``model_init.py``. Policy is Bee's tail helper
-  (``llama-kv-cache-kvarn.h:29-49``, applied in
-  ``llama-context.cpp:526-541``): intrinsic floor 128 (request
-  0/omitted => effective 128), positive requests ceil to 128-groups,
-  cap at window (here ``max_num_tokens``); full-window request =>
-  native exact (no compressed body for that span, nothing is sealed).
-- Attention M2: ``get_kv`` serves one merged fp16 image per position --
-  dequantized body with sink + tail rows overwritten exact -- so the
-  downstream single-softmax SDPA counts each key once across
-  sink/body/tail. This mirrors Bee's portable mask semantics
-  (``fattn-kvarn-portable.cuh``: body rows covered by the exact tail are
-  masked out, tail rows attended once). Eager seal stays: completed
-  groups are sealed even while inside the tail window; the overlay
-  serves the exact copy alongside the sealed record.
+M4 scope (full CPU parity except CUDA kernels):
+- Full 36-combo Bee width table: every cartesian K,V pair in
+  {2,3,4,5,6,8} (``src/llama-kvarn.cpp:15-62``). ``kvarn_parse_preset``
+  accepts symmetric ``kvarnN`` plus asymmetric ``kvarnK,kvarnV``
+  (``/``-separated spelling equivalent, case-insensitive) and bare
+  ``K,V`` / ``N`` numerics. Layout, packing and tile quant are
+  width-generic; anything outside the table (or head_dim not in
+  128/256/512) is fail-closed.
+- SWA-window tail: each layer learns its sliding window from the
+  attention module (``sliding_window`` attr; the attention kernel keeps
+  applying the window itself via the dispatch ``window_size``). The
+  exact-tail policy runs against ``min(max_num_tokens, swa_window)``
+  (Bee ``llama-context.cpp`` SWA tail group: window ``min(size,
+  n_swa)``), SWA layers keep no sink, and the analytical record-ring
+  bound ``visible = ceil(min(kv,n_swa)/128)+1`` /
+  ``ring = max(1, visible + ceil(ubatch/128) - 1)``
+  (``llama-kv-cache-kvarn.cpp:611-634``) is exposed for tests. Same
+  preset for SWA layers in M4 (window-capped); per-side SWA pair
+  overrides are M5.
+- Compact tail arenas: exact sink+tail rows live in on-demand
+  per-128-group blocks (the resident set is sink + the effective-tail
+  window + one rollback group, i.e. Bee's compact N+R exact-history
+  ring, ``llama-kv-cache-tail.cpp`` ``history_stride = N + R``).
+  Staging (rotated-domain fp16) exists only for unsealed groups (the
+  single open 128-group in steady single-sequence state) and is freed
+  on seal. ``storage_size`` (records + resident exact) plus
+  ``overhead_size`` (resident staging + bit flags) land well below fp16.
+- Attention M2 carry-over: ``get_kv`` serves one merged fp16 image per
+  position -- dequantized body with sink + tail rows overwritten exact
+  -- so the downstream single-softmax SDPA counts each key once across
+  sink/body/tail (Bee portable mask semantics). Eager seal stays:
+  completed groups seal even inside the tail window; the overlay keeps
+  serving the exact copy alongside the sealed record.
 - QSA: sink/tail apply to dense KV; raw_k/pooled indexer planes stay
   fp16 exact (unchanged).
-- State/copy: ``copy_page`` carries staging + exact buffers; sealed
-  flags travel for full groups except physical group 0 on sink layers
-  (never sealed). Copies are expected group-aligned (128) for sealed
-  groups; partial copies travel unsealed. Prompt-cache state compat is
-  still M2-provisional (no version bump).
-- M2 CPU keeps full-page exact mirrors (staging + tail buffers) as
-  overhead; production CUDA uses compact tail arenas (remaining work).
+- State/copy: ``copy_page`` carries staging + exact blocks (remapped to
+  the destination groups) plus the logical-base / owner / pin metadata;
+  sealed flags travel for full groups except physical group 0 on sink
+  layers (never sealed). Rewriting a sealed group (page reuse by a new
+  sequence, speculative overwrite) unseals and reseals it, so records
+  can never go stale. Prompt-cache state compat is still M2-provisional
+  (no version bump).
 
-M3 still explicitly out of scope (later): SWA pair overrides (SWA tail
-uses the full ``max_num_tokens`` window here, not the SWA window),
-Triton/CUDA online kernels (``get_kvarn_records`` now exposes the
-records for them; attention stays dequant-then-SDPA on CPU), the full
-36-combo Bee width table (M3 ships (4,4), (5,5) and (5,4) only;
-anything else is fail-closed).
+M4 still explicitly out of scope (M5): Triton/CUDA online-dequant
+kernels (``get_kvarn_records`` exposes the records for them; attention
+stays dequant-then-SDPA on CPU), SWA K/V pair overrides, the model KLD
+parity harness, BC/autosplit integration, prompt-cache versioning.
 
-M3 non-comparability note: widths change the record payload, so
+M4 non-comparability note: widths change the record payload, so
 records sealed under one preset are NOT comparable / interchangeable
-with another preset's records or layouts. M3 is still CPU mirrors
-only (no CUDA kernels); end-to-end parity is validated against the
-fp16 overlay on CPU.
+with another preset's records or layouts. M4 is still CPU blocks only
+(no CUDA kernels); end-to-end parity is validated against the fp16
+overlay on CPU.
 
 Numerical convention (matches BeeLlama):
 - Each token's head is transformed by the head-wide normalized WHT
@@ -94,17 +95,27 @@ KVAR_N_GROUP = 128
 KVAR_N_INV_SQRT_128 = 0.08838834764831845
 KVAR_N_SUPPORTED_HEAD_DIMS = (128, 256, 512)
 KVAR_N_SINKHORN_ITERS = 16
-# M3: Bee balanced default is kvarn5/kvarn4 (K 5 bit, V 4 bit); symmetric
-# kvarn4 and kvarn5 also ship. Any other width combo is fail-closed in
-# M3 (the full 36-combo Bee desc table, src/llama-kvarn.cpp:15-62, is M4).
+# M4: full Bee width table (llama-kvarn.cpp:15-62): every cartesian
+# K,V pair in {2,3,4,5,6,8} (36 combos). Bee's balanced default is
+# kvarn5/kvarn4 (K 5 bit, V 4 bit).
+KVAR_N_VALID_BITS = (2, 3, 4, 5, 6, 8)
+KVAR_N_SUPPORTED_PRESETS = frozenset(
+    (kb, vb) for kb in KVAR_N_VALID_BITS for vb in KVAR_N_VALID_BITS)
+assert len(KVAR_N_SUPPORTED_PRESETS) == 36
+# M3 shipped {(4,4),(5,5),(5,4)} only; kept as an alias for compat.
 KVAR_N_M3_PRESETS = frozenset({(4, 4), (5, 5), (5, 4)})
-KVAR_N_PRESETS = {
-    "kvarn4": (4, 4),
-    "kvarn4,kvarn4": (4, 4),
-    "kvarn5": (5, 5),
-    "kvarn5,kvarn5": (5, 5),
-    "kvarn5,kvarn4": (5, 4),
-}
+
+
+def _kvarn_preset_dict() -> dict:
+    d: dict = {}
+    for kb, vb in sorted(KVAR_N_SUPPORTED_PRESETS):
+        d[f"kvarn{kb},kvarn{vb}"] = (kb, vb)
+        if kb == vb:
+            d[f"kvarn{kb}"] = (kb, vb)
+    return d
+
+
+KVAR_N_PRESETS = _kvarn_preset_dict()
 
 # M2: permanent exact sink on non-SWA layers (llama-kvarn.cpp: sink_tokens
 # = 128, validated "exactly 128 unquantized sink tokens").
@@ -113,11 +124,23 @@ KVAR_N_SINK_TOKENS = 128
 # max(128, ...) even for a zero request).
 KVAR_N_TAIL_FLOOR_TOKENS = 128
 KVAR_N_TAIL_TYPES = {"f16": torch.float16, "bf16": torch.bfloat16}
+# M4: SWA keeps only local tail groups exact, no sink
+# (llama-kv-cache-kvarn.cpp:119-121 KVAR_N_SWA_TAIL_GROUPS=2).
+KVAR_N_SWA_TAIL_GROUPS = 2
+# M4: compact exact-history ring rollback reserve (tokens): the resident
+# exact window per owning sequence is [n - N - R, n) plus the sink, where
+# N is the effective tail (llama-kv-cache-tail.cpp history_stride=N+R).
+KVAR_N_TAIL_ROLLBACK_TOKENS = 128
 
 
 def kvarn_valid_bits(bits: int) -> bool:
     """Bee bit widths (llama-kvarn.cpp llama_kvarn_valid_bits)."""
-    return int(bits) in (2, 3, 4, 5, 6, 8)
+    return int(bits) in KVAR_N_VALID_BITS
+
+
+def kvarn_valid_pair(k_bits: int, v_bits: int) -> bool:
+    """Full 36-combo Bee desc table (llama-kvarn.cpp:15-62)."""
+    return (int(k_bits), int(v_bits)) in KVAR_N_SUPPORTED_PRESETS
 
 
 def kvarn_parse_preset(spec) -> tuple:
@@ -125,10 +148,10 @@ def kvarn_parse_preset(spec) -> tuple:
     Parse a ``-cq`` KVarN preset string (case-insensitive; ``/`` and ``,``
     separators are equivalent) into a ``(k_bits, v_bits)`` pair.
 
-    M3 ships ``kvarn4`` (4,4), ``kvarn5`` (5,5) and the Bee balanced
-    default ``kvarn5,kvarn4`` (5,4); a bare ``k,v`` numeric pair is also
-    accepted when it lands on the M3 set. Anything else raises
-    ValueError (fail-closed; the full 36-combo Bee table is M4).
+    M4 accepts the full Bee 36-combo table: symmetric ``kvarnN`` and
+    asymmetric ``kvarnK,kvarnV`` for K,V in {2,3,4,5,6,8}, plus bare
+    ``N`` / ``K,V`` numerics over the same set. Anything else raises
+    ValueError (fail-closed).
     """
     key = str(spec).strip().lower().replace("/", ",").replace(" ", "")
     if key in KVAR_N_PRESETS:
@@ -136,14 +159,19 @@ def kvarn_parse_preset(spec) -> tuple:
     bits: list = []
     for part in key.split(","):
         name = part[5:] if part.startswith("kvarn") else part
-        if name.isdigit():
+        if name.isdigit() and int(name) in KVAR_N_VALID_BITS:
             bits.append(int(name))
-    if len(bits) == 2 and tuple(bits) in KVAR_N_M3_PRESETS:
+        else:
+            bits = []
+            break
+    if len(bits) == 1:
+        return (bits[0], bits[0])
+    if len(bits) == 2 and (bits[0], bits[1]) in KVAR_N_SUPPORTED_PRESETS:
         return (bits[0], bits[1])
     raise ValueError(
-        f"Unsupported KVarN preset {spec!r}: M3 supports kvarn4 [=(4,4)], "
-        f"kvarn5 [=(5,5)] and kvarn5,kvarn4 [=(5,4)]; "
-        f"parsed bits {bits or 'unparseable'}.")
+        f"Unsupported KVarN preset {spec!r}: M4 supports kvarnN and "
+        f"kvarnK,kvarnV for K,V in {list(KVAR_N_VALID_BITS)} "
+        f"(36 combos, e.g. kvarn4, kvarn5, kvarn5,kvarn4).")
 
 
 def kvarn_tail_policy_for(raw_requested_tokens: int, window: int) -> dict:
@@ -175,6 +203,50 @@ def kvarn_tail_policy_for(raw_requested_tokens: int, window: int) -> dict:
     }
 
 
+def kvarn_swa_tail_window(max_num_tokens: int, swa_window: int) -> int:
+    """
+    Effective tail-policy window for an SWA layer: the SWA window caps
+    the cache window (Bee llama-context.cpp SWA tail group runs the tail
+    helper against ``min(size, n_swa)``). Non-positive ``swa_window``
+    means "unknown" and falls back to the full cache window (M2
+    behavior, documented).
+    """
+    max_num_tokens = int(max_num_tokens)
+    swa_window = int(swa_window)
+    assert max_num_tokens >= 0 and swa_window >= 0
+    if swa_window <= 0:
+        return max_num_tokens
+    return min(max_num_tokens, swa_window)
+
+
+def kvarn_swa_visible_groups(kv_size: int, n_swa: int) -> int:
+    """
+    Bee ``kvarn_swa_visible_groups`` (llama-kv-cache-kvarn.cpp:620-623):
+    ``((min(kv, n_swa) + 127) / 128) + 1`` -- the metadata window may
+    span one more 128-token tile than its nominal size.
+    """
+    kv_size = int(kv_size)
+    n_swa = int(n_swa)
+    assert kv_size >= 0 and n_swa >= 0
+    window_cells = min(kv_size, n_swa) if n_swa > 0 else kv_size
+    return (window_cells + KVAR_N_GROUP - 1) // KVAR_N_GROUP + 1
+
+
+def kvarn_swa_ring_groups(kv_size: int, n_swa: int, ubatch_tokens: int) -> int:
+    """
+    Bee ``kvarn_record_groups_per_stream`` SWA branch
+    (llama-kv-cache-kvarn.cpp:625-634): the record ring stores only tiles
+    older than the exact tail, sized ``max(1, visible + in_flight - 1)``
+    with ``in_flight = max(1, ceil(ubatch / 128))``. On CPU the ubatch
+    analog is one page (PAGE_SIZE).
+    """
+    ubatch_tokens = int(ubatch_tokens)
+    assert ubatch_tokens > 0
+    visible = kvarn_swa_visible_groups(kv_size, n_swa)
+    in_flight = max(1, (ubatch_tokens + KVAR_N_GROUP - 1) // KVAR_N_GROUP)
+    return max(1, visible + in_flight - 1)
+
+
 def kvarn_parse_tail_type(tail_type) -> torch.dtype:
     """'f16'/'bf16' (default f16 for KVarN) or a torch dtype."""
     if isinstance(tail_type, torch.dtype):
@@ -189,7 +261,7 @@ def kvarn_parse_tail_type(tail_type) -> torch.dtype:
 
 def kvarn_packed_bytes(n_values: int, bits: int) -> int:
     """packed_bytes=(n*bits+7)/8 LSB-first (llama-kvarn.cpp:627-666)."""
-    assert n_values >= 0 and bits in (2, 3, 4, 5, 6, 8)
+    assert n_values >= 0 and kvarn_valid_bits(bits)
     return (n_values * bits + 7) // 8
 
 
@@ -492,7 +564,7 @@ def kvarn_dequantize_v_tile(record: torch.Tensor, bits: int,
 # --------------------------------------------------------------------------
 
 def kvarn_m2_triton_available() -> bool:
-    """Online-dequant kernels (decode/prefill/varlen). Always False on CPU M2."""
+    """Online-dequant kernels (decode/prefill/varlen). Always False on CPU M4."""
     return False
 
 
@@ -502,27 +574,36 @@ def kvarn_m2_triton_available() -> bool:
 
 class CacheLayer_kvarn(CacheLayer):
     """
-    KVarN compressed KV cache layer (M3).
+    KVarN compressed KV cache layer (M4).
 
     Storage per 128-token physical group x per (kv_head, 128-dim slice):
-    one combined K+V tile record (see KvarnTileLayout). M3 presets:
-    kvarn4 (4,4), kvarn5 (5,5) and kvarn5,kvarn4 (asymmetric, Bee
-    balanced default); K and V tiles of the same 128-group are sealed
-    together (same group boundaries) with different payload widths.
+    one combined K+V tile record (see KvarnTileLayout). M4 accepts the
+    full Bee 36-combo table; K and V tiles of the same 128-group are
+    sealed together (same group boundaries) with different payload
+    widths.
 
-    Storage per 128-token physical group x per (kv_head, 128-dim slice):
-    one combined K+V tile record (see KvarnTileLayout). Partial groups are
-    held in fp16 staging buffers (rotated domain) and sealed on fill.
+    Exact rows (ORIGINAL domain, ``tail_dtype``) live in on-demand
+    per-group ``exact_blocks`` covering only the resident window: the
+    logical sink (non-SWA) plus the trailing ``tail_effective`` tokens
+    plus one rollback group (Bee compact N+R exact-history ring).
+    Rotated-domain fp16 ``stage_blocks`` exist only for unsealed groups
+    (the single open 128-group in steady state) and are freed on seal,
+    so ``storage_size`` (records + resident exact) and
+    ``overhead_size`` (resident staging + flags) stay well below fp16.
+
     ``get_kv`` dequantizes sealed groups plus inverse-WHTs the staging
-    rows, returning standard paged fp16 temps in the ORIGINAL domain, with
-    sink + tail rows overwritten exact from the tail buffers so attention
-    sees one merged image (single softmax, each key counted once).
+    rows, returning standard paged fp16 temps in the ORIGINAL domain,
+    with sink + tail rows overwritten exact from the exact blocks so
+    attention sees one merged image (single softmax, each key counted
+    once).
 
-    M2 policy per layer:
-    - ``has_sink`` (non-SWA only): physical group 0 is never sealed and
-      the first 128 committed tokens of every sequence are served exact.
-    - ``tail_effective`` exact tokens at the committed-prefix end, served
-      from the tail buffers (``tail_dtype``).
+    M4 policy per layer:
+    - ``has_sink`` (non-SWA only): the logical sink group (base 0) is
+      never sealed and the first 128 committed tokens of every sequence
+      are served exact.
+    - ``tail_effective`` exact tokens at the committed-prefix end,
+      served from the exact blocks (``tail_dtype``). SWA layers cap the
+      policy window at ``swa_window`` (same preset, window-capped).
     - ``tail_native_exact`` (full-window request): nothing is sealed.
     """
 
@@ -543,14 +624,14 @@ class CacheLayer_kvarn(CacheLayer):
         assert max_num_tokens % PAGE_SIZE == 0, \
             f"max_num_tokens must be a multiple of {PAGE_SIZE}."
         assert PAGE_SIZE % KVAR_N_GROUP == 0
-        assert (k_bits, v_bits) in KVAR_N_M3_PRESETS, \
-            f"M3 supports kvarn4 (4,4), kvarn5 (5,5) and kvarn5,kvarn4 " \
-            f"(5,4), got {(k_bits, v_bits)}"
+        assert kvarn_valid_pair(k_bits, v_bits), \
+            f"KVarN M4 supports the full Bee 36-combo table K,V in " \
+            f"{list(KVAR_N_VALID_BITS)}, got {(k_bits, v_bits)}"
 
         head_dim = attention.head_dim
         self.slices = kvarn_head_slices(head_dim)
         assert self.slices > 0, \
-            f"KVarN M2 fail-closed: unsupported head_dim {head_dim} " \
+            f"KVarN M4 fail-closed: unsupported head_dim {head_dim} " \
             f"(need one of {KVAR_N_SUPPORTED_HEAD_DIMS})"
         self.head_dim = head_dim
         self.num_kv_heads = attention.num_kv_heads
@@ -559,35 +640,54 @@ class CacheLayer_kvarn(CacheLayer):
         self.sinkhorn_iters = sinkhorn_iters
         self.layout = kvarn_make_layout(128, 128, k_bits, v_bits)
 
-        # M2 sink/tail policy. SWA layers (sliding_window > 0) get no sink
-        # (ring); the tail window here is max_num_tokens (SWA-window
-        # overrides are later work).
+        # M4 SWA: learn the sliding window from the attention module
+        # (attn.py uses -1 for dense). The tail policy runs against the
+        # capped window min(max_num_tokens, swa_window); SWA layers get
+        # no sink (ring). An explicitly-SWA layer without a discoverable
+        # window keeps the M2 full-window fallback (documented).
         if is_swa is None:
-            sw = getattr(attention, "sliding_window", -1) or 0
+            sw = getattr(attention, "sliding_window", -1)
+            try:
+                sw = int(sw)
+            except (TypeError, ValueError):
+                sw = 0
             is_swa = sw > 0
         self.is_swa = bool(is_swa)
         self.has_sink = not self.is_swa
+        try:
+            sw = int(getattr(attention, "sliding_window", -1) or 0)
+        except (TypeError, ValueError):
+            sw = 0
+        self.swa_window = sw if (self.is_swa and sw > 0) else 0
+        self.tail_window = kvarn_swa_tail_window(max_num_tokens, self.swa_window) \
+            if self.is_swa else int(max_num_tokens)
         self.tail_requested_raw = int(tail_tokens or 0)
         assert self.tail_requested_raw >= 0
-        policy = kvarn_tail_policy_for(self.tail_requested_raw, max_num_tokens)
+        policy = kvarn_tail_policy_for(self.tail_requested_raw, self.tail_window)
         self.tail_requested = policy["requested"]
         self.tail_effective = policy["effective"]
         self.tail_exact_groups = policy["exact_groups"]
         self.tail_native_exact = policy["native_exact"]
         self.tail_dtype = kvarn_parse_tail_type(tail_type)
         self.tail_type_name = "bf16" if self.tail_dtype == torch.bfloat16 else "f16"
+        # Bee SWA record-ring bound (analytical; the CPU layer seals
+        # eagerly and serves the window from exact blocks, so residency
+        # stays under it). CPU ubatch analog is one page.
+        self.swa_ring_groups = kvarn_swa_ring_groups(
+            self.tail_window, self.swa_window, PAGE_SIZE) if self.is_swa else 0
 
         self.num_pages = max_num_tokens // PAGE_SIZE
         self.num_groups = max_num_tokens // KVAR_N_GROUP
         self.ncols = self.num_kv_heads * self.slices
 
         self.records = None       # uint8 (num_groups, ncols, tile_bytes)
-        self.stage_k = None       # fp16 (num_pages, 256, kvh, hd), rotated
-        self.stage_v = None
-        self.exact_k = None       # tail_dtype (num_pages, 256, kvh, hd), ORIGINAL
-        self.exact_v = None       # exact sink+tail source for the get_kv overlay
+        self.stage_blocks = None  # {group: [k, v]} rotated fp16, unsealed groups only
+        self.exact_blocks = None  # {group: [k, v]} tail_dtype ORIGINAL, resident window only
         self.present = None       # bool (num_groups, 128)
         self.sealed = None        # bool (num_groups,)
+        self.group_base = None    # int64 (num_groups,): logical pos of slot 0, -1 unwritten
+        self.page_owner_n = None  # int64 (num_pages,): last known owning seqlen, -1 untouched
+        self.page_pinned = None   # bool (num_pages,): prompt-cache shared pages skip eviction
         self.device = None
 
     # -- alloc / free ------------------------------------------------------
@@ -598,33 +698,33 @@ class CacheLayer_kvarn(CacheLayer):
         self.records = torch.zeros(
             (self.num_groups, self.ncols, self.layout.tile_bytes),
             dtype=torch.uint8, device=device)
-        self.stage_k = torch.zeros(
-            (self.num_pages, PAGE_SIZE, self.num_kv_heads, self.head_dim),
-            dtype=torch.half, device=device)
-        self.stage_v = torch.zeros_like(self.stage_k)
-        self.exact_k = torch.zeros(
-            (self.num_pages, PAGE_SIZE, self.num_kv_heads, self.head_dim),
-            dtype=self.tail_dtype, device=device)
-        self.exact_v = torch.zeros_like(self.exact_k)
+        self.stage_blocks = {}
+        self.exact_blocks = {}
         self.present = torch.zeros((self.num_groups, KVAR_N_GROUP),
                                    dtype=torch.bool, device=device)
         self.sealed = torch.zeros((self.num_groups,), dtype=torch.bool, device=device)
+        self.group_base = torch.full((self.num_groups,), -1,
+                                     dtype=torch.int64, device=device)
+        self.page_owner_n = torch.full((self.num_pages,), -1,
+                                       dtype=torch.int64, device=device)
+        self.page_pinned = torch.zeros((self.num_pages,), dtype=torch.bool, device=device)
 
     @override
     def free(self):
         self.device = None
         self.records = None
-        self.stage_k = None
-        self.stage_v = None
-        self.exact_k = None
-        self.exact_v = None
+        self.stage_blocks = None
+        self.exact_blocks = None
         self.present = None
         self.sealed = None
+        self.group_base = None
+        self.page_owner_n = None
+        self.page_pinned = None
 
-    # -- M2 record access (for online-dequant Triton/CUDA kernels) ----------
+    # -- M4 record access (for online-dequant Triton/CUDA kernels) ----------
 
     def get_kvarn_records(self):
-        """M2: raw (records, layout, bits, seal map) for online-dequant kernels."""
+        """M4: raw (records, layout, bits, seal map) for online-dequant kernels."""
         assert self.records is not None, "KVarN layer not allocated"
         return {
             "records": self.records,
@@ -635,52 +735,184 @@ class CacheLayer_kvarn(CacheLayer):
             "present": self.present,
             "has_sink": self.has_sink,
             "tail_effective": self.tail_effective,
+            "tail_window": self.tail_window,
+            "swa_window": self.swa_window,
+            "swa_ring_groups": self.swa_ring_groups,
+            "stage_groups": sorted(self.stage_blocks.keys()),
+            "exact_groups": sorted(self.exact_blocks.keys()),
         }
 
     # -- internal: store / seal / materialize --------------------------------
 
+    def _block_shape(self) -> tuple:
+        return (KVAR_N_GROUP, self.num_kv_heads, self.head_dim)
+
+    def _alloc_stage_block(self, g: int):
+        blk = [torch.zeros(self._block_shape(), dtype=torch.half, device=self.device),
+               torch.zeros(self._block_shape(), dtype=torch.half, device=self.device)]
+        self.stage_blocks[g] = blk
+        return blk
+
+    def _alloc_exact_block(self, g: int):
+        blk = [torch.zeros(self._block_shape(), dtype=self.tail_dtype, device=self.device),
+               torch.zeros(self._block_shape(), dtype=self.tail_dtype, device=self.device)]
+        self.exact_blocks[g] = blk
+        return blk
+
+    def _exact_keep(self, pos: torch.Tensor, n_new: int) -> torch.Tensor:
+        """
+        Which written logical positions need exact residency: the sink
+        (non-SWA) plus the trailing compact window [n_new - N - R, n_new)
+        (Bee compact history_stride = N + R). Everything else is served
+        from the sealed body.
+        """
+        keep = pos >= (n_new - self.tail_effective - KVAR_N_TAIL_ROLLBACK_TOKENS)
+        if self.has_sink:
+            keep = keep | (pos < KVAR_N_SINK_TOKENS)
+        return keep
+
+    @torch.inference_mode()
+    def _touch_batch(self, cache_seqlens: torch.Tensor, block_table: torch.Tensor,
+                     length: int):
+        """
+        Record the owning-sequence length for every page backing the
+        current batch entries (each entry's full committed prefix at its
+        post-write length, not just the rows being written: a sequence
+        advances through different pages on successive calls, so
+        per-page owners must be refreshed from the batch union). Pages of
+        idle sequences keep their last owner (stale-but-correct: an idle
+        sequence never advances). Prompt-cache sharing must go through
+        ``copy_page``, which pins the shared pages against max-owner
+        eviction.
+        """
+        bt = block_table.long()
+        seqlens = cache_seqlens.long()
+        for b in range(seqlens.numel()):
+            n = int(seqlens[b]) + int(length)
+            if n <= 0:
+                continue
+            npages = (n + PAGE_SIZE - 1) // PAGE_SIZE
+            prefix = bt[b, :npages]
+            assert int(prefix.min()) >= 0 and int(prefix.max()) < self.num_pages, \
+                "KVarN: block table page out of range"
+            for p in prefix.tolist():
+                p = int(p)
+                if n > int(self.page_owner_n[p]):
+                    self.page_owner_n[p] = n
+
     @torch.inference_mode()
     def _store_rows(self, rows_k: torch.Tensor, rows_v: torch.Tensor,
-                    pages: torch.Tensor, offs: torch.Tensor):
+                    pages: torch.Tensor, offs: torch.Tensor,
+                    pos: torch.Tensor, n_new: int):
         """
-        rows_k/rows_v: (T, kvh, hd) fp16 ORIGINAL domain.
-        pages/offs: (T,) long physical locations. Rotates into staging,
-        mirrors ORIGINAL-domain exact copies into the tail buffers, marks
-        present, seals newly completed groups (eager seal stays: completed
-        groups seal even inside the tail window; the overlay keeps serving
-        them exact). Physical group 0 on sink layers is never sealed;
+        rows_k/rows_v: (T, kvh, hd) fp16 ORIGINAL domain, at logical
+        positions ``pos`` ((T,) long) with owning-sequence length
+        ``n_new``. Rotates into staging, mirrors exact copies for the
+        resident window (sink + trailing N+R), marks present, seals newly
+        completed groups (eager seal stays: completed groups seal even
+        inside the tail window; the overlay keeps serving them exact).
+        The logical sink group (base 0) on sink layers is never sealed;
         native-exact layers (full-window tail) never seal at all.
+
+        Rewrites are safe: replacing a group's content (page reuse by a
+        new sequence, detected via the logical base) resets it, and
+        overwriting a sealed group unseals it first, so records can never
+        go stale -- the group reseals with fresh staging below.
         """
         if rows_k.numel() == 0:
             return
-        dev = self.stage_k.device
+        dev = self.device
         pages = pages.to(torch.long)
         offs = offs.to(torch.long)
+        pos = pos.to(torch.long)
+        n_new = int(n_new)
         rk = kvarn_wht_head(rows_k.float(), self.head_dim).half().to(dev)
         rv = kvarn_wht_head(rows_v.float(), self.head_dim).half().to(dev)
-        self.stage_k[pages, offs] = rk
-        self.stage_v[pages, offs] = rv
-        self.exact_k[pages, offs] = rows_k.to(self.tail_dtype)
-        self.exact_v[pages, offs] = rows_v.to(self.tail_dtype)
+        ek = rows_k.to(self.tail_dtype)
+        ev = rows_v.to(self.tail_dtype)
         g = pages * (PAGE_SIZE // KVAR_N_GROUP) + offs // KVAR_N_GROUP
         s = offs % KVAR_N_GROUP
-        self.present[g, s] = True
+        keep = self._exact_keep(pos, n_new)
+        base = pos - s
+        for gi in torch.unique(g).tolist():
+            gi = int(gi)
+            m = (g == gi)
+            slots = s[m]
+            bnew = int(base[m][0])
+            bold = int(self.group_base[gi])
+            if bold != bnew:
+                # New content (first write or page reuse): reset the group.
+                # A reused page stops aliasing its prompt-cache sibling.
+                self.sealed[gi] = False
+                self.present[gi] = False
+                self.stage_blocks.pop(gi, None)
+                self.exact_blocks.pop(gi, None)
+                self.group_base[gi] = bnew
+                page = gi // (PAGE_SIZE // KVAR_N_GROUP)
+                self.page_pinned[page] = False
+            elif bool(self.sealed[gi]):
+                # Overwrite of sealed content: unseal so the fresh rows
+                # reseal below (records never go stale).
+                self.sealed[gi] = False
+            blk = self.stage_blocks.get(gi)
+            if blk is None:
+                blk = self._alloc_stage_block(gi)
+            blk[0][slots] = rk[m]
+            blk[1][slots] = rv[m]
+            self.present[gi, slots] = True
+            km = m & keep
+            if bool(km.any()):
+                eblk = self.exact_blocks.get(gi)
+                if eblk is None:
+                    eblk = self._alloc_exact_block(gi)
+                eblk[0][s[km]] = ek[km]
+                eblk[1][s[km]] = ev[km]
+        for p in torch.unique(pages).tolist():
+            p = int(p)
+            if n_new > int(self.page_owner_n[p]):
+                self.page_owner_n[p] = n_new
+        self._evict_exact_all()
         if self.tail_native_exact:
             return
         ug = torch.unique(g)
         done = self.present[ug].all(dim=1) & ~self.sealed[ug]
         for gi in ug[done].tolist():
-            if self.has_sink and int(gi) == 0:
-                continue  # permanent sink group stays exact
-            self._seal_group(int(gi))
+            gi = int(gi)
+            if self.has_sink and int(self.group_base[gi]) == 0:
+                continue  # logical sink group stays exact
+            self._seal_group(gi)
+
+    @torch.inference_mode()
+    def _evict_exact_all(self):
+        """
+        Drop every resident exact block fully below its owner's compact
+        window (``base + 128 <= owner_n - N - R``), keeping the sink and
+        prompt-cache-pinned pages. Owners are refreshed by
+        ``_touch_batch`` on every update call, so a single scan over the
+        (small) resident set keeps memory bounded as the window slides.
+        """
+        floor = self.tail_effective + KVAR_N_TAIL_ROLLBACK_TOKENS
+        gps = PAGE_SIZE // KVAR_N_GROUP
+        for gi in list(self.exact_blocks.keys()):
+            p = gi // gps
+            if bool(self.page_pinned[p]):
+                continue
+            owner_n = int(self.page_owner_n[p])
+            if owner_n < 0:
+                continue
+            b = int(self.group_base[gi])
+            if self.has_sink and 0 <= b < KVAR_N_GROUP:
+                continue  # logical sink (base 0) stays exact
+            if b >= 0 and b + KVAR_N_GROUP <= owner_n - floor:
+                del self.exact_blocks[gi]
 
     @torch.inference_mode()
     def _seal_group(self, g: int):
-        page = g // (PAGE_SIZE // KVAR_N_GROUP)
-        half = g % (PAGE_SIZE // KVAR_N_GROUP)
-        base = half * KVAR_N_GROUP
-        bk = self.stage_k[page, base: base + KVAR_N_GROUP].float()  # (128, kvh, hd) rotated
-        bv = self.stage_v[page, base: base + KVAR_N_GROUP].float()
+        blk = self.stage_blocks.get(g)
+        assert blk is not None, \
+            f"KVarN: sealing group {g} without staging (base {int(self.group_base[g])})"
+        bk = blk[0].float()  # (128, kvh, hd) rotated
+        bv = blk[1].float()
         for h in range(self.num_kv_heads):
             for sl in range(self.slices):
                 c = h * self.slices + sl
@@ -693,24 +925,36 @@ class CacheLayer_kvarn(CacheLayer):
                 kvarn_quantize_v_tile(v_tile, self.sinkhorn_iters, self.v_bits,
                                       self.layout, rec)
         self.sealed[g] = True
+        # M4: staging is freed on seal; only the single open group (plus
+        # the sink) retains fp16 staging. Exact blocks stay for the
+        # overlay over sealed tail groups.
+        del self.stage_blocks[g]
+
+    @torch.inference_mode()
+    def _staging_from_records(self, g: int, records=None):
+        """Rotated-domain fp16 staging rows rebuilt from sealed records."""
+        records = self.records if records is None else records
+        bk = torch.empty(self._block_shape(), dtype=torch.float32, device=self.device)
+        bv = torch.empty_like(bk)
+        for h in range(self.num_kv_heads):
+            for sl in range(self.slices):
+                c = h * self.slices + sl
+                d0, d1 = sl * KVAR_N_GROUP, (sl + 1) * KVAR_N_GROUP
+                rec = records[g, c]
+                bk[:, h, d0:d1] = kvarn_dequantize_k_tile(rec, self.k_bits, self.layout).T
+                bv[:, h, d0:d1] = kvarn_dequantize_v_tile(rec, self.v_bits, self.layout)
+        return [bk.half(), bv.half()]
 
     @torch.inference_mode()
     def _group_block(self, g: int, out_k: torch.Tensor, out_v: torch.Tensor):
         """Materialize group g (original domain) into page rows of out_k/out_v."""
-        page = g // (PAGE_SIZE // KVAR_N_GROUP)
-        half = g % (PAGE_SIZE // KVAR_N_GROUP)
+        gps = PAGE_SIZE // KVAR_N_GROUP
+        page = g // gps
+        half = g % gps
         base = half * KVAR_N_GROUP
         ok = out_k[page, base: base + KVAR_N_GROUP]  # (128, kvh, hd) fp16
         ov = out_v[page, base: base + KVAR_N_GROUP]
-        if self.has_sink and g == 0:
-            # Permanent sink: always serve the exact staging rows.
-            ok.copy_(kvarn_wht_head(
-                self.stage_k[page, base: base + KVAR_N_GROUP].float(),
-                self.head_dim).half())
-            ov.copy_(kvarn_wht_head(
-                self.stage_v[page, base: base + KVAR_N_GROUP].float(),
-                self.head_dim).half())
-        elif bool(self.sealed[g]):
+        if bool(self.sealed[g]):
             kk = torch.empty((KVAR_N_GROUP, self.num_kv_heads, self.head_dim),
                              dtype=torch.float32, device=ok.device)
             vv = torch.empty_like(kk)
@@ -724,12 +968,13 @@ class CacheLayer_kvarn(CacheLayer):
             ok.copy_(kvarn_wht_head(kk, self.head_dim).half())
             ov.copy_(kvarn_wht_head(vv, self.head_dim).half())
         else:
-            ok.copy_(kvarn_wht_head(
-                self.stage_k[page, base: base + KVAR_N_GROUP].float(),
-                self.head_dim).half())
-            ov.copy_(kvarn_wht_head(
-                self.stage_v[page, base: base + KVAR_N_GROUP].float(),
-                self.head_dim).half())
+            blk = self.stage_blocks.get(g)
+            if blk is None:
+                ok.zero_()
+                ov.zero_()
+            else:
+                ok.copy_(kvarn_wht_head(blk[0].float(), self.head_dim).half())
+                ov.copy_(kvarn_wht_head(blk[1].float(), self.head_dim).half())
 
     @torch.inference_mode()
     def _apply_exact_overlay(self, k: torch.Tensor, v: torch.Tensor,
@@ -737,7 +982,7 @@ class CacheLayer_kvarn(CacheLayer):
                              block_table: torch.Tensor):
         """
         Overwrite sink + tail rows of the materialized temps with exact
-        values from the tail buffers (ORIGINAL domain, cast to temp dtype).
+        values from the exact blocks (ORIGINAL domain, cast to temp dtype).
 
         Per batch entry with committed length n: logical positions
         [0, min(128, n)) (sink, non-SWA only) and
@@ -745,29 +990,41 @@ class CacheLayer_kvarn(CacheLayer):
         with the caller-merged in-flight rows is the single-softmax merge:
         each key appears exactly once across sink/body/tail (Bee portable
         mask semantics). In-flight rows merged by the attention kernel
-        after get_kv returns stay exact by construction.
+        after get_kv returns stay exact by construction. Positions whose
+        exact block is absent (unreachable in normal flows: the resident
+        window always covers the overlay window) fall back to the body.
         """
         bsz = cache_seqlens.numel()
         bt = block_table.long()
         seqlens = cache_seqlens.long()
+        gps = PAGE_SIZE // KVAR_N_GROUP
         for b in range(bsz):
             n = int(seqlens[b])
             if n <= 0:
                 continue
             parts = []
             if self.has_sink:
-                parts.append(torch.arange(min(KVAR_N_SINK_TOKENS, n)))
+                parts.append(torch.arange(min(KVAR_N_SINK_TOKENS, n), device=bt.device))
             if self.tail_effective > 0:
-                parts.append(torch.arange(max(0, n - self.tail_effective), n))
+                parts.append(torch.arange(max(0, n - self.tail_effective), n, device=bt.device))
             if not parts:
                 continue
             pos = torch.unique(torch.cat(parts)).long()
             pages = bt[b, pos // PAGE_SIZE]
             offs = pos % PAGE_SIZE
-            # NOTE: indexed assignment (not .copy_ on a gather, which would
-            # hit a temporary) so the overlay lands in the temps.
-            k[pages, offs] = self.exact_k[pages, offs].to(k.dtype)
-            v[pages, offs] = self.exact_v[pages, offs].to(v.dtype)
+            g = pages * gps + offs // KVAR_N_GROUP
+            s = offs % KVAR_N_GROUP
+            for gi in torch.unique(g).tolist():
+                gi = int(gi)
+                eblk = self.exact_blocks.get(gi)
+                if eblk is None:
+                    continue
+                m = (g == gi)
+                pm, om, sm = pages[m], offs[m], s[m]
+                # NOTE: indexed assignment (not .copy_ on a gather, which would
+                # hit a temporary) so the overlay lands in the temps.
+                k[pm, om] = eblk[0][sm].to(k.dtype)
+                v[pm, om] = eblk[1][sm].to(v.dtype)
 
     # -- CacheLayer interface --------------------------------------------------
 
@@ -776,9 +1033,10 @@ class CacheLayer_kvarn(CacheLayer):
                sliding_window: int = -1) -> tuple:
         # Dense and QSA layers pass -1 here (SWA/GDN layers are recurrent
         # and never kvarn-cached). A window, if ever passed, is applied by
-        # the attention kernel itself. Sink/tail exactness is applied here
-        # as an overlay, so the temps form one merged image for the single
-        # downstream softmax.
+        # the attention kernel itself; the layer's own tail/ring were
+        # capped at the learned swa_window at construction. Sink/tail
+        # exactness is applied here as an overlay, so the temps form one
+        # merged image for the single downstream softmax.
         k = torch.empty((self.num_pages, PAGE_SIZE, self.num_kv_heads, self.head_dim),
                         dtype=torch.half, device=self.device)
         v = torch.empty_like(k)
@@ -798,11 +1056,13 @@ class CacheLayer_kvarn(CacheLayer):
         bsz = cache_seqlens.numel()
         bt = block_table.long()
         seqlens = cache_seqlens.long()
+        self._touch_batch(seqlens, bt, length)
         for b in range(bsz):
             pos = seqlens[b] + torch.arange(length, device=bt.device)
             pages = bt[b, pos // PAGE_SIZE]
             offs = pos % PAGE_SIZE
-            self._store_rows(k[pages, offs], v[pages, offs], pages, offs)
+            self._store_rows(k[pages, offs], v[pages, offs], pages, offs,
+                             pos, int(seqlens[b]) + length)
 
     @override
     def update_kv_direct(self, cache_seqlens: torch.Tensor, block_table: torch.Tensor,
@@ -814,11 +1074,12 @@ class CacheLayer_kvarn(CacheLayer):
         bsz = cache_seqlens.numel()
         bt = block_table.long()
         seqlens = cache_seqlens.long()
+        self._touch_batch(seqlens, bt, length)
         for b in range(bsz):
             pos = seqlens[b] + torch.arange(length, device=bt.device)
             pages = bt[b, pos // PAGE_SIZE]
             offs = pos % PAGE_SIZE
-            self._store_rows(k[b], v[b], pages, offs)
+            self._store_rows(k[b], v[b], pages, offs, pos, int(seqlens[b]) + length)
 
     @override
     def copy_page(self, source: CacheLayer_kvarn, from_page: int, to_page: int,
@@ -831,48 +1092,126 @@ class CacheLayer_kvarn(CacheLayer):
             self.has_sink == source.has_sink, \
             "KVarN copy_page requires matching tail dtype and sink policy"
         gps = PAGE_SIZE // KVAR_N_GROUP
-        self.stage_k[to_page, :num_tokens].copy_(
-            source.stage_k[from_page, :num_tokens], non_blocking=True)
-        self.stage_v[to_page, :num_tokens].copy_(
-            source.stage_v[from_page, :num_tokens], non_blocking=True)
-        self.exact_k[to_page, :num_tokens].copy_(
-            source.exact_k[from_page, :num_tokens], non_blocking=True)
-        self.exact_v[to_page, :num_tokens].copy_(
-            source.exact_v[from_page, :num_tokens], non_blocking=True)
         for hh in range(gps):
             gf, gt = from_page * gps + hh, to_page * gps + hh
             lo, hi = hh * KVAR_N_GROUP, min((hh + 1) * KVAR_N_GROUP, num_tokens)
             if hi <= lo:
                 continue
-            self.present[gt, : hi - lo].copy_(source.present[gf, : hi - lo])
-            full = (hi - lo) == KVAR_N_GROUP and bool(source.present[gf].all())
-            if full and source.sealed[gf]:
-                # Sealed flags travel, except the permanent sink group on
-                # sink layers (never sealed, stays exact).
-                if self.has_sink and gt == 0:
-                    self.sealed[gt] = False
+            nrows = hi - lo
+            fb = int(source.group_base[gf])
+            if fb < 0:
+                # Source span never written: destination stays unwritten.
+                self.group_base[gt] = -1
+                self.present[gt] = False
+                self.sealed[gt] = False
+                self.stage_blocks.pop(gt, None)
+                self.exact_blocks.pop(gt, None)
+                continue
+            self.group_base[gt] = fb
+            self.present[gt] = False
+            self.present[gt, :nrows].copy_(source.present[gf, :nrows])
+            full = nrows == KVAR_N_GROUP and bool(source.present[gf].all())
+            sink_span = self.has_sink and fb == 0
+            if full and bool(source.sealed[gf]) and not sink_span:
+                # Sealed flags travel with the records (the logical sink
+                # group on sink layers is never sealed, stays exact).
+                self.records[gt].copy_(source.records[gf], non_blocking=True)
+                self.sealed[gt] = True
+                self.stage_blocks.pop(gt, None)
+                # Exact blocks travel too: the destination sequence's tail
+                # may cover these positions.
+                if gf in source.exact_blocks:
+                    sb = source.exact_blocks[gf]
+                    db = self.exact_blocks.get(gt)
+                    if db is None:
+                        db = self._alloc_exact_block(gt)
+                    db[0].copy_(sb[0], non_blocking=True)
+                    db[1].copy_(sb[1], non_blocking=True)
                 else:
-                    self.records[gt].copy_(source.records[gf], non_blocking=True)
-                    self.sealed[gt] = True
+                    self.exact_blocks.pop(gt, None)
             else:
                 self.sealed[gt] = False
+                # Staging travels (or is rebuilt from the sealed records
+                # for partial copies out of sealed groups); exact blocks
+                # travel when present.
+                if gf in source.stage_blocks:
+                    sb = source.stage_blocks[gf]
+                    dst = self.stage_blocks.get(gt)
+                    if dst is None:
+                        dst = self._alloc_stage_block(gt)
+                    dst[0][:nrows].copy_(sb[0][:nrows], non_blocking=True)
+                    dst[1][:nrows].copy_(sb[1][:nrows], non_blocking=True)
+                    if nrows < KVAR_N_GROUP:
+                        dst[0][nrows:].zero_()
+                        dst[1][nrows:].zero_()
+                elif bool(source.sealed[gf]):
+                    rec = self._staging_from_records(gf, source.records)
+                    dst = self.stage_blocks.get(gt)
+                    if dst is None:
+                        dst = self._alloc_stage_block(gt)
+                    dst[0][:nrows].copy_(rec[0][:nrows], non_blocking=True)
+                    dst[1][:nrows].copy_(rec[1][:nrows], non_blocking=True)
+                    if nrows < KVAR_N_GROUP:
+                        dst[0][nrows:].zero_()
+                        dst[1][nrows:].zero_()
+                else:
+                    self.stage_blocks.pop(gt, None)
+                if gf in source.exact_blocks:
+                    sb = source.exact_blocks[gf]
+                    dst = self.exact_blocks.get(gt)
+                    if dst is None:
+                        dst = self._alloc_exact_block(gt)
+                    dst[0][:nrows].copy_(sb[0][:nrows], non_blocking=True)
+                    dst[1][:nrows].copy_(sb[1][:nrows], non_blocking=True)
+                    if nrows < KVAR_N_GROUP:
+                        dst[0][nrows:].zero_()
+                        dst[1][nrows:].zero_()
+                else:
+                    self.exact_blocks.pop(gt, None)
+        # The shared content aliases one logical prefix now: the source
+        # page is known-shared and the destination page is a new alias, so
+        # both skip eviction until one of them is rewritten (which unpins
+        # it via the base-change path).
+        if num_tokens > 0:
+            source.page_pinned[from_page] = True
+            self.page_pinned[to_page] = True
 
     @override
     def get_tensors(self):
-        return [self.records, self.stage_k, self.stage_v,
-                self.exact_k, self.exact_v]
+        # NOTE: group records and compact blocks are not page-major (the
+        # CPU page-cache tier assumes page-major tensors); M4 CPU-tier /
+        # TP composition is M5 work, same caveat as M2 records.
+        out = [self.records]
+        for g in sorted(self.stage_blocks.keys()):
+            out += self.stage_blocks[g]
+        for g in sorted(self.exact_blocks.keys()):
+            out += self.exact_blocks[g]
+        return out
+
+    def _resident_bytes(self, blocks: dict) -> int:
+        total = 0
+        for blk in blocks.values():
+            for t in blk:
+                total += int(t.numel()) * t.element_size()
+        return total
 
     @override
     def storage_size(self):
-        # Compressed records only; fp16 staging + exact tail buffers are overhead.
-        return int(self.records.numel()) * torch.uint8.itemsize
+        # Compressed records plus the compact exact (N+R) history: the
+        # persistent footprint. Resident exact is bounded by the sink +
+        # tail window, so this lands far below fp16.
+        return int(self.records.numel()) * torch.uint8.itemsize + \
+            self._resident_bytes(self.exact_blocks)
 
     @override
     def overhead_size(self):
-        return 2 * int(self.stage_k.numel()) * torch.half.itemsize + \
-            (int(self.exact_k.numel()) + int(self.exact_v.numel())) * \
-            self.tail_dtype.itemsize + \
-            int(self.present.numel()) + int(self.sealed.numel())
+        # Transient workspace: single-open-group staging plus bit flags
+        # and the per-group/per-page compact metadata.
+        return self._resident_bytes(self.stage_blocks) + \
+            int(self.present.numel()) + int(self.sealed.numel()) + \
+            int(self.group_base.numel()) * torch.int64.itemsize + \
+            int(self.page_owner_n.numel()) * torch.int64.itemsize + \
+            int(self.page_pinned.numel())
 
     @override
     def tp_export(self, plan):
