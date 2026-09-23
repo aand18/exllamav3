@@ -1,5 +1,5 @@
 """
-KVarN compressed KV cache, M2 (CPU-testable, upstream-mergeable).
+KVarN compressed KV cache, M3 (CPU-testable, upstream-mergeable).
 
 Reference: BeeLlama KVarN (Huawei arXiv:2606.03458), ported from
 beellama ``src/llama-kvarn.h`` / ``src/llama-kvarn.cpp``,
@@ -7,7 +7,10 @@ beellama ``src/llama-kvarn.h`` / ``src/llama-kvarn.cpp``,
 ``src/llama-kv-cache-kvarn.cpp`` (sink + stage depth) and the CPU
 reference kernels in ``ggml/src/ggml-cpu/ops.cpp``.
 
-M2 scope (single preset ``kvarn4`` / ``kvarn4,kvarn4``, symmetric 4 bit):
+M3 scope (presets ``kvarn4`` (4,4 symmetric), ``kvarn5`` (5,5 symmetric)
+and ``kvarn5,kvarn4`` (5-bit K / 4-bit V asymmetric, Bee balanced
+default); K and V widths are independent per side, sealed together per
+128-group with different payload widths):
 - Permanent 128-token sink (physical group 0) kept exact on non-SWA
   layers only; SWA layers get no sink (ring). Mirrors Bee's
   ``sink_tokens = 128`` (``llama-kvarn.cpp`` validation) and the
@@ -44,11 +47,18 @@ M2 scope (single preset ``kvarn4`` / ``kvarn4,kvarn4``, symmetric 4 bit):
 - M2 CPU keeps full-page exact mirrors (staging + tail buffers) as
   overhead; production CUDA uses compact tail arenas (remaining work).
 
-M2 still explicitly out of scope (later): asymmetric widths
-(kvarn5/kvarn4), SWA pair overrides (SWA tail uses the full
-``max_num_tokens`` window here, not the SWA window), Triton/CUDA online
-kernels (``get_kvarn_records`` now exposes the records for them;
-attention stays dequant-then-SDPA on CPU).
+M3 still explicitly out of scope (later): SWA pair overrides (SWA tail
+uses the full ``max_num_tokens`` window here, not the SWA window),
+Triton/CUDA online kernels (``get_kvarn_records`` now exposes the
+records for them; attention stays dequant-then-SDPA on CPU), the full
+36-combo Bee width table (M3 ships (4,4), (5,5) and (5,4) only;
+anything else is fail-closed).
+
+M3 non-comparability note: widths change the record payload, so
+records sealed under one preset are NOT comparable / interchangeable
+with another preset's records or layouts. M3 is still CPU mirrors
+only (no CUDA kernels); end-to-end parity is validated against the
+fp16 overlay on CPU.
 
 Numerical convention (matches BeeLlama):
 - Each token's head is transformed by the head-wide normalized WHT
@@ -84,7 +94,17 @@ KVAR_N_GROUP = 128
 KVAR_N_INV_SQRT_128 = 0.08838834764831845
 KVAR_N_SUPPORTED_HEAD_DIMS = (128, 256, 512)
 KVAR_N_SINKHORN_ITERS = 16
-KVAR_N_PRESETS = {"kvarn4": (4, 4)}
+# M3: Bee balanced default is kvarn5/kvarn4 (K 5 bit, V 4 bit); symmetric
+# kvarn4 and kvarn5 also ship. Any other width combo is fail-closed in
+# M3 (the full 36-combo Bee desc table, src/llama-kvarn.cpp:15-62, is M4).
+KVAR_N_M3_PRESETS = frozenset({(4, 4), (5, 5), (5, 4)})
+KVAR_N_PRESETS = {
+    "kvarn4": (4, 4),
+    "kvarn4,kvarn4": (4, 4),
+    "kvarn5": (5, 5),
+    "kvarn5,kvarn5": (5, 5),
+    "kvarn5,kvarn4": (5, 4),
+}
 
 # M2: permanent exact sink on non-SWA layers (llama-kvarn.cpp: sink_tokens
 # = 128, validated "exactly 128 unquantized sink tokens").
@@ -93,6 +113,37 @@ KVAR_N_SINK_TOKENS = 128
 # max(128, ...) even for a zero request).
 KVAR_N_TAIL_FLOOR_TOKENS = 128
 KVAR_N_TAIL_TYPES = {"f16": torch.float16, "bf16": torch.bfloat16}
+
+
+def kvarn_valid_bits(bits: int) -> bool:
+    """Bee bit widths (llama-kvarn.cpp llama_kvarn_valid_bits)."""
+    return int(bits) in (2, 3, 4, 5, 6, 8)
+
+
+def kvarn_parse_preset(spec) -> tuple:
+    """
+    Parse a ``-cq`` KVarN preset string (case-insensitive; ``/`` and ``,``
+    separators are equivalent) into a ``(k_bits, v_bits)`` pair.
+
+    M3 ships ``kvarn4`` (4,4), ``kvarn5`` (5,5) and the Bee balanced
+    default ``kvarn5,kvarn4`` (5,4); a bare ``k,v`` numeric pair is also
+    accepted when it lands on the M3 set. Anything else raises
+    ValueError (fail-closed; the full 36-combo Bee table is M4).
+    """
+    key = str(spec).strip().lower().replace("/", ",").replace(" ", "")
+    if key in KVAR_N_PRESETS:
+        return KVAR_N_PRESETS[key]
+    bits: list = []
+    for part in key.split(","):
+        name = part[5:] if part.startswith("kvarn") else part
+        if name.isdigit():
+            bits.append(int(name))
+    if len(bits) == 2 and tuple(bits) in KVAR_N_M3_PRESETS:
+        return (bits[0], bits[1])
+    raise ValueError(
+        f"Unsupported KVarN preset {spec!r}: M3 supports kvarn4 [=(4,4)], "
+        f"kvarn5 [=(5,5)] and kvarn5,kvarn4 [=(5,4)]; "
+        f"parsed bits {bits or 'unparseable'}.")
 
 
 def kvarn_tail_policy_for(raw_requested_tokens: int, window: int) -> dict:
@@ -153,6 +204,11 @@ class KvarnTileLayout:
     k_s_row(128*u16) + v_payload + v_s_col + v_s_row + v_zp,
     tile_bytes=align_up(...,8).
 
+    K and V sides are independent: each side's payload width comes from
+    its own bit count while the u16 metadata scales stay fixed shape, so
+    asymmetric presets (e.g. kvarn5/kvarn4) share group boundaries with
+    different payload widths (``k_record_bytes`` / ``v_record_bytes``).
+
     M1 always builds 128-token x 128-dim slice tiles, so head == group
     == 128 here; head_dim 256/512 heads are stored as 2/4 slice tiles.
     """
@@ -160,6 +216,7 @@ class KvarnTileLayout:
     def __init__(self, head_dim: int = 128, group: int = 128,
                  key_bits: int = 4, value_bits: int = 4):
         assert head_dim == group == KVAR_N_GROUP
+        assert kvarn_valid_bits(key_bits) and kvarn_valid_bits(value_bits)
         off = 0
         self.k_payload_off = off
         self.k_payload_bytes = kvarn_packed_bytes(head_dim * group, key_bits)
@@ -184,6 +241,20 @@ class KvarnTileLayout:
         self.group = group
         self.key_bits = key_bits
         self.value_bits = value_bits
+        assert self.tile_bytes == _align_up(
+            self.k_record_bytes + self.v_record_bytes, 8)
+
+    @property
+    def k_record_bytes(self) -> int:
+        """K-side record bytes: K payload (K bits) + s_col + zp + s_row."""
+        return (self.k_payload_bytes + self.head_dim * 2 +
+                self.head_dim * 2 + self.group * 2)
+
+    @property
+    def v_record_bytes(self) -> int:
+        """V-side record bytes: V payload (V bits) + s_col + s_row + zp."""
+        return (self.v_payload_bytes + self.head_dim * 2 +
+                self.group * 2 + self.group * 2)
 
 
 def kvarn_make_layout(head_dim: int = 128, group: int = 128,
@@ -431,7 +502,13 @@ def kvarn_m2_triton_available() -> bool:
 
 class CacheLayer_kvarn(CacheLayer):
     """
-    KVarN compressed KV cache layer (M2).
+    KVarN compressed KV cache layer (M3).
+
+    Storage per 128-token physical group x per (kv_head, 128-dim slice):
+    one combined K+V tile record (see KvarnTileLayout). M3 presets:
+    kvarn4 (4,4), kvarn5 (5,5) and kvarn5,kvarn4 (asymmetric, Bee
+    balanced default); K and V tiles of the same 128-group are sealed
+    together (same group boundaries) with different payload widths.
 
     Storage per 128-token physical group x per (kv_head, 128-dim slice):
     one combined K+V tile record (see KvarnTileLayout). Partial groups are
@@ -466,8 +543,9 @@ class CacheLayer_kvarn(CacheLayer):
         assert max_num_tokens % PAGE_SIZE == 0, \
             f"max_num_tokens must be a multiple of {PAGE_SIZE}."
         assert PAGE_SIZE % KVAR_N_GROUP == 0
-        assert (k_bits, v_bits) in [(4, 4)], \
-            f"M2 supports only the kvarn4 symmetric preset, got {(k_bits, v_bits)}"
+        assert (k_bits, v_bits) in KVAR_N_M3_PRESETS, \
+            f"M3 supports kvarn4 (4,4), kvarn5 (5,5) and kvarn5,kvarn4 " \
+            f"(5,4), got {(k_bits, v_bits)}"
 
         head_dim = attention.head_dim
         self.slices = kvarn_head_slices(head_dim)
@@ -746,6 +824,9 @@ class CacheLayer_kvarn(CacheLayer):
     def copy_page(self, source: CacheLayer_kvarn, from_page: int, to_page: int,
                   num_tokens: int):
         assert self.records.shape == source.records.shape
+        assert (self.k_bits, self.v_bits) == (source.k_bits, source.v_bits), \
+            "KVarN copy_page requires matching K/V widths (records are " \
+            "not comparable across presets)"
         assert self.tail_dtype == source.tail_dtype and \
             self.has_sink == source.has_sink, \
             "KVarN copy_page requires matching tail dtype and sink policy"
