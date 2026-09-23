@@ -98,6 +98,7 @@ Numerical convention (matches BeeLlama):
 from __future__ import annotations
 from typing_extensions import override
 import math
+import os
 import torch
 from ..constants import PAGE_SIZE
 from .cache import CacheLayer
@@ -300,6 +301,16 @@ def kvarn_autosplit_transient_bytes(num_pages: int, num_kv_heads: int,
     """
     return int(num_pages) * PAGE_SIZE * int(num_kv_heads) * int(head_dim) \
         * 2 * torch.half.itemsize
+
+
+def _kvarn_use_triton() -> bool:
+    """
+    Opt-in gate for the fused Triton dequant path (attention_fn/
+    kvarn_triton.py). Default off: stock behavior is the tested torch loop.
+    The kernel module re-checks availability and fails loud when set but
+    unrunnable -- an env typo must never silently change numerics.
+    """
+    return os.environ.get("EXL3_KVARN_TRITON", "0") == "1"
 
 
 def kvarn_tail_policy_for(raw_requested_tokens: int, window: int) -> dict:
@@ -1124,18 +1135,65 @@ class CacheLayer_kvarn(CacheLayer):
         del self.stage_blocks[g]
 
     @torch.inference_mode()
-    def _staging_from_records(self, g: int, records=None):
-        """Rotated-domain fp16 staging rows rebuilt from sealed records."""
-        records = self.records if records is None else records
+    def _sealed_tiles(self, g: int):
+        """
+        Dequantize sealed group g to rotated-domain fp32 blocks
+        (bk, bv) shaped (128, kvh, hd). Default is the tested torch loop;
+        with EXL3_KVARN_TRITON=1 (and triton + CUDA present) the fused
+        Triton kernel in attention_fn/kvarn_triton.py is used instead.
+        With EXL3_KVARN_TRITON_PARITY=1 both run and must agree (the
+        acceptance test for the untested-on-GPU kernel path).
+        """
+        if _kvarn_use_triton():
+            from ..modules.attention_fn.kvarn_triton import (
+                kvarn_triton_available, kvarn_triton_dequant_group,
+                kvarn_triton_parity_check)
+            assert kvarn_triton_available(), \
+                "EXL3_KVARN_TRITON=1 but the Triton path is unavailable " \
+                "(needs triton + CUDA); unset it for the torch path."
+            bk_t, bv_t = kvarn_triton_dequant_group(
+                self.records[g], self.layout, self.k_bits, self.v_bits,
+                self.num_kv_heads, self.slices)
+            if kvarn_triton_parity_check():
+                bk_r, bv_r = self._sealed_tiles_torch(g)
+                assert torch.equal(bk_t.half(), bk_r.half()) and \
+                    torch.equal(bv_t.half(), bv_r.half()), \
+                    "KVarN Triton dequant disagrees with the torch " \
+                    f"reference on group {g}"
+            return bk_t, bv_t
+        return self._sealed_tiles_torch(g)
+
+    @torch.inference_mode()
+    def _sealed_tiles_torch(self, g: int):
+        """Torch reference for _sealed_tiles (tested on CPU, runs anywhere)."""
         bk = torch.empty(self._block_shape(), dtype=torch.float32, device=self.device)
         bv = torch.empty_like(bk)
         for h in range(self.num_kv_heads):
             for sl in range(self.slices):
                 c = h * self.slices + sl
                 d0, d1 = sl * KVAR_N_GROUP, (sl + 1) * KVAR_N_GROUP
-                rec = records[g, c]
+                rec = self.records[g, c]
                 bk[:, h, d0:d1] = kvarn_dequantize_k_tile(rec, self.k_bits, self.layout).T
                 bv[:, h, d0:d1] = kvarn_dequantize_v_tile(rec, self.v_bits, self.layout)
+        return bk, bv
+
+    @torch.inference_mode()
+    def _staging_from_records(self, g: int, records=None):
+        """Rotated-domain fp16 staging rows rebuilt from sealed records."""
+        if records is not None and records is not self.records:
+            # Cross-layer rebuild (copy_page): torch path only, the Triton
+            # hook serves own records (parity self-check needs own layout).
+            bk = torch.empty(self._block_shape(), dtype=torch.float32, device=self.device)
+            bv = torch.empty_like(bk)
+            for h in range(self.num_kv_heads):
+                for sl in range(self.slices):
+                    c = h * self.slices + sl
+                    d0, d1 = sl * KVAR_N_GROUP, (sl + 1) * KVAR_N_GROUP
+                    rec = records[g, c]
+                    bk[:, h, d0:d1] = kvarn_dequantize_k_tile(rec, self.k_bits, self.layout).T
+                    bv[:, h, d0:d1] = kvarn_dequantize_v_tile(rec, self.v_bits, self.layout)
+            return [bk.half(), bv.half()]
+        bk, bv = self._sealed_tiles(g)
         return [bk.half(), bv.half()]
 
     @torch.inference_mode()
@@ -1148,16 +1206,7 @@ class CacheLayer_kvarn(CacheLayer):
         ok = out_k[page, base: base + KVAR_N_GROUP]  # (128, kvh, hd) fp16
         ov = out_v[page, base: base + KVAR_N_GROUP]
         if bool(self.sealed[g]):
-            kk = torch.empty((KVAR_N_GROUP, self.num_kv_heads, self.head_dim),
-                             dtype=torch.float32, device=ok.device)
-            vv = torch.empty_like(kk)
-            for h in range(self.num_kv_heads):
-                for sl in range(self.slices):
-                    c = h * self.slices + sl
-                    d0, d1 = sl * KVAR_N_GROUP, (sl + 1) * KVAR_N_GROUP
-                    rec = self.records[g, c]
-                    kk[:, h, d0:d1] = kvarn_dequantize_k_tile(rec, self.k_bits, self.layout).T
-                    vv[:, h, d0:d1] = kvarn_dequantize_v_tile(rec, self.v_bits, self.layout)
+            kk, vv = self._sealed_tiles(g)
             ok.copy_(kvarn_wht_head(kk, self.head_dim).half())
             ov.copy_(kvarn_wht_head(vv, self.head_dim).half())
         else:
