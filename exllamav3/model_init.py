@@ -113,6 +113,8 @@ def add_args(
         parser.add_argument("-cca", "--cache_compand_a", type = float, help = "Compand a value for simulated cache, default: 0.0", default = 0.0)
         parser.add_argument("-ccs", "--cpu_cache_size", type = float, help = f"CPU second-tier cache size, in GB, default: {default_cpu_cache_size}", default = default_cpu_cache_size)
         parser.add_argument("-rcs", "--recurrent_cache_size", type = float, help = f"CPU second-tier cache size, in GB, default: {default_recurrent_cache_size}", default = default_recurrent_cache_size)
+        parser.add_argument("-kvt", "--kv_tail_tokens", type = int, help = "KVarN exact tail size in tokens (0/omitted => intrinsic 128 floor, positive values ceil to 128-groups, capped at cache size; full-window => native exact). Ignored for non-KVarN caches.", default = 0)
+        parser.add_argument("-kvt_type", "--kv_tail_type", type = str, help = "KVarN exact tail dtype: f16 (default) or bf16. Ignored for non-KVarN caches.", default = "f16")
 
     if add_draft_model_args:
         parser.add_argument("-dm", "--draft_model_dir", type = str, help = "Path to draft model directory", default = None)
@@ -277,21 +279,25 @@ def init(
         if args.cache_quant is not None:
             cq = args.cache_quant.strip().lower()
             if cq in ("kvarn4", "kvarn4,kvarn4"):
+                kvarn_kwargs = dict(
+                    k_bits = 4,
+                    v_bits = 4,
+                    tail_tokens = getattr(args, "kv_tail_tokens", 0) or 0,
+                    tail_type = getattr(args, "kv_tail_type", "f16") or "f16",
+                )
                 cache = Cache(
                     model,
                     max_num_tokens = args.cache_size,
                     layer_type = CacheLayer_kvarn,
-                    k_bits = 4,
-                    v_bits = 4,
                     max_history = max_history,
                     max_batch_size = args.autosplit_max_batch_size,
+                    **kvarn_kwargs,
                 )
                 draft_cache = Cache(
                     draft_model,
                     max_num_tokens = args.cache_size,
                     layer_type = CacheLayer_kvarn,
-                    k_bits = 4,
-                    v_bits = 4
+                    **kvarn_kwargs,
                 ) if draft_model_dir else None
             else:
                 split = [int(bits) for bits in args.cache_quant.split(",")]
