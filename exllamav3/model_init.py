@@ -110,11 +110,11 @@ def add_args(
 
     if cache:
         parser.add_argument("-cs", "--cache_size", type = int, help = f"Total cache size in tokens, default: {default_cache_size}", default = default_cache_size)
-        parser.add_argument("-cq", "--cache_quant", type = str, help = "Use quantized cache. Specify either kv_bits or k_bits,v_bits pair, or a KVarN preset: kvarn4 / kvarn4,kvarn4, kvarn5 / kvarn5,kvarn5, kvarn5,kvarn4 (Bee balanced default)")
+        parser.add_argument("-cq", "--cache_quant", type = str, help = "Use quantized cache. Specify either kv_bits or k_bits,v_bits pair, or a KVarN preset: kvarnN symmetric (N = 2,3,4,5,6,8) or kvarnK,kvarnV asymmetric (full Bee 36-combo table, e.g. kvarn5,kvarn4 balanced default)")
         parser.add_argument("-cca", "--cache_compand_a", type = float, help = "Compand a value for simulated cache, default: 0.0", default = 0.0)
         parser.add_argument("-ccs", "--cpu_cache_size", type = float, help = f"CPU second-tier cache size, in GB, default: {default_cpu_cache_size}", default = default_cpu_cache_size)
         parser.add_argument("-rcs", "--recurrent_cache_size", type = float, help = f"CPU second-tier cache size, in GB, default: {default_recurrent_cache_size}", default = default_recurrent_cache_size)
-        parser.add_argument("-kvt", "--kv_tail_tokens", type = int, help = "KVarN exact tail size in tokens (0/omitted => intrinsic 128 floor, positive values ceil to 128-groups, capped at cache size; full-window => native exact). Ignored for non-KVarN caches.", default = 0)
+        parser.add_argument("-kvt", "--kv_tail_tokens", type = int, help = "KVarN exact tail size in tokens (0/omitted => intrinsic 128 floor, positive values ceil to 128-groups, capped at cache size, SWA layers capped at the sliding window; full-window => native exact). Ignored for non-KVarN caches.", default = 0)
         parser.add_argument("-kvt_type", "--kv_tail_type", type = str, help = "KVarN exact tail dtype: f16 (default) or bf16. Ignored for non-KVarN caches.", default = "f16")
 
     if add_draft_model_args:
