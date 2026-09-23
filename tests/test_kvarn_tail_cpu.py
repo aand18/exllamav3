@@ -282,16 +282,13 @@ def test_storage_accounting_with_tail():
     tailed = _layer(4, 128, 4096, tail_tokens=1024, tail_type="bf16")
     try:
         fp16_bytes = 2 * 4096 * 4 * 128 * 2
-        # Compressed records are tail-independent.
+        # Fresh layers: no resident exact blocks, so storage is the
+        # compressed records (tail-independent) and overhead is flags only.
         assert tailed.storage_size() == base.storage_size() == 32 * 4 * 17920
         assert tailed.storage_size() < 0.5 * fp16_bytes
-        # Overhead carries staging + exact tail buffers + bit flags.
-        expect = (2 * tailed.stage_k.numel() * torch.half.itemsize +
-                  2 * tailed.exact_k.numel() * torch.bfloat16.itemsize +
-                  tailed.present.numel() + tailed.sealed.numel())
-        assert tailed.overhead_size() == expect
-        assert tailed.overhead_size() == base.overhead_size()  # bf16 == f16 bytes
-        assert len(tailed.get_tensors()) == 5
+        assert tailed.overhead_size() == base.overhead_size()
+        assert tailed.overhead_size() > 0
+        assert len(tailed.get_tensors()) == 1
     finally:
         base.free()
         tailed.free()
@@ -344,7 +341,10 @@ def test_copy_page_sink_tail():
     assert not bool(dst.sealed[2])   # sink group: never sealed
     assert bool(dst.sealed[3])
     assert torch.equal(dst.records[3], layer.records[1])
-    assert torch.equal(dst.exact_k[1], layer.exact_k[0])
+    # M4: compact exact blocks travel remapped with the copied groups
+    # (dst groups 2,3 <- src groups 0,1).
+    assert torch.equal(dst.exact_blocks[2][0], layer.exact_blocks[0][0])
+    assert torch.equal(dst.exact_blocks[3][1], layer.exact_blocks[1][1])
     # Logical comparison through a remapped block table: dst page 1 now
     # backs logical positions 0..255 (prompt-cache page sharing). The M2
     # exact overlay is logical, so raw page tensors are not comparable.
@@ -356,11 +356,38 @@ def test_copy_page_sink_tail():
     # page 1, which used to back positions 256..299).
     assert torch.equal(kk[bt2[0]].reshape(-1, 2, 128)[:256],
                        ref[bt[0]].reshape(-1, 2, 128)[:256])
-    # Partial copy stays unsealed staging + exact.
+    # Partial copy stays unsealed staging + exact (remapped blocks).
     dst2 = _layer(2, 128, 512)
     dst2.copy_page(layer, 1, 0, 44)
     assert not bool(dst2.sealed[0])
-    assert torch.equal(dst2.exact_k[0, :44], layer.exact_k[1, :44])
+    assert torch.equal(dst2.exact_blocks[0][0][:44], layer.exact_blocks[2][0][:44])
+    assert torch.equal(dst2.stage_blocks[0][1][:44], layer.stage_blocks[2][1][:44])
+
+
+@torch.inference_mode()
+def test_copy_page_partial_from_sealed():
+    """Partial copy spanning into a sealed group rebuilds staging from
+    the source records; exact rows travel, so the overlay still matches."""
+    torch.manual_seed(19)
+    layer = _layer(2, 128, 512)
+    bt = _ids(512)
+    k = torch.randn(300, 2, 128).half()
+    v = torch.randn(300, 2, 128).half()
+    layer.update_kv_direct(torch.zeros(1, dtype=torch.int32), bt,
+                           k.unsqueeze(0), v.unsqueeze(0), 300)
+    assert bool(layer.sealed[1])
+    dst = _layer(2, 128, 512)
+    dst.copy_page(layer, 0, 0, 172)  # group 0 full (sink), group 1: 44 rows
+    assert not bool(dst.sealed[0]) and not bool(dst.sealed[1])
+    # Staging for the partial sealed-source group == source records dequant.
+    rec = layer._staging_from_records(1)
+    assert torch.equal(dst.stage_blocks[1][0][:44], rec[0][:44])
+    assert torch.equal(dst.stage_blocks[1][1][:44], rec[1][:44])
+    # Same 172-token prefix reads identically through both layers.
+    kk, _ = dst.get_kv(torch.tensor([172], dtype=torch.int32), bt)
+    ref, _ = layer.get_kv(torch.tensor([172], dtype=torch.int32), bt)
+    assert torch.equal(kk[bt[0]].reshape(-1, 2, 128)[:172],
+                       ref[bt[0]].reshape(-1, 2, 128)[:172])
 
 
 # --------------------------------------------------------------------------
