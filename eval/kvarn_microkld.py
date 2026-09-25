@@ -73,6 +73,7 @@ def main():
     # Creating them after load leaves recurrent state on meta, which fails
     # hybrid (GDN) forwards with "conv_state is on meta".
     max_tok = args.max_tokens or max(512, args.ntok)
+    max_tok = ((max_tok + 255) // 256) * 256
     assert max_tok >= args.ntok, f"max_tokens {max_tok} < ntok {args.ntok}"
     c_fp16 = Cache(model, max_num_tokens=max_tok, layer_type=CacheLayer_fp16)
     c_kvarn = Cache(model, max_num_tokens=max_tok, layer_type=CacheLayer_kvarn,
