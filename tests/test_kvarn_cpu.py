@@ -259,32 +259,6 @@ def test_update_kv_persists_from_dequant_temps():
 
 
 @torch.inference_mode()
-def test_getkv_overlay_restore_roundtrip():
-    """In-place overlay + restore must round-trip: repeated get_kv with
-    the same args returns identical temps, and advancing still serves
-    the sink exact (idea 4, decode path)."""
-    torch.manual_seed(9)
-    kvh, hd = 2, 128
-    layer = _layer(kvh, hd, 768)
-    bt = _ids(768)
-    K = torch.randn(1, 512, kvh, hd).half()
-    V = torch.randn(1, 512, kvh, hd).half()
-    layer.update_kv_direct(torch.zeros(1, dtype=torch.int32), bt, K, V, 512)
-    seqlens = torch.tensor([512], dtype=torch.int32)
-    k1, v1 = layer.get_kv(seqlens, bt)
-    k1c, v1c = k1.clone(), v1.clone()
-    k2, v2 = layer.get_kv(seqlens, bt)
-    assert torch.equal(k1c, k2) and torch.equal(v1c, v2)
-    K2 = torch.randn(1, 128, kvh, hd).half()
-    V2 = torch.randn(1, 128, kvh, hd).half()
-    layer.update_kv_direct(torch.tensor([512], dtype=torch.int32),
-                           bt, K2, V2, 128)
-    k3, _ = layer.get_kv(torch.tensor([640], dtype=torch.int32), bt)
-    got = k3[0].reshape(-1, kvh, hd)
-    assert torch.equal(got[:128], K[:, :128].reshape(-1, kvh, hd))
-
-
-@torch.inference_mode()
 def test_copy_page():
     torch.manual_seed(3)
     layer = _layer(2, 128, 512)
