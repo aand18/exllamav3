@@ -1,9 +1,15 @@
-# Local build notes (this machine, GPU-less; CUDA target is sm_89 elsewhere)
+# Local build notes
+
+> Scope: written for one specific dev box (`LAPTOP-55FMHPT7`: Windows,
+> GPU-less; CUDA target is sm_89 elsewhere). Sections marked **[portable]**
+> apply anywhere; sections marked **[this box]** name local paths, venvs
+> and accounts that will not exist on other machines — adapt, don't follow
+> literally.
 
 Learned the hard way — kept here so nobody rediscovers it. Version numbers
 are examples "as of Sep 2026", not mandates; adapt to what's installed.
 
-## When a rebuild is needed at all
+## [portable] When a rebuild is needed at all
 
 - Pure Python + Triton changes need NO build (Triton JITs at runtime).
 - A built `exllamav3_ext` `.pyd` keeps working until `exllamav3/exllamav3_ext/`
@@ -12,7 +18,7 @@ are examples "as of Sep 2026", not mandates; adapt to what's installed.
   `build/`, `*.pyd/obj`) to a scratch dir and build there, so artifacts
   can't leak into commits.
 
-## Windows CUDA build that works (MSVC + nvcc, no GPU on box)
+## [portable] Windows CUDA build that works (MSVC + nvcc)
 
 - torch from the CUDA wheel matching the toolkit major
   (e.g. cu130 torch + 13.4 toolkit built clean despite the minor skew).
@@ -27,14 +33,14 @@ are examples "as of Sep 2026", not mandates; adapt to what's installed.
 - Ninja may or may not cooperate; distutils fallback is slow but works.
   Log to a file (`> build.log 2>&1`) — per-TU SDK-header warnings flood.
 
-## No-GPU caveat (transfers to every merged tree too)
+## [portable] No-GPU caveat (transfers to every merged tree too)
 
 A merged tree compiles the same way, but runtime interaction between
 features can only be proven on the CUDA box. Mark such test results
 CPU-partial. `ext` has no CPU forward kernels (e.g. `rms_norm` is
-CUDA-only), so no model-level run is possible on this machine at all.
+CUDA-only), so no model-level run is possible on a GPU-less machine at all.
 
-## Shell, venvs, and git auth on this box
+## [this box] Shell, venvs, and git auth
 
 - Each new shell starts with a stale `PATH` (no `gh`, no venv shims).
   Refresh per invocation via the Chocolatey helper, or use full paths:
