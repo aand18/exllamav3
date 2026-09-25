@@ -691,6 +691,7 @@ class QSAIndexer(Module):
         """
         from .attention_fn.qsa_triton import qsa_sparse_attend_rows
         from ..cache.quant import CacheLayer_quant
+        from ..cache.kvarn import CacheLayer_kvarn
         bsz, seq = q.shape[:2]
         indices = self.select_indices_paged(layer, q_idx, block_table, cache_seqlens_cpu)
         bt_rows = block_table.int().unsqueeze(1).expand(bsz, seq, -1) \
@@ -699,6 +700,15 @@ class QSAIndexer(Module):
             # Packed pages, dequantized online by the gather kernel
             qk, sk, qv, sv, kb, vb = layer.get_qkv()
             k_arg, v_arg, qc, page_size = qk, qv, (sk, sv, kb, vb), qk.shape[1]
+        elif isinstance(layer, CacheLayer_kvarn):
+            # KVarN takes the dequant path everywhere (no packed pages for
+            # online kernels): serve the merged fp16 image (sealed body +
+            # exact sink/tail overlay) for referenced pages. Current tokens
+            # were already stored by update_kv_direct before this call.
+            k_mat, v_mat = layer.get_kv(cache_seqlens_cpu, block_table, -1)
+            k_arg = k_mat.view(-1, attn.num_kv_heads, attn.head_dim)
+            v_arg = v_mat.view(-1, attn.num_kv_heads, attn.head_dim)
+            qc, page_size = None, k_mat.shape[1]
         else:
             k_arg = layer.k.view(-1, attn.num_kv_heads, attn.head_dim)
             v_arg = layer.v.view(-1, attn.num_kv_heads, attn.head_dim)
