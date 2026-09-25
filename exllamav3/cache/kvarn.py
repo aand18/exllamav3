@@ -1344,8 +1344,35 @@ class CacheLayer_kvarn(CacheLayer):
         """Dequantize sealed groups Gs (1D long tensor, on device) to
         rotated-domain fp32 (bk, bv) shaped (len(Gs), 128, kvh, hd).
 
-        Batched equivalent of looping _sealed_tiles_torch + per-group WHT
-        input prep: identical elementwise ops (unpack, (q*sc+zp)*other),
+        Default is the tested torch batch; with EXL3_KVARN_TRITON=1 (and
+        triton + CUDA present) the fused Triton kernel in
+        attention_fn/kvarn_triton.py is used instead. With
+        EXL3_KVARN_TRITON_PARITY=1 both run and must agree bit-exact
+        (fp32 == fp32); that is the acceptance test for the kernel path.
+        """
+        if _kvarn_use_triton():
+            from ..modules.attention_fn.kvarn_triton import (
+                kvarn_triton_available, kvarn_triton_dequant_groups,
+                kvarn_triton_parity_check)
+            assert kvarn_triton_available(), \
+                "EXL3_KVARN_TRITON=1 but the Triton path is unavailable " \
+                "(needs triton + CUDA); unset it for the torch path."
+            bk_t, bv_t = kvarn_triton_dequant_groups(
+                self.records[Gs], self.layout, self.k_bits, self.v_bits,
+                self.num_kv_heads, self.slices)
+            if kvarn_triton_parity_check():
+                bk_r, bv_r = self._dequant_groups_batched_torch(Gs)
+                assert torch.equal(bk_t, bk_r) and \
+                    torch.equal(bv_t, bv_r), \
+                    "KVarN Triton batched dequant disagrees with the torch " \
+                    f"reference on {Gs.numel()} groups"
+            return bk_t, bv_t
+        return self._dequant_groups_batched_torch(Gs)
+
+    @torch.inference_mode()
+    def _dequant_groups_batched_torch(self, Gs: torch.Tensor):
+        """Torch reference for _dequant_groups_batched (tested on CPU, runs
+        anywhere): identical elementwise ops (unpack, (q*sc+zp)*other),
         one kernel launch each instead of ~30 per group."""
         C = self.num_kv_heads * self.slices
         assert self.records.shape[1] == C
