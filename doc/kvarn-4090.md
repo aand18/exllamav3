@@ -80,3 +80,65 @@ installed. Linux: same torch install, then
 Parity pass/fail (+ assertion text on failure), micro-KLD median/mean/max +
 same-top % per preset, prefill tok/s for fp16 vs kvarn4 vs kvarn5,kvarn4,
 and GPU model. Post results to the branch's draft PR (#2).
+
+## Validation results (RTX 4090, sm_89, Windows native)
+
+Harness: `eval/kvarn_microkld.py` (336+ past + 64 scored continuation
+tokens at 400 tok; past + 64 scored at longer ctx). All numbers plain
+decimals; KLD = per-position next-token KLD vs fp16 cache. This table is
+the regression baseline — compare future runs (and BeeLlama reference
+numbers) against it. `same-top` was 100.00% on every run at every length.
+
+Status of the checklist above: (2) Triton acceptance PASSED on 4090
+(sparse-path bug found and fixed along the way, `247a393`); kernels now
+run under `EXL3_KVARN_TRITON=1` with `PARITY=1` asserting bit-exactness.
+(3) Micro-KLD done at 400–32768 tokens (procedure now uses `-mcl`,
+`--max_tokens`, `--chunk`, `--decode`; see `--help`).
+
+### Qwen3.8-27B dense 1.40bpw (`SC_1.40bpw_H3_V3`, Qwen3_5, hd 256)
+
+| ctx | preset | median | mean | max | p99 | p99.9 | fp16 pre | kvarn pre |
+|-----|--------|--------|------|-----|-----|-------|----------|-----------|
+| 8192 | kvarn4 | 0.000001 | 0.000013 | 0.000261 | 0.000179 | 0.000253 | 4.7s | 10.0s |
+| 8192 | kvarn5,kvarn4 | 0.000001 | 0.000011 | 0.000144 | 0.000127 | 0.000142 | 4.7s | 10.0s |
+| 16384 | kvarn4 | 0.000001 | 0.000010 | 0.000183 | 0.000168 | 0.000182 | 6.6s | 8.8s |
+| 16384 | kvarn5,kvarn4 | 0.000001 | 0.000022 | 0.000788 | 0.000450 | 0.000754 | 6.5s | 8.8s |
+| 32768 | kvarn4 | 0.000001 | 0.000019 | 0.000278 | 0.000230 | 0.000273 | 13.7s | 17.6s |
+| 32768 | kvarn5,kvarn4 | 0.000001 | 0.000023 | 0.000356 | 0.000319 | 0.000352 | 13.6s | 17.6s |
+
+Prefill history on this model @8192 (same quality throughout):
+134.6s (baseline) -> 96.2s (batched dequant, `2345080`) ->
+10.7s (batched seals, `21be28b`) -> 10.0s (incremental image,
+`839360c`) -> 4.3s (chunk 8192). Final ratio ~1.3x fp16.
+
+Decode @8192 (64 greedy steps, warm inductor cache):
+fp16 86.4 tok/s vs kvarn4 8.9 tok/s; fp16 86.6 vs kvarn5,kvarn4 8.7.
+Generation gap (~10x) is open work, not a regression: per-token
+full-image clone + eager store/overlay.
+
+### Qwen3.8-27B dense 5.00bpw (`SC_5.00bpw_H6`)
+
+| ctx | preset | median | mean | max | fp16 pre | kvarn pre |
+|-----|--------|--------|------|-----|----------|-----------|
+| 400 | kvarn4 | 0.000043 | 0.006330 | 0.380000 | — | — |
+| 400 | kvarn5,kvarn4 | 0.000039 | 0.000406 | 0.006960 | — | — |
+| 8192 | kvarn4 | 0.000000 | 0.000011 | 0.000329 | 5.0s | 144.6s* |
+| 8192 | kvarn5,kvarn4 | 0.000000 | 0.000005 | 0.000066 | 4.9s | 149.8s* |
+
+\*: pre-optimization numbers (per-group Python loops); see 1.40bpw
+history above for the optimized path. Quality digits match across
+checkpoints.
+
+### Qwen3.8-Flash-Next 3.05bpw (Qwen4Exp, MoE+QSA, `-mcl 40`)
+
+| ctx | preset | median | mean | max |
+|-----|--------|--------|------|-----|
+| 400 | kvarn4 | 0.000131 | 0.000818 | 0.009026 |
+| 400 | kvarn5,kvarn4 | 0.000121 | 0.001276 | 0.059106 |
+| 400 | kvarn5,kvarn5 | 0.000167 | 0.001495 | 0.030120 |
+| 2048 | kvarn4 | 0.000102 | 0.000192 | 0.000888 |
+| 2048 | kvarn5,kvarn4 | 0.000020 | 0.000121 | 0.003891 |
+| 4096 | kvarn4 | 0.000126 | 0.000518 | 0.006072 |
+| 4096 | kvarn5,kvarn4 | 0.000036 | 0.000366 | 0.007289 |
+| 8192 | kvarn4 | 0.000010 | 0.000048 | 0.000880 |
+| 8192 | kvarn5,kvarn4 | 0.000011 | 0.000122 | 0.005001 |
