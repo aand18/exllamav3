@@ -1,3 +1,12 @@
+# FORK
+
+This is a fork of [turboderp-org/exllamav3](https://github.com/turboderp-org/exllamav3)
+for WIP features. `master` stays a pristine upstream mirror; work happens on
+`feat/<issue>-<slug>` / `fix/<issue>-<slug>` / `wip/<topic>` branches, each
+documented by a Draft PR. Workflow details: [AGENTS.md](./AGENTS.md).
+Active branches: [BRANCHES.md](./BRANCHES.md).
+
+# Original README
 
 <p align="center">
   <img src="doc/logo.png" width="640" alt="Llama 3.1 8B Instruct quantization benchmark across bits per weight">
