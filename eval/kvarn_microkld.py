@@ -37,11 +37,11 @@ def run(model, cache, ids):
         f"need >264 tokens to seal a group and score a continuation, got {n}"
     split = n - 64
     p1 = {"cache": cache, "attn_mode": "flash_attn",
-          "batch_shape": (1, 512), "past_len": 0}
+          "batch_shape": (1, ids.shape[1]), "past_len": 0}
     model.forward(ids[:, :split], p1)
     states = p1.get("recurrent_states")
     p2 = {"cache": cache, "attn_mode": "flash_attn",
-          "batch_shape": (1, 512), "past_len": split}
+          "batch_shape": (1, ids.shape[1]), "past_len": split}
     if states is not None:
         p2["recurrent_states"] = states
     logits = model.forward(ids[:, split:], p2)
@@ -54,6 +54,8 @@ def main():
     parser.add_argument("-cq", "--cache_quant", default="kvarn4",
                         help="KVarN preset, e.g. kvarn4 or kvarn5,kvarn4")
     parser.add_argument("-ntok", "--ntok", type=int, default=200)
+    parser.add_argument("-maxtok", "--max_tokens", type=int, default=0,
+                        help="Cache max tokens (defaults to max(512, ntok))")
     parser.add_argument("-d", "--device", default="cuda:0")
     parser.add_argument("-mcl", "--moe_cpu_offload", type=int, default=0,
                         help="Offload first N block-sparse MoE layers to CPU "
@@ -70,15 +72,18 @@ def main():
     # recurrent-state tensors for attached caches only (see model_init.init).
     # Creating them after load leaves recurrent state on meta, which fails
     # hybrid (GDN) forwards with "conv_state is on meta".
-    c_fp16 = Cache(model, max_num_tokens=512, layer_type=CacheLayer_fp16)
-    c_kvarn = Cache(model, max_num_tokens=512, layer_type=CacheLayer_kvarn,
+    max_tok = args.max_tokens or max(512, args.ntok)
+    assert max_tok >= args.ntok, f"max_tokens {max_tok} < ntok {args.ntok}"
+    c_fp16 = Cache(model, max_num_tokens=max_tok, layer_type=CacheLayer_fp16)
+    c_kvarn = Cache(model, max_num_tokens=max_tok, layer_type=CacheLayer_kvarn,
                     k_bits=k_bits, v_bits=v_bits)
     t0 = time.time()
     model.load(args.device, progressbar=False)
     print(f"load ok ({time.time() - t0:.1f}s)", flush=True)
 
     tokenizer = Tokenizer.from_config(config)
-    ids = tokenizer.encode(SAMPLER_TEXT * 16)[:, :args.ntok]
+    reps = max(16, (args.ntok // 24) + 2)
+    ids = tokenizer.encode(SAMPLER_TEXT * reps)[:, :args.ntok]
     print("tokens:", tuple(ids.shape), flush=True)
 
     t0 = time.time()
