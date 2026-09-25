@@ -525,6 +525,31 @@ def kvarn_hadamard_128(x: torch.Tensor) -> torch.Tensor:
     return x
 
 
+def kvarn_wht_slices(x: torch.Tensor, head_dim: int) -> torch.Tensor:
+    """
+    Cross-slice FWHT stage only (no-op for head_dim 128). The input must
+    already have the per-128 FWHT applied -- e.g. Triton DO_WHT output.
+    Same stage order as the tail of kvarn_wht_head.
+    """
+    slices = kvarn_head_slices(head_dim)
+    assert slices > 0, f"KVarN: unsupported head_dim {head_dim}"
+    if slices == 1:
+        return x
+    prefix = x.shape[:-1]
+    v = x.reshape(-1, slices, KVAR_N_GROUP)
+    scale = 0.7071067811865475 if slices == 2 else 0.5
+    # FWHT over the slice axis
+    s = 1
+    while s < slices:
+        vv = v.reshape(v.shape[0], -1, 2, s, KVAR_N_GROUP)
+        a = vv[:, :, 0].clone()
+        b = vv[:, :, 1].clone()
+        vv[:, :, 0] = a + b
+        vv[:, :, 1] = a - b
+        s *= 2
+    return (v * scale).reshape(*prefix, head_dim)
+
+
 def kvarn_wht_head(x: torch.Tensor, head_dim: int) -> torch.Tensor:
     """
     Head-wide WHT: per-128 FWHT then cross-slice FWHT with 1/sqrt(slices)
@@ -537,17 +562,7 @@ def kvarn_wht_head(x: torch.Tensor, head_dim: int) -> torch.Tensor:
     v = kvarn_hadamard_128(x.reshape(-1, slices, KVAR_N_GROUP))
     if slices == 1:
         return v.reshape(*prefix, head_dim)
-    scale = 0.7071067811865475 if slices == 2 else 0.5
-    # FWHT over the slice axis
-    s = 1
-    while s < slices:
-        vv = v.reshape(v.shape[0], -1, 2, s, KVAR_N_GROUP)
-        a = vv[:, :, 0].clone()
-        b = vv[:, :, 1].clone()
-        vv[:, :, 0] = a + b
-        vv[:, :, 1] = a - b
-        s *= 2
-    return (v * scale).reshape(*prefix, head_dim)
+    return kvarn_wht_slices(v.reshape(*prefix, head_dim), head_dim)
 
 
 # --------------------------------------------------------------------------
@@ -1359,15 +1374,18 @@ class CacheLayer_kvarn(CacheLayer):
                 "(needs triton + CUDA); unset it for the torch path."
             bk_t, bv_t = kvarn_triton_dequant_groups(
                 self.records[Gs], self.layout, self.k_bits, self.v_bits,
-                self.num_kv_heads, self.slices)
+                self.num_kv_heads, self.slices, do_wht=True)
             if kvarn_triton_parity_check():
                 bk_r, bv_r = self._dequant_groups_batched_torch(Gs)
-                assert torch.equal(bk_t, bk_r) and \
-                    torch.equal(bv_t, bv_r), \
-                    "KVarN Triton batched dequant disagrees with the torch " \
-                    f"reference on {Gs.numel()} groups"
-            return bk_t, bv_t
-        return self._dequant_groups_batched_torch(Gs)
+                ref_k = kvarn_wht_head(bk_r, self.head_dim)
+                ref_v = kvarn_wht_head(bv_r, self.head_dim)
+                assert torch.equal(bk_t, ref_k) and \
+                    torch.equal(bv_t, ref_v), \
+                    "KVarN Triton fused dequant+WHT disagrees with the " \
+                    f"torch reference on {Gs.numel()} groups"
+            return bk_t, bv_t, True
+        bk, bv = self._dequant_groups_batched_torch(Gs)
+        return bk, bv, False
 
     @torch.inference_mode()
     def _dequant_groups_batched_torch(self, Gs: torch.Tensor):
@@ -1409,17 +1427,36 @@ class CacheLayer_kvarn(CacheLayer):
                                k: torch.Tensor, v: torch.Tensor):
         """Full rematerialization of Gs into caller temps (huge-context
         path: no persistent image). Same math as _refresh_groups."""
+        self._refresh_into(Gs, k, v)
+
+    @torch.inference_mode()
+    def _refresh_into(self, Gs: torch.Tensor,
+                      k_tgt: torch.Tensor, v_tgt: torch.Tensor):
+        """(Re)materialize groups Gs (1D long, on device) into the paged
+        fp16 temps k_tgt/v_tgt (shaped (pages, 256, kvh, hd)).
+
+        Sealed groups come from the batched dequant (torch, or the fused
+        Triton kernel when opted in); open groups from stacked staging.
+        Rows needing the torch inverse-WHT share one batched call; rows
+        the kernel already 128-WHT'd get only the cross-slice stage.
+        Per-row math is identical in all combinations."""
         kvh, hd = self.num_kv_heads, self.head_dim
         dev = self.device
+        flat_k = k_tgt.reshape(-1, KVAR_N_GROUP, kvh, hd)
+        flat_v = v_tgt.reshape(-1, KVAR_N_GROUP, kvh, hd)
         sealed_m = self.sealed[Gs]
-        rot_k = torch.empty((Gs.numel(), KVAR_N_GROUP, kvh, hd),
-                            dtype=torch.float32, device=dev)
-        rot_v = torch.empty_like(rot_k)
         Gs_s = Gs[sealed_m]
+        rot_k, rot_v, rot_gs = [], [], []
         if Gs_s.numel():
-            bk, bv = self._dequant_groups_batched(Gs_s)
-            rot_k[sealed_m] = bk
-            rot_v[sealed_m] = bv
+            bk, bv, wht_done = self._dequant_groups_batched(Gs_s)
+            if wht_done:
+                # Fused kernel output: 128-FWHT done, cross-slice remains.
+                flat_k[Gs_s] = kvarn_wht_slices(bk, hd).half()
+                flat_v[Gs_s] = kvarn_wht_slices(bv, hd).half()
+            else:
+                rot_k.append(bk)
+                rot_v.append(bv)
+                rot_gs.append(Gs_s)
         open_m = ~sealed_m
         if bool(open_m.any()):
             Gs_o = Gs[open_m]
@@ -1431,12 +1468,15 @@ class CacheLayer_kvarn(CacheLayer):
                 if blk is not None:
                     stk_k[i] = blk[0].float()
                     stk_v[i] = blk[1].float()
-            rot_k[open_m] = stk_k
-            rot_v[open_m] = stk_v
-        mat_k = kvarn_wht_head(rot_k, hd).half()
-        mat_v = kvarn_wht_head(rot_v, hd).half()
-        k.reshape(-1, KVAR_N_GROUP, kvh, hd)[Gs] = mat_k
-        v.reshape(-1, KVAR_N_GROUP, kvh, hd)[Gs] = mat_v
+            rot_k.append(stk_k)
+            rot_v.append(stk_v)
+            rot_gs.append(Gs_o)
+        if rot_k:
+            mat_k = kvarn_wht_head(torch.cat(rot_k), hd).half()
+            mat_v = kvarn_wht_head(torch.cat(rot_v), hd).half()
+            rGs = torch.cat(rot_gs)
+            flat_k[rGs] = mat_k
+            flat_v[rGs] = mat_v
 
     @torch.inference_mode()
     def _refresh_groups(self, Gs: torch.Tensor):
@@ -1444,34 +1484,7 @@ class CacheLayer_kvarn(CacheLayer):
         persistent pre-overlay image. Same math as the legacy full
         rematerialization, restricted to Gs: batched sealed dequant plus
         stacked open staging, one inverse-WHT, indexed scatter."""
-        kvh, hd = self.num_kv_heads, self.head_dim
-        dev = self.device
-        sealed_m = self.sealed[Gs]
-        rot_k = torch.empty((Gs.numel(), KVAR_N_GROUP, kvh, hd),
-                            dtype=torch.float32, device=dev)
-        rot_v = torch.empty_like(rot_k)
-        Gs_s = Gs[sealed_m]
-        if Gs_s.numel():
-            bk, bv = self._dequant_groups_batched(Gs_s)
-            rot_k[sealed_m] = bk
-            rot_v[sealed_m] = bv
-        open_m = ~sealed_m
-        if bool(open_m.any()):
-            Gs_o = Gs[open_m]
-            stk_k = torch.zeros((Gs_o.numel(), KVAR_N_GROUP, kvh, hd),
-                                dtype=torch.float32, device=dev)
-            stk_v = torch.zeros_like(stk_k)
-            for i, g in enumerate(Gs_o.tolist()):
-                blk = self.stage_blocks.get(int(g))
-                if blk is not None:
-                    stk_k[i] = blk[0].float()
-                    stk_v[i] = blk[1].float()
-            rot_k[open_m] = stk_k
-            rot_v[open_m] = stk_v
-        mat_k = kvarn_wht_head(rot_k, hd).half()
-        mat_v = kvarn_wht_head(rot_v, hd).half()
-        self._img_k.reshape(-1, KVAR_N_GROUP, kvh, hd)[Gs] = mat_k
-        self._img_v.reshape(-1, KVAR_N_GROUP, kvh, hd)[Gs] = mat_v
+        self._refresh_into(Gs, self._img_k, self._img_v)
 
     def get_kv(self, cache_seqlens: torch.Tensor, block_table: torch.Tensor,
                sliding_window: int = -1) -> tuple:

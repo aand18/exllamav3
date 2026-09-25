@@ -121,6 +121,14 @@ def test_kernel_side_matches_torch_math():
                                         zp[i].float(), oth[i].float())
             for i in range(NT)])
         assert torch.equal(got, ref), bits
+        got_w = kt.kvarn_triton_dequant_side(pay, sc, zp, oth, bits,
+                                             do_wht=True)
+        ref_w = torch.stack([
+            kvarn.kvarn_hadamard_128(
+                kvarn.kvarn_dequantize_tile(q[i].float(), sc[i].float(),
+                                            zp[i].float(), oth[i].float()))
+            for i in range(NT)])
+        assert torch.equal(got_w, ref_w), (bits, "wht")
 
 
 @pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
