@@ -1,10 +1,13 @@
 """
 KVarN online-dequant Triton kernels (bootstrap, NOT YET RUN ON GPU).
 
-Status: written against the CPU-tested math in ``exllamav3/cache/kvarn.py``
-and import-checked only. No GPU was available, so nothing here has executed:
-no numerics, no perf numbers, no launch validation. The first 4090 run must
-use ``EXL3_KVARN_TRITON_PARITY=1`` (see below) before trusting this path.
+Status: validated on RTX 4090 (sm_89, triton 3.8.0). The per-row kernel
+is numerically bit-exact vs the torch reference (container GPU tests +
+in-harness ``EXL3_KVARN_TRITON_PARITY=1`` asserts on a 27B 8k run with
+zero mismatches). Perf: ~zero end-to-end win yet -- by the time this
+fused, dequant was no longer the bottleneck (batched torch + incremental
+image); the next fuse candidate is the inverse WHT. Keep PARITY=1 on the
+first run of any kernel change.
 
 Why this exists: ``CacheLayer_kvarn.get_kv`` dequantizes sealed 128-groups
 with device-agnostic torch ops (correct on CUDA, but one Python loop per
