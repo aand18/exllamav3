@@ -27,22 +27,16 @@ SAMPLER_TEXT = ("The capital of France is Paris. It is known for the Eiffel "
                 "Tower, the Louvre, and its arrondissements along the Seine. ")
 
 
-def run(model, cache, ids, chunk=2048):
-    # Two-phase: a past_len=0 prefill only attends over fresh (exact)
-    # projections -- the cache seals afterwards, so scoring it measures
-    # nothing. Instead populate the past first, then score a continuation
-    # at past_len>0, which actually attends over the sealed body.
-    # Phase 1 is chunked: a full-length prefill materializes full-length
-    # fp32 logits (GBs at 8k) that are discarded anyway; chunking keeps
-    # peak VRAM flat with context length.
-    n = int(ids.shape[1])
-    assert n > 256 + 8, \
-        f"need >264 tokens to seal a group and score a continuation, got {n}"
-    split = n - 64
+def populate(model, cache, ids, chunk, stop=None):
+    # Chunked prefill to token position ``stop`` (default: full length).
+    # Chunking keeps peak VRAM flat: a full-length prefill materializes
+    # full-length fp32 logits (GBs at 8k) that the caller discards anyway.
+    # Returns (recurrent_states, past_len == stop).
+    n = int(ids.shape[1]) if stop is None else stop
     states = None
     past = 0
-    while past < split:
-        c = min(chunk, split - past)
+    while past < n:
+        c = min(chunk, n - past)
         p = {"cache": cache, "attn_mode": "flash_attn",
              "batch_shape": (1, ids.shape[1]), "past_len": past}
         if states is not None:
@@ -51,12 +45,50 @@ def run(model, cache, ids, chunk=2048):
         states = p.get("recurrent_states")
         past += c
         del out
+    return states, past
+
+
+def run(model, cache, ids, chunk=2048):
+    # Two-phase: a past_len=0 prefill only attends over fresh (exact)
+    # projections -- the cache seals afterwards, so scoring it measures
+    # nothing. Instead populate the past first, then score a continuation
+    # at past_len>0, which actually attends over the sealed body.
+    n = int(ids.shape[1])
+    assert n > 256 + 8, \
+        f"need >264 tokens to seal a group and score a continuation, got {n}"
+    split = n - 64
+    states, _ = populate(model, cache, ids, chunk, split)
     p2 = {"cache": cache, "attn_mode": "flash_attn",
           "batch_shape": (1, ids.shape[1]), "past_len": split}
     if states is not None:
         p2["recurrent_states"] = states
     logits = model.forward(ids[:, split:], p2)
-    return logits.float()
+    return logits.float(), p2.get("recurrent_states")
+
+
+def bench_decode(model, cache, ids, steps, states, tag):
+    # Greedy decode throughput continuing from the populated past left by
+    # run() (timing only; generated tokens differ between caches, which is
+    # irrelevant here). Exercises per-token store + get_kv + attention on
+    # the measured path. No repopulation: the cache already holds ids.
+    n = int(ids.shape[1])
+    total = ((n + steps + 255) // 256) * 256
+    tok = ids[:, -1:]
+    past = n
+    t0 = time.time()
+    for _ in range(steps):
+        p = {"cache": cache, "attn_mode": "flash_attn",
+             "batch_shape": (1, total), "past_len": past}
+        if states is not None:
+            p["recurrent_states"] = states
+        logits = model.forward(tok, p)
+        states = p.get("recurrent_states")
+        tok = logits.argmax(dim=-1)[:, -1:]
+        past += 1
+        del logits
+    dt = time.time() - t0
+    print(f"{tag} decode: {steps / dt:.1f} tok/s "
+          f"({steps} steps from {n} ctx)", flush=True)
 
 
 def main():
@@ -69,6 +101,9 @@ def main():
                         help="Cache max tokens (defaults to max(512, ntok))")
     parser.add_argument("-chunk", "--chunk", type=int, default=2048,
                         help="Phase-1 prefill chunk size (peak VRAM control)")
+    parser.add_argument("-dec", "--decode", type=int, default=0,
+                        help="Greedy decode steps to benchmark per path "
+                             "(0 = off)")
     parser.add_argument("-d", "--device", default="cuda:0")
     parser.add_argument("-mcl", "--moe_cpu_offload", type=int, default=0,
                         help="Offload first N block-sparse MoE layers to CPU "
@@ -85,9 +120,10 @@ def main():
     # recurrent-state tensors for attached caches only (see model_init.init).
     # Creating them after load leaves recurrent state on meta, which fails
     # hybrid (GDN) forwards with "conv_state is on meta".
-    max_tok = args.max_tokens or max(512, args.ntok)
+    max_tok = args.max_tokens or max(512, args.ntok + args.decode)
     max_tok = ((max_tok + 255) // 256) * 256
-    assert max_tok >= args.ntok, f"max_tokens {max_tok} < ntok {args.ntok}"
+    assert max_tok >= args.ntok + args.decode, \
+        f"max_tokens {max_tok} < ntok+decode {args.ntok + args.decode}"
     c_fp16 = Cache(model, max_num_tokens=max_tok, layer_type=CacheLayer_fp16)
     c_kvarn = Cache(model, max_num_tokens=max_tok, layer_type=CacheLayer_kvarn,
                     k_bits=k_bits, v_bits=v_bits)
@@ -101,12 +137,12 @@ def main():
     print("tokens:", tuple(ids.shape), flush=True)
 
     t0 = time.time()
-    l_fp16 = run(model, c_fp16, ids, args.chunk)
+    l_fp16, s_fp16 = run(model, c_fp16, ids, args.chunk)
     print(f"fp16 prefill: {time.time() - t0:.1f}s", flush=True)
     torch.cuda.empty_cache()
 
     t0 = time.time()
-    l_kvarn = run(model, c_kvarn, ids, args.chunk)
+    l_kvarn, s_kvarn = run(model, c_kvarn, ids, args.chunk)
     print(f"kvarn{k_bits}/kvarn{v_bits} prefill: {time.time() - t0:.1f}s",
           flush=True)
 
@@ -121,6 +157,12 @@ def main():
           f"p99.9 {kld.quantile(0.999).item():.6f}", flush=True)
     agree = (l_kvarn.argmax(-1) == l_fp16.argmax(-1)).float().mean().item()
     print(f"  same-top {agree * 100:.2f}%", flush=True)
+
+    if args.decode > 0:
+        bench_decode(model, c_fp16, ids, args.decode, s_fp16, "fp16")
+        torch.cuda.empty_cache()
+        bench_decode(model, c_kvarn, ids, args.decode, s_kvarn,
+                     f"kvarn{k_bits}/kvarn{v_bits}")
 
 
 if __name__ == "__main__":
