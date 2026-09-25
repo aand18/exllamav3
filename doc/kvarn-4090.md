@@ -106,10 +106,33 @@ run under `EXL3_KVARN_TRITON=1` with `PARITY=1` asserting bit-exactness.
 | 32768 | kvarn4 | 0.000001 | 0.000019 | 0.000278 | 0.000230 | 0.000273 | 13.7s | 17.6s |
 | 32768 | kvarn5,kvarn4 | 0.000001 | 0.000023 | 0.000356 | 0.000319 | 0.000352 | 13.6s | 17.6s |
 
-Prefill history on this model @8192 (same quality throughout):
-134.6s (baseline) -> 96.2s (batched dequant, `2345080`) ->
-10.7s (batched seals, `21be28b`) -> 10.0s (incremental image,
-`839360c`) -> 4.3s (chunk 8192). Final ratio ~1.3x fp16.
+Prefill history on this model @8192, kvarn4 (kvarn5,kvarn4 in
+parentheses; same quality throughout — every step reproduced the KLD
+digits exactly, same-top 100.00%):
+
+| step | change (commit) | fp16 pre | kvarn pre | ratio |
+|------|-----------------|----------|-----------|-------|
+| 0 | baseline: per-group Python loops (~30 launches/group, ~160/group seal) | 4.7s | 134.6s (130.9s) | 28.6x |
+| 1 | batched dequant across groups (`2345080`): 1 unpack + 1 dequant + 1 WHT per layer | 4.7s | 96.2s (95.8s) | 20.5x |
+| 2 | batched seals (`21be28b`): 1 Sinkhorn+quant+pack per K/V for all sealable groups | 4.7s | 10.7s (10.8s) | 2.3x |
+| 3 | incremental image (`839360c`): dirty-group refresh instead of O(n^2) rematerialization | 4.7s | 10.0s (10.0s) | 2.1x |
+| 4 | chunk 512 -> 2048 (run flag, no code): fewer forwards amortize per-call fixed costs | 3.4s | 5.0s | 1.5x |
+| 5 | chunk 4096 | 3.2s | 4.5s | 1.4x |
+| 6 | chunk 8192 (single forward) | 3.2s | 4.3s (4.3s) | 1.3x |
+| 7 | `EXL3_KVARN_TRITON=1` (fused dequant kernel, `e3294df`, parity-proven) | 3.2s | 4.2s | 1.3x |
+
+Total: 134.6s -> 4.2s (32x). Step 7 confirms dequant is off the
+critical path; the remaining ~1.1s is store-side row-WHT + Sinkhorn
+seals + Python syncs per layer. Named next step: fuse the inverse WHT
+into the Triton kernel (XOR-butterfly in-register, no extra traffic).
+CPU suite time also improved with step 2 (8.8s -> 4.4s).
+
+Note on BeeLlama comparison: Bee runs CPU/ggml with a fused
+`flash_attn_ext_kvarn` kernel (online dequant, no fp16 materialization)
+and single-threaded scalar store; there is no shared benchmark harness,
+so timing is not directly comparable. The architectural lessons taken
+are recorded above (fuse dequant into attention; batch, don't
+thread); this table is the timing baseline for our own regressions.
 
 Decode @8192 (64 greedy steps, warm inductor cache):
 fp16 86.4 tok/s vs kvarn4 8.9 tok/s; fp16 86.6 vs kvarn5,kvarn4 8.7.
