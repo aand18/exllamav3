@@ -101,8 +101,10 @@ def main():
     kld = (q.exp() * (q - p)).sum(-1).squeeze(0)
     print(f"KLD kvarn{k_bits}/kvarn{v_bits} vs fp16-cache "
           f"over {l_kvarn.shape[1]} scored continuation positions:", flush=True)
-    print(f"  median {kld.median().item():.9f}  mean {kld.mean().item():.9f}  "
-          f"max {kld.max().item():.9f}", flush=True)
+    print(f"  median {kld.median().item():.6f}  mean {kld.mean().item():.6f}  "
+          f"max {kld.max().item():.6f}", flush=True)
+    print(f"  p99 {kld.quantile(0.99).item():.6f}  "
+          f"p99.9 {kld.quantile(0.999).item():.6f}", flush=True)
     agree = (l_kvarn.argmax(-1) == l_fp16.argmax(-1)).float().mean().item()
     print(f"  same-top {agree * 100:.2f}%", flush=True)
 
