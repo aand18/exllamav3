@@ -37,6 +37,9 @@ This checkout works on a fork with WIP branches. Rules:
   read these via `git show fork-overview:AGENTS.md`; status and row updates
   are docs-only commits made directly on `fork-overview` and pushed to `fork`.
 - Keep `master` pullable: no extra commits, no docs edits on `master`.
+- Never force-push or delete `master` or `fork-overview` (private repos on
+  free accounts get no GitHub branch protection, so this rule is the
+  protection — force-push is only ever for feature branches after a rebase).
 - This repo's standing rules: CPU-only test env here means no CUDA/Triton/ext
   builds unless stated; always use a venv, never touch system Python/config;
   atomic commits with the why in the message; never change git config
