@@ -1080,11 +1080,13 @@ class CacheLayer_kvarn(CacheLayer):
             return
         ug = torch.unique(g)
         done = self.present[ug].all(dim=1) & ~self.sealed[ug]
-        for gi in ug[done].tolist():
-            gi = int(gi)
-            if self.has_sink and int(self.group_base[gi]) == 0:
-                continue  # logical sink group stays exact
-            self._seal_group(gi)
+        seal_gs = ug[done]
+        if seal_gs.numel():
+            if self.has_sink:
+                # Logical sink group (base 0) stays exact, never seals.
+                seal_gs = seal_gs[self.group_base[seal_gs] != 0]
+            if seal_gs.numel():
+                self._seal_groups_batched(seal_gs)
 
     @torch.inference_mode()
     def _evict_exact_all(self):
@@ -1109,6 +1111,56 @@ class CacheLayer_kvarn(CacheLayer):
                 continue  # logical sink (base 0) stays exact
             if b >= 0 and b + KVAR_N_GROUP <= owner_n - floor:
                 del self.exact_blocks[gi]
+
+    @torch.inference_mode()
+    def _seal_groups_batched(self, gs: torch.Tensor):
+        """Seal several groups with one batched Sinkhorn+quantize+pack per
+        K and V. Bit-exact vs looping _seal_group: variance_normalize,
+        RTN quantize and pack are all per-tile independent (leading batch
+        dims broadcast), and each record payload is byte-exact so the
+        packed stream concatenates without padding."""
+        L = self.layout
+        kvh, sl = self.num_kv_heads, self.slices
+        C = kvh * sl
+        glist = [int(g) for g in gs.tolist()]
+        bk = torch.stack([self.stage_blocks[g][0] for g in glist]).float()
+        bv = torch.stack([self.stage_blocks[g][1] for g in glist]).float()
+        G = bk.shape[0]
+        bkr = bk.reshape(G, KVAR_N_GROUP, kvh, sl, KVAR_N_GROUP)
+        bvr = bv.reshape(G, KVAR_N_GROUP, kvh, sl, KVAR_N_GROUP)
+        k_tiles = bkr.permute(0, 2, 3, 4, 1).reshape(G * C, 128, 128)
+        v_tiles = bvr.permute(0, 2, 3, 1, 4).reshape(G * C, 128, 128)
+        qk, sck, zpk, otk = kvarn_quantize_tile(
+            k_tiles, self.k_bits, self.sinkhorn_iters)
+        qv, scv, zpv, otv = kvarn_quantize_tile(
+            v_tiles, self.v_bits, self.sinkhorn_iters)
+        recs = self.records[gs]  # (G, C, B) copy; written back below
+        recs[:, :, L.k_payload_off:L.k_payload_off + L.k_payload_bytes] = \
+            kvarn_pack_bits(qk.reshape(-1), self.k_bits) \
+            .reshape(G, C, L.k_payload_bytes)
+        recs[:, :, L.v_payload_off:L.v_payload_off + L.v_payload_bytes] = \
+            kvarn_pack_bits(qv.reshape(-1), self.v_bits) \
+            .reshape(G, C, L.v_payload_bytes)
+        f16 = _rec_f16(recs)
+        f16[:, :, L.k_s_col_off // 2: L.k_s_col_off // 2 + 128] = \
+            sck.half().reshape(G, C, 128)
+        f16[:, :, L.k_zp_off // 2: L.k_zp_off // 2 + 128] = \
+            zpk.half().reshape(G, C, 128)
+        f16[:, :, L.k_s_row_off // 2: L.k_s_row_off // 2 + 128] = \
+            otk.half().reshape(G, C, 128)
+        f16[:, :, L.v_s_row_off // 2: L.v_s_row_off // 2 + 128] = \
+            scv.half().reshape(G, C, 128)
+        f16[:, :, L.v_zp_off // 2: L.v_zp_off // 2 + 128] = \
+            zpv.half().reshape(G, C, 128)
+        f16[:, :, L.v_s_col_off // 2: L.v_s_col_off // 2 + 128] = \
+            otv.half().reshape(G, C, 128)
+        self.records[gs] = recs
+        self.sealed[gs] = True
+        # M4: staging is freed on seal; only the single open group (plus
+        # the sink) retains fp16 staging. Exact blocks stay for the
+        # overlay over sealed tail groups.
+        for g in glist:
+            del self.stage_blocks[g]
 
     @torch.inference_mode()
     def _seal_group(self, g: int):
