@@ -33,3 +33,27 @@ A merged tree compiles the same way, but runtime interaction between
 features can only be proven on the CUDA box. Mark such test results
 CPU-partial. `ext` has no CPU forward kernels (e.g. `rms_norm` is
 CUDA-only), so no model-level run is possible on this machine at all.
+
+## Shell, venvs, and git auth on this box
+
+- Each new shell starts with a stale `PATH` (no `gh`, no venv shims).
+  Refresh per invocation via the Chocolatey helper, or use full paths:
+  `gh` = `C:/Program Files/GitHub CLI/gh.exe`,
+  git = `C:/Program Files/Git/cmd/git.exe`.
+- Venv inventory (all under `C:/Users/yo/AppData/Local/Temp/opencode/`,
+  i.e. temp — recreate if cleaned):
+  - `kvarn-venv`: CPU torch 2.14 for the KVarN unit suite.
+  - `exl-build`: CUDA (cu130) torch 2.14 + ext build deps + pytest +
+    `huggingface_hub`; used for compiling and for triton-present tests.
+  - `exl-build-src`: source copy (minus `.git`) where the sm_89 `.pyd`
+    was built with `exl_build_89.bat`; also the cwd for build-venv tests.
+- Model weights (stable, not temp):
+  `C:/Users/yo/Downloads/exl-models/Qwen3.8-27B-exl3-SC_1.40bpw_H3_V3`
+  (~7.5 GB, Qwen3.5-dense branch `SC_1.40bpw_H3_V3`).
+- Pushing to the fork: the Windows credential manager holds nothing
+  usable, so HTTPS push authenticates with the `gh` keyring token:
+  `$tok = (gh auth token).Trim()` (Trim matters — a trailing newline
+  breaks the URL), `git remote set-url fork
+  https://aand18:$tok@github.com/aand18/exllamav3`, push, then restore
+  the clean URL. Never leave the token in `.git/config`; never set a
+  global credential helper for this.
