@@ -1,66 +1,10 @@
-# Fork workflow (agents: follow this)
+# Fork workflow: canonical copy lives on fork-overview
 
-This checkout works on a fork with WIP branches. Rules:
+Do not create or edit workflow docs on this branch. Read and follow the
+canonical files instead:
 
-- Never commit to `master`. `master` is a pristine mirror of upstream,
-  refreshed by fast-forward only, and is NOT a base for new work (it
-  goes stale; the living base is below).
-- Work only on `feat/<issue>-<slug>`, `fix/<issue>-<slug>`, `wip/<topic>`.
-- Start every new branch from `origin/fork-overview` — the living main
-  (current upstream plus fork docs and status) — never from `master`
-  and never from another feature branch: `git fetch origin &&
-  git checkout -b <name> origin/fork-overview`.
-- Verify the base before the first commit: `git merge-base
-  --is-ancestor origin/fork-overview HEAD` must pass. If HEAD already
-  contains another branch's commits, delete the branch and start over
-  — a contaminated base pollutes the PR diff and can't be
-  independently merged.
-- Before starting: `git fetch origin` (fork-overview moves; if it moved
-  since you branched, `git rebase origin/fork-overview`).
-- Rebase, never merge `origin/fork-overview` into feature branches.
-- Push feature branches to the `fork` remote (aand18/exllamav3), never to `origin`.
-- Integration branches (testing/building several features together):
-  cut `wip/integration-<target>` from a freshly fetched
-  `origin/fork-overview`; rebase each feature onto
-  `origin/fork-overview` first, then `git merge --no-ff` them in
-  one at a time with the suite green after each. Never rebase the
-  integration branch and never merge it anywhere (not into features,
-  `master`, or upstream) — rebuild it from scratch when a feature updates,
-  noting conflict resolutions so they can be replayed. Dependent (stacked)
-  features are named `wip/<topic>-stacked-on-<base>` and noted in
-  `BRANCHES.md`. Extension rebuilds happen in a scratch copy, never in the
-  working checkout; `git status` must show no build artifacts before commit.
-- Document each branch with a Draft PR `branch -> fork-overview` on the fork with:
-  goal, upstream issue link (if any), non-goals, current status, test plan.
-- Keep the `BRANCHES.md` table current: branch | upstream issue | status | draft PR.
-  Each table row gets a detail section below the table (goal, non-goals,
-  status, test plan, verify command, key commits, blocked-on, history notes).
-- Canonical workflow docs live here on `fork-overview` (this file,
-  `BRANCHES.md`, README header). Feature branches carry only a static
-  pointer file, never copies — copies drift.
-- Session start (every session, every branch, before any other action):
-  `git fetch origin fork-overview`, then read `git show
-  origin/fork-overview:AGENTS.md` and `git show
-  origin/fork-overview:BRANCHES.md`. The `origin/` prefix is required:
-  clones have no local `fork-overview` branch, so the bare `git show
-  fork-overview:...` form fails. Status and row updates are docs-only
-  commits made directly on `fork-overview` and pushed to `fork`.
-- Keep `master` pullable: no extra commits, no docs edits on `master`.
-- Never force-push or delete `master` or `fork-overview` (private repos on
-  free accounts get no GitHub branch protection, so this rule is the
-  protection — force-push is only ever for feature branches after a rebase).
-- This repo's standing rules: CPU-only test env here means no CUDA/Triton/ext
-  builds unless stated; always use a venv, never touch system Python/config;
-  atomic commits with the why in the message; never change git config
-  (global or local) without being asked; hard-won local build lessons
-  (VsDevCmd trap, arch-list syntax, no-GPU caveat) live in
-  `doc/local-build.md` — read it before touching the extension build.
-- GPU runs on any box (VRAM is a factor): every CUDA run is wrapped with
-  an `nvidia-smi memory.free` watchdog that KILLS the task the moment
-  free VRAM drops under 100MB at any time — a guard that only warns is
-  not enough. Confirm ~0 used before starting (a stale runaway holding
-  the GPU gets killed only if it is your own timed-out benchmark child;
-  never touch other processes) and idle after finishing; never start
-  without 1GB headroom over the expected peak. Reference implementation:
-  `eval/smi_guard.py` on `wip/kvarn-cache` (`--image <exe> --before
-  <pre-existing PIDs>`; exits 2 = killed, 3 = timeout, 4 = no task).
+    git show fork-overview:AGENTS.md
+    git show fork-overview:BRANCHES.md
+
+Status and row updates go directly to `fork-overview` (docs-only commits,
+pushed to the `fork` remote).
