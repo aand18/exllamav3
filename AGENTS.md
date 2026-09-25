@@ -40,4 +40,6 @@ This checkout works on a fork with WIP branches. Rules:
 - This repo's standing rules: CPU-only test env here means no CUDA/Triton/ext
   builds unless stated; always use a venv, never touch system Python/config;
   atomic commits with the why in the message; never change git config
-  (global or local) without being asked.
+  (global or local) without being asked; hard-won local build lessons
+  (VsDevCmd trap, arch-list syntax, no-GPU caveat) live in
+  `doc/local-build.md` — read it before touching the extension build.
