@@ -11,6 +11,8 @@ This checkout works on a fork with WIP branches. Rules:
 - Document each branch with a Draft PR `branch -> master` on the fork with:
   goal, upstream issue link (if any), non-goals, current status, test plan.
 - Keep the `BRANCHES.md` table current: branch | upstream issue | status | draft PR.
+  Each table row gets a detail section below the table (goal, non-goals,
+  status, test plan, verify command, key commits, blocked-on, history notes).
 - Keep `master` pullable: no extra commits, no docs edits on `master`.
 - `fork-overview` is the fork's GitHub default branch and human entry point:
   static README FORK header plus canonical copies of this file and
