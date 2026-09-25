@@ -29,6 +29,13 @@ This checkout works on a fork with WIP branches. Rules:
 - Document each branch with a Draft PR `branch -> master` on the fork with:
   goal, upstream issue link (if any), non-goals, current status, test plan.
 - Keep the `BRANCHES.md` table current: branch | upstream issue | status | draft PR.
+  Each table row gets a detail section below the table (goal, non-goals,
+  status, test plan, verify command, key commits, blocked-on, history notes).
+- Canonical workflow docs live here on `fork-overview` (this file,
+  `BRANCHES.md`, README header). Feature branches carry only a static
+  pointer file, never copies — copies drift. Agents on a feature branch
+  read these via `git show fork-overview:AGENTS.md`; status and row updates
+  are docs-only commits made directly on `fork-overview` and pushed to `fork`.
 - Keep `master` pullable: no extra commits, no docs edits on `master`.
 - This repo's standing rules: CPU-only test env here means no CUDA/Triton/ext
   builds unless stated; always use a venv, never touch system Python/config;
