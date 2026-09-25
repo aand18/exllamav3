@@ -896,10 +896,6 @@ class CacheLayer_kvarn(CacheLayer):
         self._img_v = None  # allocated lazily in get_kv; None = not yet built
         self._dirty_mask = torch.zeros((self.num_groups,), dtype=torch.bool,
                                        device=device)
-        self._overlaid = None  # groups holding overlay content (idea 4):
-        # restored (recomputed from records) at the next get_kv before
-        # the fresh overlay lands, so the image is never served stale
-        # and no full clone is needed per call.
         # Incremental image only pays when the allocation is modest; huge
         # contexts keep the memory-slim full rematerialization path.
         self._img_ok = self.num_pages <= 128
@@ -918,7 +914,6 @@ class CacheLayer_kvarn(CacheLayer):
         self._img_k = None
         self._img_v = None
         self._dirty_mask = None
-        self._overlaid = None
 
     # -- M4 record access (for online-dequant Triton/CUDA kernels) ----------
 
@@ -1308,15 +1303,11 @@ class CacheLayer_kvarn(CacheLayer):
         after get_kv returns stay exact by construction. Positions whose
         exact block is absent (unreachable in normal flows: the resident
         window always covers the overlay window) fall back to the body.
-
-        Returns the unique groups touched (for the persistent image's
-        overlay-restore bookkeeping; empty when nothing was overlaid).
         """
         bsz = cache_seqlens.numel()
         bt = block_table.long()
         seqlens = cache_seqlens.long()
         gps = PAGE_SIZE // KVAR_N_GROUP
-        touched = []
         for b in range(bsz):
             n = int(seqlens[b])
             if n <= 0:
@@ -1333,7 +1324,6 @@ class CacheLayer_kvarn(CacheLayer):
             offs = pos % PAGE_SIZE
             g = pages * gps + offs // KVAR_N_GROUP
             s = offs % KVAR_N_GROUP
-            touched.append(g)
             for gi in torch.unique(g).tolist():
                 gi = int(gi)
                 eblk = self.exact_blocks.get(gi)
@@ -1345,10 +1335,6 @@ class CacheLayer_kvarn(CacheLayer):
                 # hit a temporary) so the overlay lands in the temps.
                 k[pm, om] = eblk[0][sm].to(k.dtype)
                 v[pm, om] = eblk[1][sm].to(v.dtype)
-        if not touched:
-            return torch.empty((0,), dtype=torch.long, device=bt.device)
-        all_g = torch.unique(torch.cat(touched)).to(torch.long)
-        return all_g[(all_g >= 0) & (all_g < self.num_groups)]
 
     # -- CacheLayer interface --------------------------------------------------
 
@@ -1497,15 +1483,10 @@ class CacheLayer_kvarn(CacheLayer):
         # merged image for the single downstream softmax.
         #
         # Idea 2: the image persists across forwards; only groups dirtied
-        # since the last call are rematerialized (decode: ~1 group).
-        # Idea 4 (decode): no per-call clone. The overlay lands in place
-        # on the image and its groups are restored (recomputed from
-        # records) at the next call before the fresh overlay; in-flight
-        # rows merged by attention in between are persisted by update_kv
-        # first, so they survive the restore. Callers must treat the
-        # returned temps as borrowed: read-only except the attention
-        # fallback's in-flight merge. Modest allocations only
-        # (num_pages <= 128); huge contexts keep the memory-slim
+        # since the last call are rematerialized (decode: ~1 group). The
+        # overlay is per-call (depends on seqlens), so the image stays
+        # pre-overlay and each call serves a clone. Modest allocations
+        # only (num_pages <= 128); huge contexts keep the memory-slim
         # full rematerialization below.
         kvh, hd = self.num_kv_heads, self.head_dim
         dev = self.device
@@ -1518,16 +1499,6 @@ class CacheLayer_kvarn(CacheLayer):
                     (self.num_pages, PAGE_SIZE, kvh, hd),
                     dtype=torch.half, device=dev)
                 self._img_v = torch.zeros_like(self._img_k)
-            # Restore groups still holding last call's overlay: recompute
-            # from records (which include everything persisted since),
-            # so the fresh overlay below lands on pre-overlay content.
-            # In-flight rows merged by attention after the last call were
-            # persisted by update_kv first, so they survive the restore.
-            if self._overlaid is not None and self._overlaid.numel():
-                ov = self._overlaid.to(dev)
-                ov = ov[(ov >= 0) & (ov < self.num_groups)]
-                self._dirty_mask[ov] = True
-                self._overlaid = None
             if pages.numel():
                 Gs = (pages[:, None] * gps + torch.arange(gps, device=dev)) \
                     .reshape(-1)
@@ -1536,14 +1507,9 @@ class CacheLayer_kvarn(CacheLayer):
                 if dirty.numel():
                     self._refresh_groups(dirty)
                     self._dirty_mask[dirty] = False
-            # Overlay in place on the image (no full clone): callers only
-            # read, except the attention fallback's in-flight merge, whose
-            # rows update_kv persists before the next call restores.
-            k = self._img_k
-            v = self._img_v
-            ov = self._apply_exact_overlay(k, v, cache_seqlens, block_table)
-            self._overlaid = ov if ov.numel() else None
-            return k, v
+            # Serve a copy: the overlay mutates its target.
+            k = self._img_k.clone()
+            v = self._img_v.clone()
         else:
             k = torch.zeros((self.num_pages, PAGE_SIZE, kvh, hd),
                             dtype=torch.half, device=dev)
