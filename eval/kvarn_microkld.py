@@ -27,19 +27,30 @@ SAMPLER_TEXT = ("The capital of France is Paris. It is known for the Eiffel "
                 "Tower, the Louvre, and its arrondissements along the Seine. ")
 
 
-def run(model, cache, ids):
+def run(model, cache, ids, chunk=2048):
     # Two-phase: a past_len=0 prefill only attends over fresh (exact)
     # projections -- the cache seals afterwards, so scoring it measures
     # nothing. Instead populate the past first, then score a continuation
     # at past_len>0, which actually attends over the sealed body.
+    # Phase 1 is chunked: a full-length prefill materializes full-length
+    # fp32 logits (GBs at 8k) that are discarded anyway; chunking keeps
+    # peak VRAM flat with context length.
     n = int(ids.shape[1])
     assert n > 256 + 8, \
         f"need >264 tokens to seal a group and score a continuation, got {n}"
     split = n - 64
-    p1 = {"cache": cache, "attn_mode": "flash_attn",
-          "batch_shape": (1, ids.shape[1]), "past_len": 0}
-    model.forward(ids[:, :split], p1)
-    states = p1.get("recurrent_states")
+    states = None
+    past = 0
+    while past < split:
+        c = min(chunk, split - past)
+        p = {"cache": cache, "attn_mode": "flash_attn",
+             "batch_shape": (1, ids.shape[1]), "past_len": past}
+        if states is not None:
+            p["recurrent_states"] = states
+        out = model.forward(ids[:, past:past + c], p)
+        states = p.get("recurrent_states")
+        past += c
+        del out
     p2 = {"cache": cache, "attn_mode": "flash_attn",
           "batch_shape": (1, ids.shape[1]), "past_len": split}
     if states is not None:
@@ -56,6 +67,8 @@ def main():
     parser.add_argument("-ntok", "--ntok", type=int, default=200)
     parser.add_argument("-maxtok", "--max_tokens", type=int, default=0,
                         help="Cache max tokens (defaults to max(512, ntok))")
+    parser.add_argument("-chunk", "--chunk", type=int, default=2048,
+                        help="Phase-1 prefill chunk size (peak VRAM control)")
     parser.add_argument("-d", "--device", default="cuda:0")
     parser.add_argument("-mcl", "--moe_cpu_offload", type=int, default=0,
                         help="Offload first N block-sparse MoE layers to CPU "
@@ -88,11 +101,12 @@ def main():
     print("tokens:", tuple(ids.shape), flush=True)
 
     t0 = time.time()
-    l_fp16 = run(model, c_fp16, ids)
+    l_fp16 = run(model, c_fp16, ids, args.chunk)
     print(f"fp16 prefill: {time.time() - t0:.1f}s", flush=True)
+    torch.cuda.empty_cache()
 
     t0 = time.time()
-    l_kvarn = run(model, c_kvarn, ids)
+    l_kvarn = run(model, c_kvarn, ids, args.chunk)
     print(f"kvarn{k_bits}/kvarn{v_bits} prefill: {time.time() - t0:.1f}s",
           flush=True)
 
