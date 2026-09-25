@@ -5,6 +5,14 @@ This checkout works on a fork with WIP branches. Rules:
 - Never commit to `master`. `master` is a pristine mirror of upstream
   (`origin` = turboderp-org/exllamav3, `master` tracks `origin/master`).
 - Work only on `feat/<issue>-<slug>`, `fix/<issue>-<slug>`, `wip/<topic>`.
+- Start every new branch from `master`, never from another feature branch:
+  `git checkout master && git pull` (fast-forward only — if it conflicts,
+  stop, `master` was polluted), then `git checkout -b <name>`.
+- Verify the base before the first commit: `git merge-base --is-ancestor
+  master HEAD` must pass and `git rev-parse HEAD` must equal
+  `git rev-parse master`. If HEAD already contains another branch's commits,
+  delete the branch and start over — a contaminated base pollutes the PR
+  diff and can't be independently merged.
 - Before starting: `git fetch origin && git rebase origin/master`.
 - Rebase, never merge `master` into feature branches.
 - Push feature branches to the `fork` remote (aand18/exllamav3), never to `origin`.
