@@ -95,6 +95,63 @@ def test_wrapper_fails_loud_when_unavailable():
         kt.kvarn_triton_dequant_side(pay, sc, sc, sc, 4)
 
 
+def _cuda_triton():
+    return torch.cuda.is_available() and \
+        importlib.util.find_spec("triton") is not None
+
+
+@pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
+def test_kernel_side_matches_torch_math():
+    # The fused unpack+dequant kernel must equal the torch reference
+    # (kvarn_unpack_bits + (q*sc+zp)*other) bit-exact in fp32.
+    torch.manual_seed(0)
+    for bits in (2, 4, 5, 8):
+        NT, PAY = 3, 16384 * bits // 8
+        pay = torch.randint(0, 256, (NT, PAY), dtype=torch.uint8,
+                            device="cuda")
+        sc = torch.randn(NT, 128, dtype=torch.float16, device="cuda")
+        zp = torch.randn(NT, 128, dtype=torch.float16, device="cuda")
+        oth = torch.randn(NT, 128, dtype=torch.float16, device="cuda")
+        got = kt.kvarn_triton_dequant_side(pay, sc, zp, oth, bits)
+        assert got.dtype == torch.float32
+        q = kvarn.kvarn_unpack_bits(pay.reshape(-1), NT * 16384, bits) \
+            .reshape(NT, 128, 128)
+        ref = torch.stack([
+            kvarn.kvarn_dequantize_tile(q[i].float(), sc[i].float(),
+                                        zp[i].float(), oth[i].float())
+            for i in range(NT)])
+        assert torch.equal(got, ref), bits
+
+
+@pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
+def test_groups_matches_group_loop():
+    # Batched multi-group entry must equal looping the per-group entry
+    # (assembly/permute logic), for symmetric and asymmetric widths.
+    torch.manual_seed(1)
+    for k_bits, v_bits in ((4, 4), (5, 4)):
+        layout = kvarn.kvarn_make_layout(128, 128, k_bits, v_bits)
+        kvh, sl, Gg = 2, 1, 3
+        recs = torch.randint(0, 256, (Gg, kvh * sl, layout.tile_bytes),
+                             dtype=torch.uint8, device="cuda")
+        f16 = recs.view(torch.float16)
+        f16[..., layout.k_s_col_off // 2:] = \
+            torch.randn(Gg, kvh * sl,
+                        layout.tile_bytes // 2 - layout.k_s_col_off // 2,
+                        dtype=torch.float16, device="cuda")
+        bk, bv = kt.kvarn_triton_dequant_groups(
+            recs, layout, k_bits, v_bits, kvh, sl)
+        rk, rv = [], []
+        for g in range(Gg):
+            tk, tv = kt.kvarn_triton_dequant_group(
+                recs[g], layout, k_bits, v_bits, kvh, sl)
+            rk.append(tk)
+            rv.append(tv)
+        ref_k = torch.stack(rk)
+        ref_v = torch.stack(rv)
+        assert torch.equal(bk, ref_k), (k_bits, v_bits)
+        assert torch.equal(bv, ref_v), (k_bits, v_bits)
+
+
 def test_default_path_is_torch():
     # Default env (unset): the gate is off, so sealed-group reads use the
     # tested torch loop. Any regression here breaks the whole CPU suite,
