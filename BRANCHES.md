@@ -34,6 +34,7 @@ launched — `EXL3_KVARN_TRITON_PARITY=1` is its acceptance test.
   triton-free and triton-present venvs.
 - `eval/kvarn_microkld.py -m <dir> -cq kvarn4 -ntok 200` on a GPU box.
 - Triton parity mode on the first 4090 run.
+- 4090 handoff (clone, build, validate, report): [doc/kvarn-4090.md](./doc/kvarn-4090.md).
 
 **Verify locally:**
 `kvarn-venv\Scripts\python.exe -m pytest tests/test_kvarn_cpu.py tests/test_kvarn_tail_cpu.py tests/test_kvarn_widths_cpu.py tests/test_kvarn_m4_cpu.py tests/test_kvarn_m5_cpu.py tests/test_kvarn_triton.py -q`
