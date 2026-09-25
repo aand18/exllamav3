@@ -1271,6 +1271,44 @@ class CacheLayer_kvarn(CacheLayer):
     # -- CacheLayer interface --------------------------------------------------
 
     @override
+    @torch.inference_mode()
+    def _dequant_groups_batched(self, Gs: torch.Tensor):
+        """Dequantize sealed groups Gs (1D long tensor, on device) to
+        rotated-domain fp32 (bk, bv) shaped (len(Gs), 128, kvh, hd).
+
+        Batched equivalent of looping _sealed_tiles_torch + per-group WHT
+        input prep: identical elementwise ops (unpack, (q*sc+zp)*other),
+        one kernel launch each instead of ~30 per group."""
+        C = self.num_kv_heads * self.slices
+        assert self.records.shape[1] == C
+        recs = self.records[Gs]  # (Gg, C, B) uint8
+        Gg = recs.shape[0]
+        kvh, sl = self.num_kv_heads, self.slices
+        N = Gg * C * KVAR_N_GROUP * KVAR_N_GROUP
+        f16 = _rec_f16(recs).float()  # (Gg, C, B//2)
+
+        def deq_tiles(payload_off, payload_bytes, bits, sc_o, zp_o, ot_o, transpose):
+            pay = recs[:, :, payload_off:payload_off + payload_bytes].reshape(-1)
+            q = kvarn_unpack_bits(pay, N, bits).float() \
+                .reshape(Gg, kvh, sl, KVAR_N_GROUP, KVAR_N_GROUP)
+            sc = f16[:, :, sc_o // 2: sc_o // 2 + 128].reshape(Gg * C, 128)
+            zp = f16[:, :, zp_o // 2: zp_o // 2 + 128].reshape(Gg * C, 128)
+            ot = f16[:, :, ot_o // 2: ot_o // 2 + 128].reshape(Gg * C, 128)
+            t = kvarn_dequantize_tile(q.reshape(Gg * C, 128, 128), sc, zp, ot) \
+                .reshape(Gg, kvh, sl, 128, 128)
+            if transpose:  # K records are [dim, token]; V are [token, dim]
+                t = t.permute(0, 4, 1, 2, 3)
+            else:
+                t = t.permute(0, 3, 1, 2, 4)
+            return t.reshape(Gg, KVAR_N_GROUP, kvh, self.head_dim)
+
+        L = self.layout
+        bk = deq_tiles(L.k_payload_off, L.k_payload_bytes, self.k_bits,
+                       L.k_s_col_off, L.k_zp_off, L.k_s_row_off, True)
+        bv = deq_tiles(L.v_payload_off, L.v_payload_bytes, self.v_bits,
+                       L.v_s_row_off, L.v_zp_off, L.v_s_col_off, False)
+        return bk, bv
+
     def get_kv(self, cache_seqlens: torch.Tensor, block_table: torch.Tensor,
                sliding_window: int = -1) -> tuple:
         # Dense and QSA layers pass -1 here (SWA/GDN layers are recurrent
@@ -1279,20 +1317,49 @@ class CacheLayer_kvarn(CacheLayer):
         # capped at the learned swa_window at construction. Sink/tail
         # exactness is applied here as an overlay, so the temps form one
         # merged image for the single downstream softmax.
-        k = torch.zeros((self.num_pages, PAGE_SIZE, self.num_kv_heads, self.head_dim),
-                        dtype=torch.half, device=self.device)
+        kvh, hd = self.num_kv_heads, self.head_dim
+        dev = self.device
+        k = torch.zeros((self.num_pages, PAGE_SIZE, kvh, hd),
+                        dtype=torch.half, device=dev)
         v = torch.zeros_like(k)
         # Materialize only the pages the batch actually references (the
         # fallback gathers just these rows). Unreferenced pages stay zero
         # and are never read, so decode pays for its context, not the
-        # whole cache allocation.
+        # whole cache allocation. Groups are dequantized in one batch
+        # (not one Python call per group) and inverse-WHTed once.
         gps = PAGE_SIZE // KVAR_N_GROUP
-        for p in torch.unique(block_table.long()).tolist():
-            p = int(p)
-            if p < 0 or p >= self.num_pages:
-                continue
-            for hh in range(gps):
-                self._group_block(p * gps + hh, k, v)
+        pages = torch.unique(block_table.long()).to(dev)
+        pages = pages[(pages >= 0) & (pages < self.num_pages)]
+        if pages.numel():
+            Gs = (pages[:, None] * gps + torch.arange(gps, device=dev)).reshape(-1)
+            Gs = Gs[Gs < self.num_groups]
+            if Gs.numel():
+                sealed_m = self.sealed[Gs]
+                rot_k = torch.empty((Gs.numel(), KVAR_N_GROUP, kvh, hd),
+                                    dtype=torch.float32, device=dev)
+                rot_v = torch.empty_like(rot_k)
+                Gs_s = Gs[sealed_m]
+                if Gs_s.numel():
+                    bk, bv = self._dequant_groups_batched(Gs_s)
+                    rot_k[sealed_m] = bk
+                    rot_v[sealed_m] = bv
+                open_m = ~sealed_m
+                if bool(open_m.any()):
+                    Gs_o = Gs[open_m]
+                    stk_k = torch.zeros((Gs_o.numel(), KVAR_N_GROUP, kvh, hd),
+                                        dtype=torch.float32, device=dev)
+                    stk_v = torch.zeros_like(stk_k)
+                    for i, g in enumerate(Gs_o.tolist()):
+                        blk = self.stage_blocks.get(int(g))
+                        if blk is not None:
+                            stk_k[i] = blk[0].float()
+                            stk_v[i] = blk[1].float()
+                    rot_k[open_m] = stk_k
+                    rot_v[open_m] = stk_v
+                mat_k = kvarn_wht_head(rot_k, hd).half()
+                mat_v = kvarn_wht_head(rot_v, hd).half()
+                k.reshape(-1, KVAR_N_GROUP, kvh, hd)[Gs] = mat_k
+                v.reshape(-1, KVAR_N_GROUP, kvh, hd)[Gs] = mat_v
         self._apply_exact_overlay(k, v, cache_seqlens, block_table)
         return k, v
 
