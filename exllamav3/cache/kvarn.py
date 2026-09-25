@@ -892,6 +892,13 @@ class CacheLayer_kvarn(CacheLayer):
         self.page_owner_n = torch.full((self.num_pages,), -1,
                                        dtype=torch.int64, device=device)
         self.page_pinned = torch.zeros((self.num_pages,), dtype=torch.bool, device=device)
+        self._img_k = None  # persistent pre-overlay fp16 image (idea 2),
+        self._img_v = None  # allocated lazily in get_kv; None = not yet built
+        self._dirty_mask = torch.zeros((self.num_groups,), dtype=torch.bool,
+                                       device=device)
+        # Incremental image only pays when the allocation is modest; huge
+        # contexts keep the memory-slim full rematerialization path.
+        self._img_ok = self.num_pages <= 128
 
     @override
     def free(self):
@@ -904,6 +911,9 @@ class CacheLayer_kvarn(CacheLayer):
         self.group_base = None
         self.page_owner_n = None
         self.page_pinned = None
+        self._img_k = None
+        self._img_v = None
+        self._dirty_mask = None
 
     # -- M4 record access (for online-dequant Triton/CUDA kernels) ----------
 
@@ -1071,6 +1081,10 @@ class CacheLayer_kvarn(CacheLayer):
                     eblk = self._alloc_exact_block(gi)
                 eblk[0][s[km]] = ek[km]
                 eblk[1][s[km]] = ev[km]
+        # Every touched group changed content (stage write, reset or
+        # unseal): refresh it on next materialization (idea 2).
+        gm = g.to(device=self.device, dtype=torch.long)
+        self._dirty_mask[gm[(gm >= 0) & (gm < self.num_groups)]] = True
         for p in torch.unique(pages).tolist():
             p = int(p)
             if n_new > int(self.page_owner_n[p]):
@@ -1156,6 +1170,7 @@ class CacheLayer_kvarn(CacheLayer):
             otv.half().reshape(G, C, 128)
         self.records[gs] = recs
         self.sealed[gs] = True
+        self._dirty_mask[gs.to(self.device)] = True
         # M4: staging is freed on seal; only the single open group (plus
         # the sink) retains fp16 staging. Exact blocks stay for the
         # overlay over sealed tail groups.
@@ -1181,6 +1196,7 @@ class CacheLayer_kvarn(CacheLayer):
                 kvarn_quantize_v_tile(v_tile, self.sinkhorn_iters, self.v_bits,
                                       self.layout, rec)
         self.sealed[g] = True
+        self._dirty_mask[g] = True
         # M4: staging is freed on seal; only the single open group (plus
         # the sink) retains fp16 staging. Exact blocks stay for the
         # overlay over sealed tail groups.
@@ -1361,6 +1377,75 @@ class CacheLayer_kvarn(CacheLayer):
                        L.v_s_row_off, L.v_zp_off, L.v_s_col_off, False)
         return bk, bv
 
+    @torch.inference_mode()
+    def _refresh_groups_legacy(self, Gs: torch.Tensor,
+                               k: torch.Tensor, v: torch.Tensor):
+        """Full rematerialization of Gs into caller temps (huge-context
+        path: no persistent image). Same math as _refresh_groups."""
+        kvh, hd = self.num_kv_heads, self.head_dim
+        dev = self.device
+        sealed_m = self.sealed[Gs]
+        rot_k = torch.empty((Gs.numel(), KVAR_N_GROUP, kvh, hd),
+                            dtype=torch.float32, device=dev)
+        rot_v = torch.empty_like(rot_k)
+        Gs_s = Gs[sealed_m]
+        if Gs_s.numel():
+            bk, bv = self._dequant_groups_batched(Gs_s)
+            rot_k[sealed_m] = bk
+            rot_v[sealed_m] = bv
+        open_m = ~sealed_m
+        if bool(open_m.any()):
+            Gs_o = Gs[open_m]
+            stk_k = torch.zeros((Gs_o.numel(), KVAR_N_GROUP, kvh, hd),
+                                dtype=torch.float32, device=dev)
+            stk_v = torch.zeros_like(stk_k)
+            for i, g in enumerate(Gs_o.tolist()):
+                blk = self.stage_blocks.get(int(g))
+                if blk is not None:
+                    stk_k[i] = blk[0].float()
+                    stk_v[i] = blk[1].float()
+            rot_k[open_m] = stk_k
+            rot_v[open_m] = stk_v
+        mat_k = kvarn_wht_head(rot_k, hd).half()
+        mat_v = kvarn_wht_head(rot_v, hd).half()
+        k.reshape(-1, KVAR_N_GROUP, kvh, hd)[Gs] = mat_k
+        v.reshape(-1, KVAR_N_GROUP, kvh, hd)[Gs] = mat_v
+
+    @torch.inference_mode()
+    def _refresh_groups(self, Gs: torch.Tensor):
+        """(Re)materialize groups Gs (1D long, on device) into the
+        persistent pre-overlay image. Same math as the legacy full
+        rematerialization, restricted to Gs: batched sealed dequant plus
+        stacked open staging, one inverse-WHT, indexed scatter."""
+        kvh, hd = self.num_kv_heads, self.head_dim
+        dev = self.device
+        sealed_m = self.sealed[Gs]
+        rot_k = torch.empty((Gs.numel(), KVAR_N_GROUP, kvh, hd),
+                            dtype=torch.float32, device=dev)
+        rot_v = torch.empty_like(rot_k)
+        Gs_s = Gs[sealed_m]
+        if Gs_s.numel():
+            bk, bv = self._dequant_groups_batched(Gs_s)
+            rot_k[sealed_m] = bk
+            rot_v[sealed_m] = bv
+        open_m = ~sealed_m
+        if bool(open_m.any()):
+            Gs_o = Gs[open_m]
+            stk_k = torch.zeros((Gs_o.numel(), KVAR_N_GROUP, kvh, hd),
+                                dtype=torch.float32, device=dev)
+            stk_v = torch.zeros_like(stk_k)
+            for i, g in enumerate(Gs_o.tolist()):
+                blk = self.stage_blocks.get(int(g))
+                if blk is not None:
+                    stk_k[i] = blk[0].float()
+                    stk_v[i] = blk[1].float()
+            rot_k[open_m] = stk_k
+            rot_v[open_m] = stk_v
+        mat_k = kvarn_wht_head(rot_k, hd).half()
+        mat_v = kvarn_wht_head(rot_v, hd).half()
+        self._img_k.reshape(-1, KVAR_N_GROUP, kvh, hd)[Gs] = mat_k
+        self._img_v.reshape(-1, KVAR_N_GROUP, kvh, hd)[Gs] = mat_v
+
     def get_kv(self, cache_seqlens: torch.Tensor, block_table: torch.Tensor,
                sliding_window: int = -1) -> tuple:
         # Dense and QSA layers pass -1 here (SWA/GDN layers are recurrent
@@ -1369,49 +1454,45 @@ class CacheLayer_kvarn(CacheLayer):
         # capped at the learned swa_window at construction. Sink/tail
         # exactness is applied here as an overlay, so the temps form one
         # merged image for the single downstream softmax.
+        #
+        # Idea 2: the image persists across forwards; only groups dirtied
+        # since the last call are rematerialized (decode: ~1 group). The
+        # overlay is per-call (depends on seqlens), so the image stays
+        # pre-overlay and each call serves a clone. Modest allocations
+        # only (num_pages <= 128); huge contexts keep the memory-slim
+        # full rematerialization below.
         kvh, hd = self.num_kv_heads, self.head_dim
         dev = self.device
-        k = torch.zeros((self.num_pages, PAGE_SIZE, kvh, hd),
-                        dtype=torch.half, device=dev)
-        v = torch.zeros_like(k)
-        # Materialize only the pages the batch actually references (the
-        # fallback gathers just these rows). Unreferenced pages stay zero
-        # and are never read, so decode pays for its context, not the
-        # whole cache allocation. Groups are dequantized in one batch
-        # (not one Python call per group) and inverse-WHTed once.
         gps = PAGE_SIZE // KVAR_N_GROUP
         pages = torch.unique(block_table.long()).to(dev)
         pages = pages[(pages >= 0) & (pages < self.num_pages)]
-        if pages.numel():
-            Gs = (pages[:, None] * gps + torch.arange(gps, device=dev)).reshape(-1)
-            Gs = Gs[Gs < self.num_groups]
-            if Gs.numel():
-                sealed_m = self.sealed[Gs]
-                rot_k = torch.empty((Gs.numel(), KVAR_N_GROUP, kvh, hd),
-                                    dtype=torch.float32, device=dev)
-                rot_v = torch.empty_like(rot_k)
-                Gs_s = Gs[sealed_m]
-                if Gs_s.numel():
-                    bk, bv = self._dequant_groups_batched(Gs_s)
-                    rot_k[sealed_m] = bk
-                    rot_v[sealed_m] = bv
-                open_m = ~sealed_m
-                if bool(open_m.any()):
-                    Gs_o = Gs[open_m]
-                    stk_k = torch.zeros((Gs_o.numel(), KVAR_N_GROUP, kvh, hd),
-                                        dtype=torch.float32, device=dev)
-                    stk_v = torch.zeros_like(stk_k)
-                    for i, g in enumerate(Gs_o.tolist()):
-                        blk = self.stage_blocks.get(int(g))
-                        if blk is not None:
-                            stk_k[i] = blk[0].float()
-                            stk_v[i] = blk[1].float()
-                    rot_k[open_m] = stk_k
-                    rot_v[open_m] = stk_v
-                mat_k = kvarn_wht_head(rot_k, hd).half()
-                mat_v = kvarn_wht_head(rot_v, hd).half()
-                k.reshape(-1, KVAR_N_GROUP, kvh, hd)[Gs] = mat_k
-                v.reshape(-1, KVAR_N_GROUP, kvh, hd)[Gs] = mat_v
+        if self._img_ok:
+            if self._img_k is None:
+                self._img_k = torch.zeros(
+                    (self.num_pages, PAGE_SIZE, kvh, hd),
+                    dtype=torch.half, device=dev)
+                self._img_v = torch.zeros_like(self._img_k)
+            if pages.numel():
+                Gs = (pages[:, None] * gps + torch.arange(gps, device=dev)) \
+                    .reshape(-1)
+                Gs = Gs[Gs < self.num_groups]
+                dirty = Gs[self._dirty_mask[Gs]]
+                if dirty.numel():
+                    self._refresh_groups(dirty)
+                    self._dirty_mask[dirty] = False
+            # Serve a copy: the overlay mutates its target.
+            k = self._img_k.clone()
+            v = self._img_v.clone()
+        else:
+            k = torch.zeros((self.num_pages, PAGE_SIZE, kvh, hd),
+                            dtype=torch.half, device=dev)
+            v = torch.zeros_like(k)
+            if pages.numel():
+                Gs = (pages[:, None] * gps + torch.arange(gps, device=dev)) \
+                    .reshape(-1)
+                Gs = Gs[Gs < self.num_groups]
+                if Gs.numel():
+                    self._refresh_groups_legacy(Gs, k, v)
         self._apply_exact_overlay(k, v, cache_seqlens, block_table)
         return k, v
 
@@ -1552,6 +1633,9 @@ class CacheLayer_kvarn(CacheLayer):
                         dst[1][nrows:].zero_()
                 else:
                     self.exact_blocks.pop(gt, None)
+        # Destination content changed in every branch above (copied,
+        # rebuilt or reset): refresh it on next materialization (idea 2).
+        self._dirty_mask[to_page * gps: to_page * gps + gps] = True
         # The shared content aliases one logical prefix now: the source
         # page is known-shared and the destination page is a new alias, so
         # both skip eviction until one of them is rewritten (which unpins
