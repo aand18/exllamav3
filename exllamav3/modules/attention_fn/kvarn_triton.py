@@ -64,6 +64,7 @@ if _have_triton:
         pay_ptr, sc_ptr, zp_ptr, oth_ptr, out_ptr,
         PAY: tl.constexpr,   # payload bytes per tile (drop-in bound, unused)
         BITS: tl.constexpr,  # 2, 3, 4, 5, 6 or 8
+        DO_WHT: tl.constexpr = 0,  # 1: fold the 128-point FWHT (+ norm) in
     ):
         # One program = one row of one 128x128 tile.
         # pid = tile * 128 + row.
@@ -86,17 +87,41 @@ if _have_triton:
         zp = tl.load(zp_ptr + tile * 128 + row).to(tl.float32)
         oth = tl.load(oth_ptr + tile * 128 + cols).to(tl.float32)
         tile_out = (q.to(tl.float32) * sc + zp) * oth
-        tl.store(out_ptr + (tile * 128 + row) * 128 + cols, tile_out)
+        row_ptr = out_ptr + (tile * 128 + row) * 128
+        if DO_WHT == 0:
+            tl.store(row_ptr + cols, tile_out)
+        else:
+            # In-place FWHT over the 128-vector using the out row as
+            # scratch (XOR butterfly: partner of i at stride s is i^s).
+            # Same stage order and norm as kvarn_hadamard_128.
+            tl.store(row_ptr + cols, tile_out)
+            # Cross-warp RAW hazard: 128 lanes = 4 warps, so every
+            # stage's stores need a block barrier before the next
+            # stage's (gather) loads.
+            tl.debug_barrier()
+            for _s in tl.static_range(7):
+                s = 1 << _s
+                cur = tl.load(row_ptr + cols)
+                prt = tl.load(row_ptr + (cols ^ s))
+                # Odd lane holds upper-half (b), partner the lower (a):
+                # torch reference stores a-b there, i.e. prt-cur.
+                tl.store(row_ptr + cols,
+                         tl.where((cols & s) == 0, cur + prt, prt - cur))
+                tl.debug_barrier()
+            tl.store(row_ptr + cols,
+                     tl.load(row_ptr + cols) * 0.08838834764831845)
 
 
 def kvarn_triton_dequant_side(payload: torch.Tensor, sc: torch.Tensor,
-                              zp: torch.Tensor, oth: torch.Tensor,
-                              bits: int) -> torch.Tensor:
+                               zp: torch.Tensor, oth: torch.Tensor,
+                               bits: int, do_wht: bool = False) -> torch.Tensor:
     """
     Dequantize NT tiles of one side (K or V).
 
     payload: (NT, PAY) uint8 CUDA. sc/zp: (NT, 128) fp16 CUDA (per row).
     oth: (NT, 128) fp16 CUDA (per col). Returns (NT, 128, 128) fp32 CUDA.
+    With do_wht=True each tile additionally gets the 128-point FWHT (+
+    norm), matching kvarn_hadamard_128 bit-exact.
     Loud failure (never silent) when the Triton path cannot run.
     """
     if not _have_triton:
@@ -112,7 +137,7 @@ def kvarn_triton_dequant_side(payload: torch.Tensor, sc: torch.Tensor,
     out = torch.empty((NT, 128, 128), dtype=torch.float32,
                        device=payload.device)
     _kvarn_row_kernel[(NT * 128,)](payload, sc, zp, oth, out,
-                                   PAY, bits)
+                                    PAY, bits, 1 if do_wht else 0)
     return out
 
 
@@ -163,15 +188,18 @@ def kvarn_triton_dequant_group(records_g: torch.Tensor, layout,
 
 def kvarn_triton_dequant_groups(records_G, layout,
                                k_bits: int, v_bits: int,
-                               num_kv_heads: int, slices: int):
+                               num_kv_heads: int, slices: int,
+                               do_wht: bool = False):
     """
-    Batched multi-group dequant: records_G (Gg, ncols, tile_bytes) uint8
+    Batched multi-group entry: records_G (Gg, ncols, tile_bytes) uint8
     CUDA, ncols = kv_heads * slices. One kernel launch per side (K, V).
 
     Returns (bk, bv) float32 CUDA shaped (Gg, 128, kvh, hd) rotated-domain,
     matching ``CacheLayer_kvarn._dequant_groups_batched`` torch order
     (K transposed to [token, dim]). Bit-exact with the torch path: same
-    fp32 elementwise math, fp32 store.
+    fp32 elementwise math, fp32 store. With do_wht=True each 128-row
+    additionally gets the FWHT (+ norm), i.e. the output already passed
+    ``kvarn_hadamard_128`` and only the cross-slice stage (if any) remains.
     """
     if not _have_triton:
         raise RuntimeError(
@@ -195,7 +223,7 @@ def kvarn_triton_dequant_groups(records_G, layout,
             .reshape(NT, 128).contiguous()
         oth = rec_f16[:, :, oth_off // 2: oth_off // 2 + 128] \
             .reshape(NT, 128).contiguous()
-        return kvarn_triton_dequant_side(pay, sc, zp, oth, bits)
+        return kvarn_triton_dequant_side(pay, sc, zp, oth, bits, do_wht)
 
     kt = side(layout.k_payload_off, layout.k_payload_bytes,
               layout.k_s_col_off, layout.k_zp_off, layout.k_s_row_off,
