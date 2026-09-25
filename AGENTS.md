@@ -16,6 +16,16 @@ This checkout works on a fork with WIP branches. Rules:
 - Before starting: `git fetch origin && git rebase origin/master`.
 - Rebase, never merge `master` into feature branches.
 - Push feature branches to the `fork` remote (aand18/exllamav3), never to `origin`.
+- Integration branches (testing/building several features together):
+  cut `wip/integration-<target>` from a fast-forward-pulled `master`;
+  rebase each feature onto `master` first, then `git merge --no-ff` them in
+  one at a time with the suite green after each. Never rebase the
+  integration branch and never merge it anywhere (not into features,
+  `master`, or upstream) — rebuild it from scratch when a feature updates,
+  noting conflict resolutions so they can be replayed. Dependent (stacked)
+  features are named `wip/<topic>-stacked-on-<base>` and noted in
+  `BRANCHES.md`. Extension rebuilds happen in a scratch copy, never in the
+  working checkout; `git status` must show no build artifacts before commit.
 - Document each branch with a Draft PR `branch -> master` on the fork with:
   goal, upstream issue link (if any), non-goals, current status, test plan.
 - Keep the `BRANCHES.md` table current: branch | upstream issue | status | draft PR.
