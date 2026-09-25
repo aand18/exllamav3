@@ -55,11 +55,16 @@ def main():
                         help="KVarN preset, e.g. kvarn4 or kvarn5,kvarn4")
     parser.add_argument("-ntok", "--ntok", type=int, default=200)
     parser.add_argument("-d", "--device", default="cuda:0")
+    parser.add_argument("-mcl", "--moe_cpu_offload", type=int, default=0,
+                        help="Offload first N block-sparse MoE layers to CPU "
+                             "(e.g. 38 for Qwen3.8-Flash-Next 3.05bpw on 24GB VRAM)")
     args = parser.parse_args()
 
     k_bits, v_bits = kvarn_parse_preset(args.cache_quant)
 
     config = Config.from_directory(args.model_dir)
+    if args.moe_cpu_offload:
+        config.infer_params.moe_cpu_offload = args.moe_cpu_offload
     model = Model.from_config(config)
     # Caches must be attached before load: the loader allocates cache and
     # recurrent-state tensors for attached caches only (see model_init.init).
