@@ -135,9 +135,9 @@ are recorded above (fuse dequant into attention; batch, don't
 thread); this table is the timing baseline for our own regressions.
 
 Decode @8192, 1.40bpw 27B (64 greedy steps, warm inductor cache):
-fp16 83.7-87.0 tok/s vs kvarn 7.8-49.3 tok/s depending on the step below
-(current: 49.3 tok/s TRITON=1 parity-off, 45.6 PARITY=1 same code;
-fp16 86.4-87.0 same runs).
+fp16 83.7-87.0 tok/s vs kvarn 7.8-64.5 tok/s depending on the step below
+(current: 64.5 tok/s TRITON=1 parity-off, runs 63.4-64.5, 63.0 PARITY=1
+same code; fp16 86.1-87.0 same runs).
 Per-token profile (16 cached layers): store ~3.7ms/layer, serve
 ~1.1ms/layer, attention ~0.7ms/layer (fp16 step total 11.6ms).
 
@@ -242,6 +242,17 @@ Generation optimization history (all KLD-identical, same-top 100%):
   CPU 77 + twins 10 green. Kineto over 5 steps: Self CPU 129.0ms ->
   98.7ms, nonzero gone from the top, index 640 -> 400 calls, serve WHT
   kernels eliminated (the open refresh now runs only on seals).
+- Tick-gated touch (isolated probe: touch 0.25ms + store 0.68ms per
+  layer, serve 0.07ms): steady single-row appends skip `_touch_batch`
+  (the fused store already maintains the appended page's owner; owners
+  are only read by the evict scan, so the full path runs on the evict
+  tick and owners are current whenever the scan runs; the range
+  validation still fires within <=256 steps plus the gather
+  bounds-check backstop every step; prefill/multi-row always run):
+  64.5 tok/s parity-off (+31% over 49.3, runs 63.4-64.5, 63.0 PARITY=1
+  same code, fp16 86.1-87.0 same runs; kvarn prefill 5.0s, no
+  regression). KLD digits identical; PARITY=1 clean at 8k; CPU 77 +
+  twins 10 green.
   (Copy+overlay single-kernel fusion was considered and rejected: the
   copy grid and overlay grid would write the same temp rows from
   different programs with a required order and no cross-CTA barrier.)

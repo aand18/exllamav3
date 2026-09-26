@@ -1058,6 +1058,17 @@ class CacheLayer_kvarn(CacheLayer):
         bsz = seqlens.numel()  # shape only, no sync
         if bsz == 0:
             return
+        # Steady single-row decode appends (bsz 1, length 1) refresh
+        # per-page owners the fused store kernel already maintains for
+        # the appended page -- and nothing else reads page_owner_n
+        # between evict scans. So this path runs fully only on the
+        # evict tick (same counter the scan gates on: owners are current
+        # whenever the scan runs). Multi-row appends always run fully.
+        # The out-of-range validation still fires within <=256 steps for
+        # systematic table bugs (plus the gather bounds-check backstop
+        # on every step); prefill/multi-row always validate.
+        if bsz == 1 and length == 1 and (self._evict_tick & 255):
+            return
         if bsz == 1:
             # Steady single-sequence path (decode appends and batch-1
             # prefill): the whole row validates and updates without the
