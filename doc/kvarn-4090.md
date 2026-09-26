@@ -135,8 +135,8 @@ are recorded above (fuse dequant into attention; batch, don't
 thread); this table is the timing baseline for our own regressions.
 
 Decode @8192, 1.40bpw 27B (64 greedy steps, warm inductor cache):
-fp16 86.0-86.6 tok/s vs kvarn 7.8-19.5 tok/s depending on the step below
-(current: 19.5 tok/s TRITON=1, fp16 86.3 same run).
+fp16 83.7-86.6 tok/s vs kvarn 7.8-28.8 tok/s depending on the step below
+(current: 28.8 tok/s TRITON=1, fp16 86.5 same run).
 Per-token profile (16 cached layers): store ~3.7ms/layer, serve
 ~1.1ms/layer, attention ~0.7ms/layer (fp16 step total 11.6ms).
 
@@ -163,6 +163,16 @@ Generation optimization history (all KLD-identical, same-top 100%):
   The unguarded append crashed the all-sealed refresh (empty cat
   through the WHT reshape, caught by the 8k KLD, not the suites);
   the `Gs_o.numel()` count guard is load-bearing.
+- Page-math micro-cuts (`02581f6`, mask-filtered pages for single-row
+  batches + constant page-groups buffer, ~10 launches/layer saved):
+  20.2 tok/s.
+- Fused open-group serve (`52ba530`, gather + full head WHT + scatter
+  in 4 launches / zero syncs, replacing ~45 torch launches per layer;
+  twin-tested bit-exact across seal boundaries at every head dim):
+  28.8 tok/s (+43%, past Path A's ~25 estimate; fp16 86.5 same run).
+  Kineto shape-attribution was the guide (torch `with_stack` yields
+  empty stacks on this build, so ops were attributed by input shape).
+  KLD digits identical throughout; PARITY=1 clean at 8k.
 - Triton FWHT exactness fixes (`aa88720`, same runs as the 19.0
   number): `tl.debug_barrier` does not sync warps (triton 3.8/sm_89,
   nondeterministic corruption at 1000+ rows) -> all FWHT launches
