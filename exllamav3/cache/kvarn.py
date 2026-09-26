@@ -942,7 +942,11 @@ class CacheLayer_kvarn(CacheLayer):
             + torch.arange(_gps, device=device)).to(torch.int64)
         # Incremental image only pays when the allocation is modest; huge
         # contexts keep the memory-slim full rematerialization path.
-        self._img_ok = self.num_pages <= 128
+        # 160 pages ~= 40k tokens: covers the 32k protocol (129 pages
+        # with decode headroom) at ~160MB/layer for kvh4/hd256. The
+        # legacy path above this is prefill-grade only (it rematerializes
+        # the whole context per step: 8.2 tok/s at 32k vs 64 fp16).
+        self._img_ok = self.num_pages <= 160
         self._evict_tick = 0  # store calls since the last evict scan
         # Scratch for the fused single-row store's [code, group] report:
         # the kernel overwrites both words every launch, so one persistent
@@ -1425,29 +1429,16 @@ class CacheLayer_kvarn(CacheLayer):
 
     @torch.inference_mode()
     def _seal_group(self, g: int):
+        # Single-group seal via the batched core: one Sinkhorn+quantize
+        # per K/V over all tiles instead of per-tile loops (~16x fewer
+        # launches and status syncs; the per-tile math is independent so
+        # the packed records are bit-identical). Decode seals every 128
+        # steps per layer, so the loop form showed up as an 88ms/step
+        # cliff on 256-step runs.
         assert bool(self.present[g].any()), \
             f"KVarN: sealing group {g} without staging (base {int(self.group_base[g])})"
-        bk = self.stage_k[g].float()  # (128, kvh, hd) rotated
-        bv = self.stage_v[g].float()
-        for h in range(self.num_kv_heads):
-            for sl in range(self.slices):
-                c = h * self.slices + sl
-                d0, d1 = sl * KVAR_N_GROUP, (sl + 1) * KVAR_N_GROUP
-                k_tile = bk[:, h, d0:d1].T.contiguous()   # [dim, token]
-                v_tile = bv[:, h, d0:d1].contiguous()     # [token, dim]
-                rec = self.records[g, c]
-                kvarn_quantize_k_tile(k_tile, self.sinkhorn_iters, self.k_bits,
-                                      self.layout, rec)
-                kvarn_quantize_v_tile(v_tile, self.sinkhorn_iters, self.v_bits,
-                                      self.layout, rec)
-        self.sealed[g] = True
-        self._dirty_mask[g] = True
-        self._dirty_any = True
-        # M4: staging is freed on seal; only the single open group (plus
-        # the sink) retains fp16 staging. Exact blocks stay for the
-        # overlay over sealed tail groups.
-        self.stage_k[g].zero_()
-        self.stage_v[g].zero_()
+        self._seal_groups_batched(
+            torch.tensor([g], device=self.device, dtype=torch.long))
 
     @torch.inference_mode()
     def _sealed_tiles(self, g: int):
@@ -1750,7 +1741,7 @@ class CacheLayer_kvarn(CacheLayer):
         # stash, restored after the forward, no clones); the torch
         # fallback still serves a clone (the overlay mutates its target).
         # Modest allocations only
-        # (num_pages <= 128); huge contexts keep the memory-slim
+        # (num_pages <= 160); huge contexts keep the memory-slim
         # full rematerialization below.
         kvh, hd = self.num_kv_heads, self.head_dim
         dev = self.device
