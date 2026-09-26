@@ -301,9 +301,9 @@ def test_swa_compact_no_sink_ring():
         assert bool(layer.sealed[0]) and bool(layer.sealed[3])
         assert not bool(layer.sealed[4])
         # Compact window [600-256, 600): groups 2,3,4 (+staging for open 4).
-        assert sorted(layer.exact_blocks.keys()) == [2, 3, 4]
+        assert layer._live_exact_groups() == [2, 3, 4]
         assert layer._live_stage_groups() == [4]
-        assert len(layer.exact_blocks) <= layer.swa_ring_groups
+        assert len(layer._live_exact_groups()) <= layer.swa_ring_groups
         kk, _ = layer.get_kv(torch.tensor([600], dtype=torch.int32), bt)
         got_k = kk[bt[0]].reshape(-1, 2, 128)[:600]
         assert torch.equal(got_k[600 - 128:].half(), k[600 - 128:])  # tail exact
@@ -377,8 +377,8 @@ def test_compact_memory_4k():
             total = layer.storage_size() + layer.overhead_size()
             assert total < 0.5 * fp16_bytes, (bits, total, fp16_bytes)
             # Resident set: sink group 0 + trailing N+R window [3840,4096).
-            assert sorted(layer.exact_blocks.keys()) == [0, 30, 31], \
-                (bits, sorted(layer.exact_blocks.keys()))
+            assert layer._live_exact_groups() == [0, 30, 31], \
+                (bits, layer._live_exact_groups())
             assert layer._live_stage_groups() == [0], \
                 (bits, layer._live_stage_groups())
             assert int(layer.sealed.sum()) == 31  # all but the sink
@@ -405,8 +405,8 @@ def test_compact_memory_8k():
             fp16_bytes = 2 * 8192 * 2 * 128 * 2
             total = layer.storage_size() + layer.overhead_size()
             assert total < 0.5 * fp16_bytes, (bits, total, fp16_bytes)
-            assert sorted(layer.exact_blocks.keys()) == [0, 62, 63], \
-                (bits, sorted(layer.exact_blocks.keys()))
+            assert layer._live_exact_groups() == [0, 62, 63], \
+                (bits, layer._live_exact_groups())
             assert layer._live_stage_groups() == [0]
             assert int(layer.sealed.sum()) == 63
             kk, _ = layer.get_kv(torch.tensor([8192], dtype=torch.int32), bt)
