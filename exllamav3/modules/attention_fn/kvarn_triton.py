@@ -495,6 +495,106 @@ def kvarn_triton_wht_slices(x):
     return out.reshape(*prefix, x.shape[-1])
 
 
+if _have_triton:
+    @triton.jit
+    def _kvarn_serve_gather_kernel(
+        stage_k_ptr, stage_v_ptr,  # (G, 128, kvh, HD) fp16
+        ids_ptr,                   # (D,) int64 group ids
+        buf_k_ptr, buf_v_ptr,      # (D, 128, kvh, HD) fp32 out
+        KVH: tl.constexpr, HD: tl.constexpr,
+    ):
+        # Gather staging rows to fp32. Bit-identical to the torch
+        # .float() gather, including never-written slots: those read
+        # whatever staging holds there (zeros by the static-tensor
+        # reset invariant), exactly like the torch path, which applies
+        # no present-mask either. Sealed groups in ids gather harmlessly
+        # (their rows are discarded at scatter). Mask style (not
+        # branches) matches the store/overlay kernels: masked-off lanes
+        # issue no traffic and their values never reach a store.
+        pid_d = tl.program_id(0)
+        pid_s = tl.program_id(1)
+        pid_h2 = tl.program_id(2)
+        is_k = pid_h2 < KVH
+        h = pid_h2 % KVH
+        lane = tl.arange(0, HD)
+        gid = tl.load(ids_ptr + pid_d)
+        s_off = (gid * 128 + pid_s) * KVH * HD + h * HD + lane
+        d_off = (pid_d * 128 + pid_s) * KVH * HD + h * HD + lane
+        tl.store(buf_k_ptr + d_off,
+                 tl.load(stage_k_ptr + s_off, mask=is_k).to(tl.float32),
+                 mask=is_k)
+        tl.store(buf_v_ptr + d_off,
+                 tl.load(stage_v_ptr + s_off, mask=(~is_k)).to(tl.float32),
+                 mask=(~is_k))
+
+    @triton.jit
+    def _kvarn_serve_scatter_kernel(
+        buf_k_ptr, buf_v_ptr,      # (D, 128, kvh, HD) fp32, fully WHT'd
+        tgt_k_ptr, tgt_v_ptr,      # (Gg_flat, 128, kvh, HD) fp16 image/temps
+        ids_ptr,                   # (D,) int64 group ids
+        sealed_ptr,                # (G,) bool
+        KVH: tl.constexpr, HD: tl.constexpr,
+    ):
+        # Scatter fp32 rows to the fp16 target, skipping sealed groups
+        # (torch serves those via the dequant path -- disjoint sets, so
+        # the split is order-irrelevant). Matches the torch indexed
+        # scatter bit-exact (fp32 compute, single final cast).
+        pid_d = tl.program_id(0)
+        pid_s = tl.program_id(1)
+        pid_h2 = tl.program_id(2)
+        is_k = pid_h2 < KVH
+        h = pid_h2 % KVH
+        lane = tl.arange(0, HD)
+        gid = tl.load(ids_ptr + pid_d)
+        go = ~tl.load(sealed_ptr + gid)
+        d_off = (pid_d * 128 + pid_s) * KVH * HD + h * HD + lane
+        t_off = (gid * 128 + pid_s) * KVH * HD + h * HD + lane
+        # Combined masks (side AND seal): a V-program must never write
+        # the K image and vice versa, even for open groups.
+        tl.store(tgt_k_ptr + t_off,
+                 tl.load(buf_k_ptr + d_off).to(tl.float16),
+                 mask=go & is_k)
+        tl.store(tgt_v_ptr + t_off,
+                 tl.load(buf_v_ptr + d_off).to(tl.float16),
+                 mask=go & (~is_k))
+
+
+def kvarn_triton_serve_open(tgt_k, tgt_v, layer, ids):
+    """Fused open-group refresh: gather staging + full head WHT + scatter.
+
+    tgt_k/v: (pages, 256, kvh, hd) fp16 image or legacy temps. ids: (D,)
+    int64 open-group ids (sealed members, if any, are skipped at
+    scatter). 4 launches (gather, K WHT, V WHT, scatter), zero CPU
+    syncs. Bit-identical to the torch rot path (same fp32 elementwise
+    math in the same order); the WHT reuses the proven single-warp
+    head kernel. Loud failure (never silent) when unrunnable.
+    """
+    if not _have_triton:
+        raise RuntimeError(
+            "KVarN Triton serve requires triton (import failed on this host).")
+    if not tgt_k.is_cuda:
+        raise RuntimeError(
+            "KVarN Triton serve requires CUDA tensors, got "
+            f"{tgt_k.device}.")
+    kvh, hd = layer.num_kv_heads, layer.head_dim
+    assert hd in (128, 256, 512)
+    D = ids.numel()  # shape only, no sync
+    if D == 0:
+        return
+    dev = tgt_k.device
+    buf_k = torch.empty((D, 128, kvh, hd), dtype=torch.float32, device=dev)
+    buf_v = torch.empty_like(buf_k)
+    grid = (D, 128, 2 * kvh)
+    _kvarn_serve_gather_kernel[grid](
+        layer.stage_k, layer.stage_v, ids, buf_k, buf_v, kvh, hd)
+    buf_k = kvarn_triton_wht_rows(buf_k, hd)
+    buf_v = kvarn_triton_wht_rows(buf_v, hd)
+    flat_k = tgt_k.reshape(-1, 128, kvh, hd)
+    flat_v = tgt_v.reshape(-1, 128, kvh, hd)
+    _kvarn_serve_scatter_kernel[grid](
+        buf_k, buf_v, flat_k, flat_v, ids, layer.sealed, kvh, hd)
+
+
 def kvarn_triton_dequant_groups(records_G, layout,
                                k_bits: int, v_bits: int,
                                num_kv_heads: int, slices: int,
