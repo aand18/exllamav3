@@ -134,10 +134,26 @@ so timing is not directly comparable. The architectural lessons taken
 are recorded above (fuse dequant into attention; batch, don't
 thread); this table is the timing baseline for our own regressions.
 
-Decode @8192 (64 greedy steps, warm inductor cache):
-fp16 86.4 tok/s vs kvarn4 8.9 tok/s; fp16 86.6 vs kvarn5,kvarn4 8.7.
-Generation gap (~10x) is open work, not a regression: per-token
-full-image clone + eager store/overlay.
+Decode @8192, 1.40bpw 27B (64 greedy steps, warm inductor cache):
+fp16 86.0-86.6 tok/s vs kvarn 7.8-11.3 tok/s depending on the step below.
+Per-token profile (16 cached layers): store ~3.7ms/layer, serve
+~1.1ms/layer, attention ~0.7ms/layer (fp16 step total 11.6ms).
+
+Generation optimization history (all KLD-identical, same-top 100%):
+- 8.9 tok/s baseline (clone-per-call design).
+- In-place overlay + stash restore tried, measured 7.8-7.9 (clone was
+  bandwidth-cheap; bookkeeping added latency) and reverted (`0158aa1`).
+- Single-row store fast path (`9feae92`), `_touch_batch` vectorized
+  (`36d420a`, was O(ctx) syncs/token), K+V stacked store WHT
+  (`d4998a6`), exact-evict on 128-boundaries (`737976e`,
+  provably final-state-equivalent): 11.1-11.3 tok/s (+27%).
+- Remaining ~5ms/layer/token is ~40 launches + ~10 syncs of
+  irreducible torch-eager overhead (row WHT, indexed assigns,
+  overlay bookkeeping). Closing the last ~8x needs fused
+  store/serve kernels or a compile-friendly (static-structure) cache
+  backend -- a follow-up project, not micro-opts. Speculative
+  (draft-target) decoding would multiply effective tok/s
+  orthogonally.
 
 ### Qwen3.8-27B dense 5.00bpw (`SC_5.00bpw_H6`)
 
