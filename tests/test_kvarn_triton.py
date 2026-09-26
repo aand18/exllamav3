@@ -160,6 +160,18 @@ def test_groups_matches_group_loop():
         assert torch.equal(bv, ref_v), (k_bits, v_bits)
 
 
+@pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
+def test_wht_rows_matches_torch_head():
+    # Fused row-WHT kernel must equal kvarn_wht_head bit-exact for all
+    # supported head dims (FWHT is an involution: same kernel both ways).
+    torch.manual_seed(2)
+    for hd in (128, 256, 512):
+        x = torch.randn(5, 3, hd, dtype=torch.float32, device="cuda")
+        got = kt.kvarn_triton_wht_rows(x, hd)
+        ref = kvarn.kvarn_wht_head(x, hd)
+        assert torch.equal(got, ref), hd
+
+
 def test_default_path_is_torch():
     # Default env (unset): the gate is off, so sealed-group reads use the
     # tested torch loop. Any regression here breaks the whole CPU suite,
