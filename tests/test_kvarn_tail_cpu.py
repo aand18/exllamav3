@@ -404,7 +404,7 @@ def test_copy_page_sink_tail():
     dst2.copy_page(layer, 1, 0, 44)
     assert not bool(dst2.sealed[0])
     assert torch.equal(dst2.exact_blocks[0][0][:44], layer.exact_blocks[2][0][:44])
-    assert torch.equal(dst2.stage_blocks[0][1][:44], layer.stage_blocks[2][1][:44])
+    assert torch.equal(dst2.stage_v[0][:44], layer.stage_v[2][:44])
 
 
 @torch.inference_mode()
@@ -424,8 +424,8 @@ def test_copy_page_partial_from_sealed():
     assert not bool(dst.sealed[0]) and not bool(dst.sealed[1])
     # Staging for the partial sealed-source group == source records dequant.
     rec = layer._staging_from_records(1)
-    assert torch.equal(dst.stage_blocks[1][0][:44], rec[0][:44])
-    assert torch.equal(dst.stage_blocks[1][1][:44], rec[1][:44])
+    assert torch.equal(dst.stage_k[1][:44], rec[0][:44])
+    assert torch.equal(dst.stage_v[1][:44], rec[1][:44])
     # Same 172-token prefix reads identically through both layers.
     kk, _ = dst.get_kv(torch.tensor([172], dtype=torch.int32), bt)
     ref, _ = layer.get_kv(torch.tensor([172], dtype=torch.int32), bt)
