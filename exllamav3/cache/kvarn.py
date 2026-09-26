@@ -1014,6 +1014,53 @@ class CacheLayer_kvarn(CacheLayer):
                 if n > int(self.page_owner_n[p]):
                     self.page_owner_n[p] = n
 
+    def _store_row_single(self, pages, offs, pos, n_new,
+                          rk, rv, ek, ev, g, s) -> bool:
+        """Single-row decode fast path. Writes the row when it purely
+        appends to an open (or fresh) group; returns False for any policy
+        event (reuse with live content, sealed overwrite) so the caller
+        falls through to the general loop. Mirrors the loop body exactly
+        for the T == 1 case (same reset/write/exact/owner semantics)."""
+        gps = PAGE_SIZE // KVAR_N_GROUP
+        gi = int(g[0])
+        si = int(s[0])
+        pos0 = int(pos[0])
+        bold = int(self.group_base[gi])
+        bnew = pos0 - si
+        if bold != bnew and bold >= 0:
+            return False  # page reuse with live content: general path
+        if bool(self.sealed[gi]):
+            return False  # overwrite of sealed content: general path
+        page = gi // gps
+        if bold != bnew:
+            # Fresh group: reset bookkeeping (nothing live to preserve).
+            self.sealed[gi] = False
+            self.present[gi] = False
+            self.stage_blocks.pop(gi, None)
+            self.exact_blocks.pop(gi, None)
+            self.group_base[gi] = bnew
+            self.page_pinned[page] = False
+        blk = self.stage_blocks.get(gi)
+        if blk is None:
+            blk = self._alloc_stage_block(gi)
+        blk[0][si] = rk[0]
+        blk[1][si] = rv[0]
+        self.present[gi, si] = True
+        if pos0 >= n_new - self.tail_effective - KVAR_N_TAIL_ROLLBACK_TOKENS or \
+           (self.has_sink and pos0 < KVAR_N_SINK_TOKENS):
+            eblk = self.exact_blocks.get(gi)
+            if eblk is None:
+                eblk = self._alloc_exact_block(gi)
+            eblk[0][si] = ek[0]
+            eblk[1][si] = ev[0]
+        cur_owner = int(self.page_owner_n[page])
+        self.page_owner_n[page] = n_new if cur_owner < 0 \
+            else min(cur_owner, n_new)
+        # Trailing owner-max, mirroring the general path's refresh loop.
+        if n_new > int(self.page_owner_n[page]):
+            self.page_owner_n[page] = n_new
+        return True
+
     @torch.inference_mode()
     def _store_rows(self, rows_k: torch.Tensor, rows_v: torch.Tensor,
                     pages: torch.Tensor, offs: torch.Tensor,
@@ -1048,6 +1095,17 @@ class CacheLayer_kvarn(CacheLayer):
         s = offs % KVAR_N_GROUP
         keep = self._exact_keep(pos, n_new)
         base = pos - s
+        if rows_k.shape[0] == 1 and \
+                self._store_row_single(pages, offs, pos, n_new,
+                                       rk, rv, ek, ev, g, s):
+            self._evict_exact_all()
+            gi = int(g[0])
+            if bool(self.present[gi].all()) and not bool(self.sealed[gi]):
+                if not (self.has_sink and int(self.group_base[gi]) == 0):
+                    self._seal_group(gi)
+            gv = g.to(device=self.device, dtype=torch.long)
+            self._dirty_mask[gv[(gv >= 0) & (gv < self.num_groups)]] = True
+            return
         for gi in torch.unique(g).tolist():
             gi = int(gi)
             m = (g == gi)
