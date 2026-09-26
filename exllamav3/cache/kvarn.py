@@ -1090,8 +1090,11 @@ class CacheLayer_kvarn(CacheLayer):
         offs = offs.to(torch.long)
         pos = pos.to(torch.long)
         n_new = int(n_new)
-        rk = kvarn_wht_head(rows_k.float(), self.head_dim).half().to(dev)
-        rv = kvarn_wht_head(rows_v.float(), self.head_dim).half().to(dev)
+        # One batched WHT for K+V (was two calls): same per-element
+        # math, ~half the launches. Bit-exact (batching preserves order).
+        rkv = kvarn_wht_head(torch.stack((rows_k.float(), rows_v.float())),
+                             self.head_dim).half().to(dev)
+        rk, rv = rkv[0], rkv[1]
         ek = rows_k.to(self.tail_dtype)
         ev = rows_v.to(self.tail_dtype)
         g = pages * (PAGE_SIZE // KVAR_N_GROUP) + offs // KVAR_N_GROUP
