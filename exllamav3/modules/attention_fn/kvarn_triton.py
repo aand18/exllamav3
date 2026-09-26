@@ -232,7 +232,7 @@ if _have_triton:
         rk_ptr, rv_ptr, ek_ptr, ev_ptr,  # (kvh, HD) fp32 WHT'd / tail-dtype rows
         pages_ptr, offs_ptr, pos_ptr,    # (1,) int64: page, offset, position
         stage_k_ptr, stage_v_ptr,        # (S, 128, kvh, HD) fp16 slots
-        exact_k_ptr, exact_v_ptr,        # (G, 128, kvh, HD) tail dtype
+        exact_k_ptr, exact_v_ptr,        # (E, 128, kvh, HD) tail-dtype slots
         exact_valid_ptr,                 # (G,) bool
         base_ptr,                        # (G,) int64 group base
         sealed_ptr,                      # (G,) bool
@@ -240,6 +240,7 @@ if _have_triton:
         owner_ptr,                       # (P,) int64 page owners
         pinned_ptr,                      # (P,) bool
         stage_rev_ptr,                   # (G,) int64 group -> staging slot
+        exact_rev_ptr,                   # (G,) int64 group -> exact slot
         img_k_ptr, img_v_ptr,            # (P, 256, kvh, HD) fp16 image (or dummy)
         status_ptr,                      # (2,) int64 out: [code, group]
         KVH: tl.constexpr, HD: tl.constexpr, GPS: tl.constexpr,
@@ -254,6 +255,10 @@ if _have_triton:
         # Staging is slot-windowed: the slot comes from the host rev map
         # (fail-closed: unassigned, fresh, or sealed groups bail with
         # code 1 into the torch fallback, which assigns/resets host-side).
+        # Exact is slot-windowed the same way: a keep-window row with no
+        # exact slot yet bails too (host assigns via _alloc_exact_block;
+        # valid ⟺ assigned, so steady appends never bail). Exact_valid
+        # stays group-indexed (flag tensor, written in place).
         # Codes: 0 ok (image current via write-through), 1 slow-path
         # fallback, 2 seal group status[1].
         # Write-through keeps the persistent image current for pure
@@ -278,11 +283,17 @@ if _have_triton:
         base = tl.load(base_ptr + g)
         is_sealed = tl.load(sealed_ptr + g)
         slot = tl.load(stage_rev_ptr + g)
+        eslot = tl.load(exact_rev_ptr + g)
         # Fail closed: fresh groups (any base change), sealed groups,
-        # and unassigned slots all bail into the torch fallback, which
-        # assigns/resets host-side. The fast path only ever touches an
-        # assigned slot of a known-open group.
-        slow = (base != bnew) | is_sealed | (slot < 0)
+        # and unassigned staging slots all bail into the torch fallback,
+        # which assigns/resets host-side. A keep-window row with no exact
+        # slot yet bails the same way (host assigns). The fast path only
+        # ever touches assigned slots of a known-open group. keep is
+        # computed here (pure position math, no dependencies) so the
+        # bail precedes every store below.
+        keep = (pos >= n_new - TAIL_KEEP) | (HAS_SINK & (pos < SINK_N))
+        slow = (base != bnew) | is_sealed | (slot < 0) | \
+            (keep & (eslot < 0))
         go = ~slow
 
         row_k = tl.load(rk_ptr + h * HD + cols)
@@ -302,9 +313,12 @@ if _have_triton:
             tl.store(img_v_ptr + i_off, row_v.to(tl.float16),
                      mask=(~is_k) & go)
 
-        keep = (pos >= n_new - TAIL_KEEP) | (HAS_SINK & (pos < SINK_N))
-        e_off = (g * 128 + s) * KVH * HD + h * HD + cols
         # Exact blocks hold ORIGINAL-domain rows (ek/ev), unlike staging.
+        # The slot is assigned whenever keep rows land here (unassigned
+        # slots bailed above); clamp keeps the pointer in range on the
+        # masked-off path all the same.
+        eslot_c = tl.where(eslot >= 0, eslot, 0)
+        e_off = (eslot_c * 128 + s) * KVH * HD + h * HD + cols
         e_row_k = tl.load(ek_ptr + h * HD + cols)
         e_row_v = tl.load(ev_ptr + h * HD + cols)
         if TAIL_IS_BF16:
@@ -385,12 +399,14 @@ def kvarn_triton_store_row(layer, rows_k, rows_v, pages_1, offs_1, pos_1,
     writes, present/base/owner/valid updates, image write-through.
     Staging is slot-windowed (slot from the host rev map; unassigned,
     fresh, or sealed groups bail with code 1 into the torch fallback,
-    which assigns/resets host-side). A completed group reports code 2
-    and its id for the torch sealer. Returns (code: int, group: int) --
-    one status read, the only CPU sync. Small ints (gps, sink/rollback
-    sizes) come from the caller so this module never imports the cache
-    package (no cycle, no stub fragility). Loud failure (never silent)
-    when unrunnable.
+    which assigns/resets host-side). Exact is slot-windowed the same
+    way (a keep-window row with no exact slot yet bails; valid ⟺
+    assigned, so steady appends never bail). A completed group reports
+    code 2 and its id for the torch sealer. Returns (code: int,
+    group: int) -- one status read, the only CPU sync. Small ints (gps,
+    sink/rollback sizes) come from the caller so this module never
+    imports the cache package (no cycle, no stub fragility). Loud
+    failure (never silent) when unrunnable.
 
     img_k/img_v: the persistent fp16 image for write-through, or None
     (no image yet / legacy temps: the write-through is pruned and the
@@ -441,7 +457,7 @@ def kvarn_triton_store_row(layer, rows_k, rows_v, pages_1, offs_1, pos_1,
         layer.exact_k, layer.exact_v, layer.exact_valid,
         layer.group_base, layer.sealed, layer.present,
         layer.page_owner_n, layer.page_pinned,
-        layer._stage_rev,
+        layer._stage_rev, layer._exact_rev,
         img_k, img_v,
         status,
         kvh, hd, gps,
@@ -457,8 +473,9 @@ if _have_triton:
     @triton.jit
     def _kvarn_overlay_kernel(
         img_k_ptr, img_v_ptr,             # (P, 256, kvh, HD) fp16 temps
-        exact_k_ptr, exact_v_ptr,         # (G, 128, kvh, HD) tail dtype
+        exact_k_ptr, exact_v_ptr,         # (E, 128, kvh, HD) tail-dtype slots
         exact_valid_ptr,                  # (G,) bool
+        exact_rev_ptr,                    # (G,) int64 group -> exact slot
         seqlens_ptr, bt_ptr,              # (1,) int32 n, (P,) int32 pages
         sk_ptr, sv_ptr,                   # (MAXW, kvh, HD) fp16 stash
         slin_ptr, svalid_ptr,             # (MAXW,) int32 lin / bool valid
@@ -471,6 +488,8 @@ if _have_triton:
         # blocks into the fp16 temps. Grid (MAXW,) programs x (kvh*HD)
         # lanes; each program serves one window row, predicated. Positions,
         # paging and validity all resolve in-kernel: zero CPU syncs.
+        # Exact is slot-windowed (slot from the host rev map; valid ⟺
+        # assigned, belt-and-braces the slot sign into validity).
         # Matches _apply_exact_overlay row-for-row (absent blocks keep
         # the refreshed body: predicated skip, same as `continue`).
         pid = tl.program_id(0)
@@ -492,8 +511,10 @@ if _have_triton:
         offs = pos_safe % 256
         g = page * GPS + offs // 128
         s = offs % 128
-        valid = tl.load(exact_valid_ptr + g) & active
-        e_off = (g * 128 + s) * KVH * HD + h * HD + d
+        eslot = tl.load(exact_rev_ptr + g)
+        valid = tl.load(exact_valid_ptr + g) & active & (eslot >= 0)
+        eslot_c = tl.where(eslot >= 0, eslot, 0)
+        e_off = (eslot_c * 128 + s) * KVH * HD + h * HD + d
         i_off = (page * 256 + offs) * KVH * HD + h * HD + d
         if TAIL_IS_BF16:
             ek = tl.load(exact_k_ptr + e_off, mask=valid).to(tl.float16)
@@ -568,8 +589,10 @@ def kvarn_triton_overlay(image_k, image_v, layer, seqlens_1, bt_1,
     """Fused exact overlay into fp16 image temps (non-SWA caller).
 
     One launch replaces the per-group Python loop (tolist + int syncs +
-    per-group assigns). Absent exact blocks are skipped, matching the
-    torch fallback row-for-row. Loud failure when unrunnable.
+    per-group assigns). Exact blocks are slot-windowed (slot from the
+    host rev map, resolved in-kernel; absent blocks are skipped,
+    matching the torch fallback row-for-row). Loud failure when
+    unrunnable.
 
     stash: None (overlay onto throwaway temps: legacy path, unit tests)
     or the tuple from _kvarn_overlay_stash (serve-from-image: rows are
@@ -591,7 +614,7 @@ def kvarn_triton_overlay(image_k, image_v, layer, seqlens_1, bt_1,
         sk, sv, slin, svalid, do_stash = (*stash, True)
     _kvarn_overlay_kernel[(maxw,)](
         image_k, image_v,
-        layer.exact_k, layer.exact_v, layer.exact_valid,
+        layer.exact_k, layer.exact_v, layer.exact_valid, layer._exact_rev,
         seqlens_1.to(dtype=torch.int32, device=dev),
         bt_1.to(dtype=torch.int32, device=dev),
         sk, sv, slin, svalid,

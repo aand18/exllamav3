@@ -385,9 +385,12 @@ def test_copy_page_sink_tail():
     assert bool(dst.sealed[3])
     assert torch.equal(dst.records[3], layer.records[1])
     # M4: compact exact blocks travel remapped with the copied groups
-    # (dst groups 2,3 <- src groups 0,1).
-    assert torch.equal(dst.exact_k[2], layer.exact_k[0])
-    assert torch.equal(dst.exact_v[3], layer.exact_v[1])
+    # (dst groups 2,3 <- src groups 0,1). Blocks are slot-windowed:
+    # resolve through the rev maps (raw indices are slots now).
+    assert torch.equal(dst.exact_k[int(dst._exact_rev[2])],
+                       layer.exact_k[int(layer._exact_rev[0])])
+    assert torch.equal(dst.exact_v[int(dst._exact_rev[3])],
+                       layer.exact_v[int(layer._exact_rev[1])])
     # Logical comparison through a remapped block table: dst page 1 now
     # backs logical positions 0..255 (prompt-cache page sharing). The M2
     # exact overlay is logical, so raw page tensors are not comparable.
@@ -399,12 +402,15 @@ def test_copy_page_sink_tail():
     # page 1, which used to back positions 256..299).
     assert torch.equal(kk[bt2[0]].reshape(-1, 2, 128)[:256],
                        ref[bt[0]].reshape(-1, 2, 128)[:256])
-    # Partial copy stays unsealed staging + exact (remapped blocks).
+    # Partial copy stays unsealed staging + exact (remapped blocks,
+    # resolved through the rev maps).
     dst2 = _layer(2, 128, 512)
     dst2.copy_page(layer, 1, 0, 44)
     assert not bool(dst2.sealed[0])
-    assert torch.equal(dst2.exact_k[0][:44], layer.exact_k[2][:44])
-    assert torch.equal(dst2.stage_v[0][:44], layer.stage_v[2][:44])
+    assert torch.equal(dst2.exact_k[int(dst2._exact_rev[0])][:44],
+                       layer.exact_k[int(layer._exact_rev[2])][:44])
+    assert torch.equal(dst2.stage_v[int(dst2._stage_rev[0])][:44],
+                       layer.stage_v[int(layer._stage_rev[2])][:44])
 
 
 @torch.inference_mode()
