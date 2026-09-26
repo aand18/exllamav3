@@ -845,7 +845,7 @@ def kvarn_triton_dequant_groups(records_G, layout,
 
 if _have_triton:
     @triton.jit
-    def _kvarn_online_kvarn_online_kcol(gbase_u8, gbase_f16, C: tl.constexpr, B: tl.constexpr,
+    def _kvarn_online_kcol(gbase_u8, gbase_f16, C: tl.constexpr, B: tl.constexpr,
               PAY_OFF, SC2, ZP2, OT2, BITS: tl.constexpr,
               pid_h, SL: tl.constexpr, t, lane):
         sl = lane // 128
@@ -866,7 +866,7 @@ if _have_triton:
 
 
     @triton.jit
-    def _kvarn_online_kvarn_online_vrow(gbase_u8, gbase_f16, C: tl.constexpr, B: tl.constexpr,
+    def _kvarn_online_vrow(gbase_u8, gbase_f16, C: tl.constexpr, B: tl.constexpr,
               PAY_OFF, SC2, ZP2, OT2, BITS: tl.constexpr,
               pid_h, SL: tl.constexpr, t, lane):
         sl = lane // 128
@@ -895,36 +895,55 @@ if _have_triton:
         C: tl.constexpr, B: tl.constexpr, SL: tl.constexpr,
         KVH: tl.constexpr, QPK: tl.constexpr, QPAD: tl.constexpr,
         HD: tl.constexpr, NB: tl.constexpr, SCALE: tl.constexpr,
+        seq_ptr,                     # (1,) int32: current sequence length n
+        SINK_N: tl.constexpr, TAIL_EFF: tl.constexpr,
     ):
         """One program = one (kv head, sealed group). 32 outer iters x 4
-        tokens with a joint block softmax update (depth 32, not 128)."""
+        tokens with a joint block softmax update (depth 32, not 128).
+
+        Position-masked (match-bee Task 3): only rows in
+        [SINK_N, n - TAIL_EFF) participate (body); sink/tail-overlap rows
+        are served exact by the tail block, so gathering them here would
+        double-count. Masked scores are -inf (zero weight). Fully masked
+        groups emit m=-1e30/l=0 (the combine guards den==0).
+        m starts at finite -1e30, NOT -inf: with all-masked rows,
+        alpha = exp(m - m_new) would be exp(NaN); the finite floor keeps
+        every lane NaN-free and is numerically identical otherwise
+        (exp underflows to 0 either way).
+        """
         pid_h = tl.program_id(0)
         pid_b = tl.program_id(1)
         g = tl.load(ids_ptr + pid_b)
+        n = tl.load(seq_ptr)
+        tail_start = n - TAIL_EFF
         lane = tl.arange(0, HD)
         qoff = tl.arange(0, QPAD)
         qmask = qoff < QPK
         q = tl.load(qw_ptr + (pid_h * QPK) * HD + qoff[:, None] * HD
                     + lane[None, :], mask=qmask[:, None], other=0.0)
-        m = tl.full([QPAD], float("-inf"), dtype=tl.float32)
+        m = tl.full([QPAD], -1e30, dtype=tl.float32)
         l = tl.zeros([QPAD], dtype=tl.float32)
         acc = tl.zeros([QPAD, HD], dtype=tl.float32)
         gbase_u8 = rec_ptr + g * C * B
         gbase_f16 = rec_f16_ptr + (g * C * B) // 2
         for t0 in tl.range(32):
             t = t0 * 4
-            k0 = _kvarn_online_kvarn_online_kcol(gbase_u8, gbase_f16, C, B, K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
+            k0 = _kvarn_online_kcol(gbase_u8, gbase_f16, C, B, K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
                        K_BITS, pid_h, SL, t, lane)
-            k1 = _kvarn_online_kvarn_online_kcol(gbase_u8, gbase_f16, C, B, K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
+            k1 = _kvarn_online_kcol(gbase_u8, gbase_f16, C, B, K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
                        K_BITS, pid_h, SL, t + 1, lane)
-            k2 = _kvarn_online_kvarn_online_kcol(gbase_u8, gbase_f16, C, B, K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
+            k2 = _kvarn_online_kcol(gbase_u8, gbase_f16, C, B, K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
                        K_BITS, pid_h, SL, t + 2, lane)
-            k3 = _kvarn_online_kvarn_online_kcol(gbase_u8, gbase_f16, C, B, K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
+            k3 = _kvarn_online_kcol(gbase_u8, gbase_f16, C, B, K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
                        K_BITS, pid_h, SL, t + 3, lane)
-            s0 = tl.sum(q * k0[None, :], axis=1) * SCALE
-            s1 = tl.sum(q * k1[None, :], axis=1) * SCALE
-            s2 = tl.sum(q * k2[None, :], axis=1) * SCALE
-            s3 = tl.sum(q * k3[None, :], axis=1) * SCALE
+            a0 = (g * 128 + t >= SINK_N) & (g * 128 + t < tail_start) & (g * 128 + t < n)
+            a1 = (g * 128 + t + 1 >= SINK_N) & (g * 128 + t + 1 < tail_start) & (g * 128 + t + 1 < n)
+            a2 = (g * 128 + t + 2 >= SINK_N) & (g * 128 + t + 2 < tail_start) & (g * 128 + t + 2 < n)
+            a3 = (g * 128 + t + 3 >= SINK_N) & (g * 128 + t + 3 < tail_start) & (g * 128 + t + 3 < n)
+            s0 = tl.where(a0, tl.sum(q * k0[None, :], axis=1) * SCALE, float("-inf"))
+            s1 = tl.where(a1, tl.sum(q * k1[None, :], axis=1) * SCALE, float("-inf"))
+            s2 = tl.where(a2, tl.sum(q * k2[None, :], axis=1) * SCALE, float("-inf"))
+            s3 = tl.where(a3, tl.sum(q * k3[None, :], axis=1) * SCALE, float("-inf"))
             smax = tl.maximum(tl.maximum(s0, s1), tl.maximum(s2, s3))
             m_new = tl.maximum(m, smax)
             alpha = tl.exp(m - m_new)
@@ -933,13 +952,13 @@ if _have_triton:
             e2 = tl.exp(s2 - m_new)
             e3 = tl.exp(s3 - m_new)
             l = l * alpha + e0 + e1 + e2 + e3
-            v0 = _kvarn_online_kvarn_online_vrow(gbase_u8, gbase_f16, C, B, V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
+            v0 = _kvarn_online_vrow(gbase_u8, gbase_f16, C, B, V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
                        V_BITS, pid_h, SL, t, lane)
-            v1 = _kvarn_online_kvarn_online_vrow(gbase_u8, gbase_f16, C, B, V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
+            v1 = _kvarn_online_vrow(gbase_u8, gbase_f16, C, B, V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
                        V_BITS, pid_h, SL, t + 1, lane)
-            v2 = _kvarn_online_kvarn_online_vrow(gbase_u8, gbase_f16, C, B, V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
+            v2 = _kvarn_online_vrow(gbase_u8, gbase_f16, C, B, V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
                        V_BITS, pid_h, SL, t + 2, lane)
-            v3 = _kvarn_online_kvarn_online_vrow(gbase_u8, gbase_f16, C, B, V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
+            v3 = _kvarn_online_vrow(gbase_u8, gbase_f16, C, B, V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
                        V_BITS, pid_h, SL, t + 3, lane)
             acc = acc * alpha[:, None] + e0[:, None] * v0[None, :] \
                 + e1[:, None] * v1[None, :] + e2[:, None] * v2[None, :] \
@@ -986,7 +1005,10 @@ if _have_triton:
             ab = tl.load(acc_ptr + ((ph * QPAD + pq) * NB + b) * HD + lane,
                          mask=active, other=0.0)
             num += ab * eb
-        row = num / den
+        # NaN-proof: a fully masked call (short prefix, everything tail)
+        # has den == 0; serve zeros (the tail merge owns the output).
+        # tl.where selects elementwise: no trap on the discarded NaN.
+        row = tl.where(den > 0, num / den, 0.0)
         base = out_ptr + pid * HD
         tl.store(base + lane, row)
         for _sl in tl.static_range(4):
@@ -1116,15 +1138,21 @@ def kvarn_triton_qwht(q, scratch, out, slices, sscale):
     return out
 
 
-def kvarn_triton_online_decode(layer, qw, ids, qpk, scale):
+def kvarn_triton_online_decode(layer, qw, ids, qpk, scale, n_new,
+                               sink_n, tail_eff):
     """Fused online attention over sealed groups (imageless serve).
 
     qw: (QH, HD) fp32 WHT'd queries (via kvarn_triton_qwht). ids: (NB,)
-    int64 sealed group ids. Returns (QH, HD) fp32 out in the ORIGINAL
-    domain (out-WHT folded into the combine). 2 launches + 0 syncs
-    (NB from shape). Tail/open rows are NOT covered here: the caller
-    serves them from exact/staging and merges (global online combine).
-    Loud failure (never silent) when unrunnable.
+    int64 sealed group ids (need not exclude tail-overlapping groups).
+    n_new: (1,) int32 current sequence length. Only rows in
+    [sink_n, n_new - tail_eff) participate (body); sink/tail-overlap
+    rows are served exact by the tail block, so gathering them here
+    would double-count. Fully masked calls emit zeros (merge-owned).
+    Returns (QH, HD) fp32 out in the ORIGINAL domain (out-WHT folded
+    into the combine). 2 launches + 0 syncs (NB from shape). Tail/open
+    rows are NOT covered here: the caller serves them from
+    exact/staging and merges (global online combine). Loud failure
+    (never silent) when unrunnable.
     """
     if not _have_triton:
         raise RuntimeError(
@@ -1158,6 +1186,7 @@ def kvarn_triton_online_decode(layer, qw, ids, qpk, scale):
         int(layer.v_bits),
         rec.shape[1], rec.shape[2], sl,
         kvh, qpk, qpad, hd, nb, scale,
+        n_new, int(sink_n), int(tail_eff),
         num_warps=4)
     _kvarn_online_combine_kernel[(qh,)](
         m, l, acc, out, kvh, qpk, qpad, nb, nbpad, hd, sl,
