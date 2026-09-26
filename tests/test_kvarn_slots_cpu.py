@@ -99,3 +99,14 @@ def test_stage_roundtrip_through_slots():
     assert bool((lay.stage_k[lay._stage_slot(g), 3] == 1.5).all())
     lay._stage_release(g)
     assert lay._stage_rev[g] == -1
+
+
+def test_exact_roundtrip_through_slots():
+    lay = _layer()
+    assert lay.exact_k.shape[0] == kvarn.KVAR_N_EXACT_SLOTS
+    g, s = 11, lay._exact_slot(11)
+    lay.exact_k[s, 9].fill_(2.5)
+    lay.exact_valid[g] = True
+    assert bool((lay.exact_k[lay._exact_slot(g), 9] == 2.5).all())
+    lay._exact_release(g)
+    assert lay._exact_rev[g] == -1
