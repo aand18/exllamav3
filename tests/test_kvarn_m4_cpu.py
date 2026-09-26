@@ -302,7 +302,7 @@ def test_swa_compact_no_sink_ring():
         assert not bool(layer.sealed[4])
         # Compact window [600-256, 600): groups 2,3,4 (+staging for open 4).
         assert sorted(layer.exact_blocks.keys()) == [2, 3, 4]
-        assert sorted(layer.stage_blocks.keys()) == [4]
+        assert layer._live_stage_groups() == [4]
         assert len(layer.exact_blocks) <= layer.swa_ring_groups
         kk, _ = layer.get_kv(torch.tensor([600], dtype=torch.int32), bt)
         got_k = kk[bt[0]].reshape(-1, 2, 128)[:600]
@@ -379,8 +379,8 @@ def test_compact_memory_4k():
             # Resident set: sink group 0 + trailing N+R window [3840,4096).
             assert sorted(layer.exact_blocks.keys()) == [0, 30, 31], \
                 (bits, sorted(layer.exact_blocks.keys()))
-            assert sorted(layer.stage_blocks.keys()) == [0], \
-                (bits, sorted(layer.stage_blocks.keys()))
+            assert layer._live_stage_groups() == [0], \
+                (bits, layer._live_stage_groups())
             assert int(layer.sealed.sum()) == 31  # all but the sink
             rec = layer.get_kvarn_records()
             assert rec["swa_window"] == 0 and rec["tail_window"] == 4096
@@ -407,7 +407,7 @@ def test_compact_memory_8k():
             assert total < 0.5 * fp16_bytes, (bits, total, fp16_bytes)
             assert sorted(layer.exact_blocks.keys()) == [0, 62, 63], \
                 (bits, sorted(layer.exact_blocks.keys()))
-            assert sorted(layer.stage_blocks.keys()) == [0]
+            assert layer._live_stage_groups() == [0]
             assert int(layer.sealed.sum()) == 63
             kk, _ = layer.get_kv(torch.tensor([8192], dtype=torch.int32), bt)
             got = kk[bt[0]].reshape(-1, 2, 128)
@@ -470,6 +470,6 @@ def test_remapped_reuse_resets_base():
         assert int(layer.group_base[0]) == 256
         assert bool(layer.present[0].all())
         assert bool(layer.sealed[0])  # base != 0: body, seals
-        assert 0 not in layer.stage_blocks  # staging freed on seal
+        assert 0 not in layer._live_stage_groups()  # staging freed on seal
     finally:
         layer.free()
