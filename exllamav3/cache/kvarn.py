@@ -1668,7 +1668,19 @@ class CacheLayer_kvarn(CacheLayer):
                 Gs = Gs[Gs < self.num_groups]
                 if Gs.numel():
                     self._refresh_groups_legacy(Gs, k, v)
-        self._apply_exact_overlay(k, v, cache_seqlens, block_table)
+        # Fused exact overlay (1 launch, zero syncs) when opted in; the
+        # clone above stays (it is bandwidth-cheap; the loop was the cost).
+        if _kvarn_use_triton() and not self.is_swa and cache_seqlens.numel() == 1:
+            from ..modules.attention_fn.kvarn_triton import (
+                kvarn_triton_available, kvarn_triton_overlay)
+            assert kvarn_triton_available(), \
+                "EXL3_KVARN_TRITON=1 but the Triton path is unavailable " \
+                "(needs triton + CUDA); unset it for the torch path."
+            bt = block_table.long()
+            kvarn_triton_overlay(k, v, self, cache_seqlens, bt[0],
+                                 gps, KVAR_N_SINK_TOKENS, self.tail_effective)
+        else:
+            self._apply_exact_overlay(k, v, cache_seqlens, block_table)
         return k, v
 
     @override

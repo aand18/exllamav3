@@ -219,6 +219,39 @@ def test_fused_store_matches_torch_path():
             os.environ["EXL3_KVARN_TRITON"] = old
 
 
+@pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
+def test_overlay_matches_torch_loop():
+    # Fused overlay kernel must equal _apply_exact_overlay row-for-row,
+    # including absent-block skips (sink + tail window over 300 tokens).
+    from types import SimpleNamespace
+
+    attn = SimpleNamespace(num_kv_heads=2, head_dim=128, qsa_indexer=None)
+    lay = kvarn.CacheLayer_kvarn(None, attn, 0, 512, k_bits=4, v_bits=4,
+                                 is_swa=False)
+    lay.alloc(torch.device("cuda"))
+    torch.manual_seed(11)
+    bt = torch.arange(2, dtype=torch.int32, device="cuda").view(1, 2)
+    k = torch.randn(1, 300, 2, 128, dtype=torch.float16, device="cuda")
+    v = torch.randn(1, 300, 2, 128, dtype=torch.float16, device="cuda")
+    se0 = torch.tensor([0], dtype=torch.int32, device="cuda")
+    se = torch.tensor([300], dtype=torch.int32, device="cuda")
+    gps = 2  # PAGE_SIZE // KVAR_N_GROUP
+    with torch.inference_mode():
+        lay.update_kv_direct(se0, bt, k, v, 300)
+        # Build the persistent image via a throwaway get_kv (torch path:
+        # image stays pre-overlay, overlay lands on the discarded clone).
+        lay.get_kv(se, bt)
+        t1k = lay._img_k.clone()
+        t1v = lay._img_v.clone()
+        lay._apply_exact_overlay(t1k, t1v, se, bt)
+        t2k = lay._img_k.clone()
+        t2v = lay._img_v.clone()
+        kt.kvarn_triton_overlay(t2k, t2v, lay, se, bt[0], gps, 128,
+                                lay.tail_effective)
+    assert torch.equal(t1k, t2k)
+    assert torch.equal(t1v, t2v)
+
+
 def test_default_path_is_torch():
     # Default env (unset): the gate is off, so sealed-group reads use the
     # tested torch loop. Any regression here breaks the whole CPU suite,

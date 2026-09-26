@@ -380,6 +380,84 @@ def kvarn_triton_store_row(layer, rows_k, rows_v, pages_1, offs_1, pos_1,
     return int(code), int(g)
 
 
+if _have_triton:
+    @triton.jit
+    def _kvarn_overlay_kernel(
+        img_k_ptr, img_v_ptr,             # (P, 256, kvh, HD) fp16 temps
+        exact_k_ptr, exact_v_ptr,         # (G, 128, kvh, HD) tail dtype
+        exact_valid_ptr,                  # (G,) bool
+        seqlens_ptr, bt_ptr,              # (1,) int32 n, (P,) int32 pages
+        KVH: tl.constexpr, HD: tl.constexpr, GPS: tl.constexpr,
+        TAIL_EFF: tl.constexpr, SINK_N: tl.constexpr,
+        HAS_SINK: tl.constexpr, TAIL_IS_BF16: tl.constexpr, MAXW: tl.constexpr,
+    ):
+        # Fused exact overlay: sink + tail rows gathered from the exact
+        # blocks into the fp16 temps. Grid (MAXW,) programs x (kvh*HD)
+        # lanes; each program serves one window row, predicated. Positions,
+        # paging and validity all resolve in-kernel: zero CPU syncs.
+        # Matches _apply_exact_overlay row-for-row (absent blocks keep
+        # the refreshed body: predicated skip, same as `continue`).
+        pid = tl.program_id(0)
+        lane = tl.arange(0, KVH * HD)
+        h = lane // HD
+        d = lane % HD
+        n = tl.load(seqlens_ptr)
+        sink_count = tl.minimum(n, SINK_N) if HAS_SINK else 0
+        tail_start = tl.maximum(n - TAIL_EFF, 0)
+        in_sink = pid < sink_count
+        tp = pid - sink_count
+        tail_count = n - tail_start
+        active = (pid < sink_count + tail_count) & (pid < MAXW)
+        pos = tl.where(in_sink, pid, tail_start + tp)
+        # Clamp inactive lanes into range so every load below is safe;
+        # all stores stay predicated on active.
+        pos_safe = tl.where(active, pos, 0)
+        page = tl.load(bt_ptr + pos_safe // 256)
+        offs = pos_safe % 256
+        g = page * GPS + offs // 128
+        s = offs % 128
+        valid = tl.load(exact_valid_ptr + g) & active
+        e_off = (g * 128 + s) * KVH * HD + h * HD + d
+        i_off = (page * 256 + offs) * KVH * HD + h * HD + d
+        if TAIL_IS_BF16:
+            ek = tl.load(exact_k_ptr + e_off, mask=valid).to(tl.float16)
+            ev = tl.load(exact_v_ptr + e_off, mask=valid).to(tl.float16)
+        else:
+            ek = tl.load(exact_k_ptr + e_off, mask=valid)
+            ev = tl.load(exact_v_ptr + e_off, mask=valid)
+        tl.store(img_k_ptr + i_off, ek, mask=valid)
+        tl.store(img_v_ptr + i_off, ev, mask=valid)
+
+
+def kvarn_triton_overlay(image_k, image_v, layer, seqlens_1, bt_1,
+                         gps, sink_tokens, tail_effective):
+    """Fused exact overlay into fp16 image temps (non-SWA caller).
+
+    One launch replaces the per-group Python loop (tolist + int syncs +
+    per-group assigns). Absent exact blocks are skipped, matching the
+    torch fallback row-for-row. Loud failure when unrunnable.
+    """
+    if not _have_triton:
+        raise RuntimeError(
+            "KVarN Triton overlay requires triton (import failed on this host).")
+    if not image_k.is_cuda:
+        raise RuntimeError(
+            "KVarN Triton overlay requires CUDA tensors, got "
+            f"{image_k.device}.")
+    kvh, hd = layer.num_kv_heads, layer.head_dim
+    dev = image_k.device
+    maxw = sink_tokens + int(tail_effective)
+    _kvarn_overlay_kernel[(maxw,)](
+        image_k, image_v,
+        layer.exact_k, layer.exact_v, layer.exact_valid,
+        seqlens_1.to(dtype=torch.int32, device=dev),
+        bt_1.to(dtype=torch.int32, device=dev),
+        kvh, hd, gps,
+        int(tail_effective), sink_tokens, bool(layer.has_sink),
+        layer.tail_dtype == torch.bfloat16, maxw,
+    )
+
+
 def kvarn_triton_dequant_groups(records_G, layout,
                                k_bits: int, v_bits: int,
                                num_kv_heads: int, slices: int,
