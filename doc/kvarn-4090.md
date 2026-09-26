@@ -147,8 +147,27 @@ fp32 scoring logits, decode peaks are the honest cache comparison).
 | 32768 | 14.3s, 2293 tok/s (17.4GB) | 19.9s, 1643 tok/s (19.5GB) | 76.2 tok/s (18.4GB) | 56.9 tok/s (18.4GB) | 100.00% |
 
 PARITY=1 same code: 58.0/58.4/56.3 tok/s decode; KLD digits identical
-at all lengths. Kvarn costs no extra VRAM end-to-end vs fp16 at any
-length (decode peaks equal within 0.1GB).
+at all lengths. End-to-end allocator peaks are equal within 0.1GB --
+but that is shared weights/temps dominating, NOT cache parity.
+Cache-only accounting at 8k (per-tensor bytes, 16 layers):
+
+| store | fp16 | kvarn |
+|-------|------|-------|
+| pages (fp16 full ctx) | 554MB | — |
+| image `_img_k/_v` (fp16 full ctx) | — | 554MB |
+| staging `stage_k/_v` (fp16, all groups) | — | 554MB |
+| exact `exact_k/_v` (tail dtype, all groups) | — | 554MB |
+| records (quantized) | — | 151MB |
+| overlay stash + masks | — | ~17MB |
+| total | 0.55GB | 1.83GB |
+
+The quantized records (the actual win: 151MB vs 554MB) are buried
+under three full-context fp16 duplicates. The persistent image (the
+speed play) costs exactly one fp16 cache by construction, so the
+memory goal is currently INVERTED: more VRAM, not less. Reclaiming it
+needs imageless serve (online dequant, Bee-style fused attention)
+and/or windowed staging+exact instead of per-group statics -- a
+storage-layer redesign, scoped separately.
 Per-token profile (16 cached layers): store ~3.7ms/layer, serve
 ~1.1ms/layer, attention ~0.7ms/layer (fp16 step total 11.6ms).
 
