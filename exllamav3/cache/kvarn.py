@@ -911,9 +911,6 @@ class CacheLayer_kvarn(CacheLayer):
         self._img_v = None  # allocated lazily in get_kv; None = not yet built
         self._dirty_mask = torch.zeros((self.num_groups,), dtype=torch.bool,
                                        device=device)
-        self._stash_idx = None  # flat rows holding the live overlay (idea 4)
-        self._stash_k = None  # exact pre-overlay row copies for restore
-        self._stash_v = None
         # Incremental image only pays when the allocation is modest; huge
         # contexts keep the memory-slim full rematerialization path.
         self._img_ok = self.num_pages <= 128
@@ -932,9 +929,6 @@ class CacheLayer_kvarn(CacheLayer):
         self._img_k = None
         self._img_v = None
         self._dirty_mask = None
-        self._stash_idx = None
-        self._stash_k = None
-        self._stash_v = None
 
     # -- M4 record access (for online-dequant Triton/CUDA kernels) ----------
 
@@ -1308,36 +1302,6 @@ class CacheLayer_kvarn(CacheLayer):
                 ov.copy_(kvarn_wht_head(blk[1].float(), self.head_dim).half())
 
     @torch.inference_mode()
-    def _overlay_index(self, cache_seqlens: torch.Tensor,
-                       block_table: torch.Tensor) -> torch.Tensor:
-        """Flat physical row indices receiving the exact overlay (dedup).
-        Same row selection as _apply_exact_overlay below, without writes
-        or exact-block lookups: sink + resident tail rows per batch entry.
-        """
-        bsz = cache_seqlens.numel()
-        bt = block_table.long()
-        seqlens = cache_seqlens.long()
-        idx = []
-        for b in range(bsz):
-            n = int(seqlens[b])
-            if n <= 0:
-                continue
-            parts = []
-            if self.has_sink:
-                parts.append(torch.arange(min(KVAR_N_SINK_TOKENS, n), device=bt.device))
-            if self.tail_effective > 0:
-                parts.append(torch.arange(max(0, n - self.tail_effective), n, device=bt.device))
-            if not parts:
-                continue
-            pos = torch.unique(torch.cat(parts)).long()
-            pages = bt[b, pos // PAGE_SIZE]
-            offs = pos % PAGE_SIZE
-            idx.append(pages * PAGE_SIZE + offs)
-        if not idx:
-            return torch.empty((0,), dtype=torch.long, device=bt.device)
-        all_idx = torch.unique(torch.cat(idx)).to(torch.long)
-        return all_idx[(all_idx >= 0) & (all_idx < self.num_pages * PAGE_SIZE)]
-
     def _apply_exact_overlay(self, k: torch.Tensor, v: torch.Tensor,
                              cache_seqlens: torch.Tensor,
                              block_table: torch.Tensor):
@@ -1532,15 +1496,11 @@ class CacheLayer_kvarn(CacheLayer):
         # merged image for the single downstream softmax.
         #
         # Idea 2: the image persists across forwards; only groups dirtied
-        # since the last call are rematerialized (decode: ~1 group).
-        # Generation (no per-call clone): the overlay lands in place on
-        # the image and the overlaid rows are restored from an exact
-        # row-stash at the next call. Stash-restore is update_kv-pairing
-        # independent: merged rows survive exactly when update_kv persists
-        # them, i.e. identical survival semantics to the old clone (whose
-        # temps were likewise lost when update_kv skipped a forward).
-        # Modest allocations only (num_pages <= 128); huge contexts keep
-        # the memory-slim full rematerialization below.
+        # since the last call are rematerialized (decode: ~1 group). The
+        # overlay is per-call (depends on seqlens), so the image stays
+        # pre-overlay and each call serves a clone. Modest allocations
+        # only (num_pages <= 128); huge contexts keep the memory-slim
+        # full rematerialization below.
         kvh, hd = self.num_kv_heads, self.head_dim
         dev = self.device
         gps = PAGE_SIZE // KVAR_N_GROUP
@@ -1552,17 +1512,6 @@ class CacheLayer_kvarn(CacheLayer):
                     (self.num_pages, PAGE_SIZE, kvh, hd),
                     dtype=torch.half, device=dev)
                 self._img_v = torch.zeros_like(self._img_k)
-            # Restore rows still holding last call's overlay from the
-            # stash (exact copies). Dirty refresh below recomputes from
-            # records where content changed since, so restore-then-refresh
-            # order is correct in all interleavings.
-            if self._stash_idx is not None:
-                six = self._stash_idx.to(dev)
-                self._img_k.reshape(-1, kvh, hd)[six] = self._stash_k
-                self._img_v.reshape(-1, kvh, hd)[six] = self._stash_v
-                self._stash_idx = None
-                self._stash_k = None
-                self._stash_v = None
             if pages.numel():
                 Gs = (pages[:, None] * gps + torch.arange(gps, device=dev)) \
                     .reshape(-1)
@@ -1571,17 +1520,9 @@ class CacheLayer_kvarn(CacheLayer):
                 if dirty.numel():
                     self._refresh_groups(dirty)
                     self._dirty_mask[dirty] = False
-            # Overlay in place (no full clone): stash target rows first.
-            # Callers must treat the returned temps as borrowed: read-only
-            # except the attention fallback's in-flight merge.
-            k = self._img_k
-            v = self._img_v
-            ov = self._overlay_index(cache_seqlens, block_table).to(dev)
-            if ov.numel():
-                flat_k = k.reshape(-1, kvh, hd)
-                self._stash_idx = ov
-                self._stash_k = flat_k[ov].clone()
-                self._stash_v = v.reshape(-1, kvh, hd)[ov].clone()
+            # Serve a copy: the overlay mutates its target.
+            k = self._img_k.clone()
+            v = self._img_v.clone()
         else:
             k = torch.zeros((self.num_pages, PAGE_SIZE, kvh, hd),
                             dtype=torch.half, device=dev)
