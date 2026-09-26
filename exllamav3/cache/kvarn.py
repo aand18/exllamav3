@@ -1615,7 +1615,9 @@ class CacheLayer_kvarn(CacheLayer):
         fp16 temps k_tgt/v_tgt (shaped (pages, 256, kvh, hd)).
 
         Sealed groups come from the batched dequant (torch, or the fused
-        Triton kernel when opted in); open groups from stacked staging.
+        Triton kernel when opted in); open groups from stacked staging
+        (torch batched path, or the fused serve kernel when opted in:
+        gather + full head WHT + scatter, disjoint from the sealed set).
         Rows needing the torch inverse-WHT share one batched call; rows
         the kernel already 128-WHT'd get only the cross-slice stage.
         Per-row math is identical in all combinations."""
@@ -1643,11 +1645,23 @@ class CacheLayer_kvarn(CacheLayer):
         # crash the all-sealed refresh inside the WHT reshape.
         Gs_o = Gs[open_m]
         if Gs_o.numel():
-            # Static staging reads zeros for never-written groups: no
-            # tolist loop, no per-group syncs.
-            rot_k.append(self.stage_k[Gs_o].float())
-            rot_v.append(self.stage_v[Gs_o].float())
-            rot_gs.append(Gs_o)
+            if _kvarn_use_triton():
+                from ..modules.attention_fn.kvarn_triton import (
+                    kvarn_triton_available, kvarn_triton_serve_open)
+                assert kvarn_triton_available(), \
+                    "EXL3_KVARN_TRITON=1 but the Triton path is unavailable " \
+                    "(needs triton + CUDA); unset it for the torch path."
+                # Fused open serve (4 launches, zero syncs) replaces the
+                # rot-path gather + batched WHT + scatter below. Sealed
+                # members of Gs_o, if any, are skipped in-kernel (the
+                # sealed branch above owns them; sets are disjoint).
+                kvarn_triton_serve_open(k_tgt, v_tgt, self, Gs_o)
+            else:
+                # Static staging reads zeros for never-written groups:
+                # no tolist loop, no per-group syncs.
+                rot_k.append(self.stage_k[Gs_o].float())
+                rot_v.append(self.stage_v[Gs_o].float())
+                rot_gs.append(Gs_o)
         if rot_k:
             mat_k = kvarn_wht_head(torch.cat(rot_k), hd).half()
             mat_v = kvarn_wht_head(torch.cat(rot_v), hd).half()
