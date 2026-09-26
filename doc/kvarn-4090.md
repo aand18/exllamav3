@@ -135,7 +135,8 @@ are recorded above (fuse dequant into attention; batch, don't
 thread); this table is the timing baseline for our own regressions.
 
 Decode @8192, 1.40bpw 27B (64 greedy steps, warm inductor cache):
-fp16 86.0-86.6 tok/s vs kvarn 7.8-11.3 tok/s depending on the step below.
+fp16 86.0-86.6 tok/s vs kvarn 7.8-19.0 tok/s depending on the step below
+(current: 19.0 tok/s TRITON=1, fp16 86.5 same run).
 Per-token profile (16 cached layers): store ~3.7ms/layer, serve
 ~1.1ms/layer, attention ~0.7ms/layer (fp16 step total 11.6ms).
 
@@ -150,6 +151,19 @@ Generation optimization history (all KLD-identical, same-top 100%):
 - Ping-pong WHT (`294f238`) and Triton row-WHT kernel shared by
   dequant+store (`b2997ca`, parity-proven): ~zero end-to-end (cost is
   launch/sync count, not math). Now 12.1 tok/s (+36%).
+- Fused exact-overlay Triton kernel (`44e0b39`, 1 launch zero syncs,
+  `EXL3_KVARN_TRITON=1`, parity-proven): 13.0 tok/s.
+- `_touch_batch` batch-vectorized (`9a8427a`, 3 syncs/entry -> 1
+  whole-batch validation sync): 19.0 tok/s (+114% over baseline,
+  TRITON=1, fp16 86.5 same run). KLD digits identical throughout.
+- Triton FWHT exactness fixes (`aa88720`, same runs as the 19.0
+  number): `tl.debug_barrier` does not sync warps (triton 3.8/sm_89,
+  nondeterministic corruption at 1000+ rows) -> all FWHT launches
+  single-warp; fused dequant+WHT transformed the wrong axis for K
+  ([dim, token] tiles) -> K dequantized raw, transposed, slice-FWHT'd.
+  Both were masked until PARITY=1 ran at scale; TRITON=1 prefill
+  before this fix was nondeterministically corrupt. PARITY=1 suite
+  green 3x, stock 82-test suite green.
 - Kineto, 5 decode steps @8192: ~3000 aten calls/step, Self CPU
   112ms vs Self CUDA 19ms -- starved on the host. Top CPU: index
   29ms (448 calls x ~65us dispatch each), copy_ 18ms,
