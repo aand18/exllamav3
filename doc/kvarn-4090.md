@@ -154,8 +154,8 @@ each length, 27B dense 1.40bpw, `EXL3_KVARN_TRITON=1` parity-off
 phase (weights + cache + temps; prefill peaks include the full-length
 fp32 scoring logits, decode peaks are the honest cache comparison).
 
-| ctx | fp16 pre | kvarn pre | fp16 dec (peak) | kvarn dec (peak) | KLD same-top |
-|-----|----------|-----------|-----------------|------------------|--------------|
+| ctx | fp16 pp | kvarn pp | fp16 tg256 (peak) | kvarn tg256 (peak) | KLD same-top |
+|-----|---------|----------|-------------------|---------------------|--------------|
 | 8192 | 3.3s, 2449 tok/s (12.5GB) | 4.8s, 1696 tok/s (13.1GB) | 88.1 tok/s (11.9GB) | 58.3 tok/s (12.0GB) | 100.00% |
 | 16384 | 6.7s, 2458 tok/s (14.1GB) | 9.5s, 1722 tok/s (15.2GB) | 83.0 tok/s (14.1GB) | 58.7 tok/s (14.1GB) | 100.00% |
 | 32768 | 14.3s, 2293 tok/s (17.4GB) | 19.9s, 1643 tok/s (19.5GB) | 76.2 tok/s (18.4GB) | 56.9 tok/s (18.4GB) | 100.00% |
