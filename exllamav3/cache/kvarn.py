@@ -1798,11 +1798,18 @@ class CacheLayer_kvarn(CacheLayer):
                     self._stage_rev[Gs_o.to(torch.long)])
             else:
                 # Staging is slot-windowed (gather by slot); the image
-                # scatter below stays group-indexed. Unassigned groups
-                # cannot occur here (dirty-open implies stored).
+                # scatter below stays group-indexed. Groups never written
+                # have no slot (-1): they serve zeros (the old static
+                # zero invariant), via a clamped gather + zero-fill --
+                # sync-free (bool-mask fill is a kernel, not a sync).
                 slot_o = self._stage_rev[Gs_o.to(torch.long)]
-                rot_k.append(self.stage_k[slot_o].float())
-                rot_v.append(self.stage_v[slot_o].float())
+                neg = slot_o < 0
+                bk = self.stage_k[slot_o.clamp_min(0)].float()
+                bv = self.stage_v[slot_o.clamp_min(0)].float()
+                bk[neg] = 0.0
+                bv[neg] = 0.0
+                rot_k.append(bk)
+                rot_v.append(bv)
                 rot_gs.append(Gs_o)
         if rot_k:
             mat_k = kvarn_wht_head(torch.cat(rot_k), hd).half()

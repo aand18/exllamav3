@@ -313,11 +313,19 @@ def test_overlay_matches_torch_loop():
     se0 = torch.tensor([0], dtype=torch.int32, device="cuda")
     se = torch.tensor([300], dtype=torch.int32, device="cuda")
     gps = 2  # PAGE_SIZE // KVAR_N_GROUP
+    # Setup runs on the torch path (the fused overlay stashes + sets the
+    # pending flag; the documented unit-test purity below assumes torch).
+    old = os.environ.pop("EXL3_KVARN_TRITON", None)
+    try:
+        with torch.inference_mode():
+            lay.update_kv_direct(se0, bt, k, v, 300)
+            # Build the persistent image via a throwaway get_kv (torch path:
+            # image stays pre-overlay, overlay lands on the discarded clone).
+            lay.get_kv(se, bt)
+    finally:
+        if old is not None:
+            os.environ["EXL3_KVARN_TRITON"] = old
     with torch.inference_mode():
-        lay.update_kv_direct(se0, bt, k, v, 300)
-        # Build the persistent image via a throwaway get_kv (torch path:
-        # image stays pre-overlay, overlay lands on the discarded clone).
-        lay.get_kv(se, bt)
         t1k = lay._img_k.clone()
         t1v = lay._img_v.clone()
         lay._apply_exact_overlay(t1k, t1v, se, bt)
