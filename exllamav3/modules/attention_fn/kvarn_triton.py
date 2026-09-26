@@ -660,13 +660,13 @@ if _have_triton:
         KVH: tl.constexpr, HD: tl.constexpr,
     ):
         # Gather staging rows to fp32. Bit-identical to the torch
-        # .float() gather, including never-written slots: those read
-        # whatever staging holds there (zeros by the static-tensor
-        # reset invariant), exactly like the torch path, which applies
-        # no present-mask either. Sealed groups in ids gather harmlessly
-        # (their rows are discarded at scatter). Mask style (not
-        # branches) matches the store/overlay kernels: masked-off lanes
-        # issue no traffic and their values never reach a store.
+        # .float() gather, including never-written groups: those have no
+        # slot (-1) and serve zeros (the old static zero invariant),
+        # matching the torch clamp+zero-fill. Mask style (not branches)
+        # matches the store/overlay kernels: the clamped address keeps
+        # every pointer in range, masked-off lanes issue no traffic,
+        # other=0.0 fills the served zeros. Sealed groups in ids gather
+        # harmlessly (their rows are discarded at scatter).
         pid_d = tl.program_id(0)
         pid_s = tl.program_id(1)
         pid_h2 = tl.program_id(2)
@@ -674,13 +674,17 @@ if _have_triton:
         h = pid_h2 % KVH
         lane = tl.arange(0, HD)
         slot = tl.load(slot_ptr + pid_d)
-        s_off = (slot * 128 + pid_s) * KVH * HD + h * HD + lane
+        ok = slot >= 0
+        slot_c = tl.where(ok, slot, 0)
+        s_off = (slot_c * 128 + pid_s) * KVH * HD + h * HD + lane
         d_off = (pid_d * 128 + pid_s) * KVH * HD + h * HD + lane
         tl.store(buf_k_ptr + d_off,
-                 tl.load(stage_k_ptr + s_off, mask=is_k).to(tl.float32),
+                 tl.load(stage_k_ptr + s_off, mask=is_k & ok,
+                         other=0.0).to(tl.float32),
                  mask=is_k)
         tl.store(buf_v_ptr + d_off,
-                 tl.load(stage_v_ptr + s_off, mask=(~is_k)).to(tl.float32),
+                 tl.load(stage_v_ptr + s_off, mask=(~is_k) & ok,
+                         other=0.0).to(tl.float32),
                  mask=(~is_k))
 
     @triton.jit
