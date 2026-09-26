@@ -324,6 +324,18 @@ def _kvarn_use_triton() -> bool:
     return os.environ.get("EXL3_KVARN_TRITON", "0") == "1"
 
 
+def _kvarn_imageless() -> bool:
+    """
+    Opt-in gate for imageless serve (match-bee track): the persistent
+    fp16 image is never allocated; prefill/varlen serve from per-call
+    legacy rematerialization temps and decode serves online from records
+    (dispatch arm in attention_fn/dispatch.py). Default off: stock
+    behavior is the tested image path. Requires TRITON=1 for the decode
+    arm (checked loudly at dispatch); the get_kv half works anywhere.
+    """
+    return os.environ.get("EXL3_KVARN_IMAGELESS", "0") == "1"
+
+
 def kvarn_tail_policy_for(raw_requested_tokens: int, window: int) -> dict:
     """
     Bee tail helper (src/llama-kv-cache-kvarn.h:29-49).
@@ -991,7 +1003,7 @@ class CacheLayer_kvarn(CacheLayer):
         # legacy path above this is prefill-grade only (it rematerializes
         # the whole context per step: 8.2 tok/s at 32k vs 64 fp16).
         self._img_ok = self.num_pages <= 160
-        self._evict_tick = 0  # store calls since the last evict scan
+        self._evict_tick = 0  # rows stored since the last evict scan
         # Scratch for the fused single-row store's [code, group] report:
         # the kernel overwrites both words every launch, so one persistent
         # buffer replaces a per-call alloc (no fill needed, no staleness).
@@ -1461,8 +1473,13 @@ class CacheLayer_kvarn(CacheLayer):
         The old int(max()) quantum gate cost a DtoH sync per layer per
         call (16/step, Kineto top-5); the per-group int() reads are gone
         too (one vectorized mask over the resident set).
+        Row-budgeted (match-bee): the tick counts ROWS, not calls, so
+        chunked writes of <128 rows/call still scan every ~256 rows.
+        (Call-counted ticks let 64-row chunks accumulate 16k rows per
+        scan and overflow the 8 exact slots; the harness caught it.)
+        Steady single-row decode keeps the exact old cadence.
         """
-        self._evict_tick += 1
+        self._evict_tick += n_rows
         if n_rows < KVAR_N_GROUP and self._evict_tick < 256:
             return
         self._evict_tick = 0
@@ -1886,7 +1903,13 @@ class CacheLayer_kvarn(CacheLayer):
         kvh, hd = self.num_kv_heads, self.head_dim
         dev = self.device
         gps = PAGE_SIZE // KVAR_N_GROUP
-        if self._img_ok:
+        # Imageless mode (match-bee): the persistent image is never
+        # allocated; every call takes the legacy full-rematerialization
+        # path below (per-call temps, freed after the forward). Prefill
+        # pays rematerialization per chunk call (small vs chunk GEMMs);
+        # decode never calls get_kv (dispatch online arm serves from
+        # records instead).
+        if self._img_ok and not _kvarn_imageless():
             if self._img_k is None:
                 self._img_k = torch.zeros(
                     (self.num_pages, PAGE_SIZE, kvh, hd),
