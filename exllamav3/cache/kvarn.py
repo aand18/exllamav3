@@ -745,7 +745,8 @@ class CacheLayer_kvarn(CacheLayer):
     widths.
 
     Exact rows (ORIGINAL domain, ``tail_dtype``) live in on-demand
-    per-group ``exact_blocks`` covering only the resident window: the
+    per-group exact rows (``exact_k``/``exact_v`` static tensors gated by
+    ``exact_valid``) covering only the resident window: the
     logical sink (non-SWA) plus the trailing ``tail_effective`` tokens
     plus one rollback group (Bee compact N+R exact-history ring).
     Rotated-domain fp16 staging (``stage_k``/``stage_v`` static tensors,
@@ -888,7 +889,9 @@ class CacheLayer_kvarn(CacheLayer):
         self.records = None       # uint8 (num_groups, ncols, tile_bytes)
         self.stage_k = None  # half (num_groups, 128, kvh, hd) rotated fp16
         self.stage_v = None  # staging for unsealed groups; all-zero == none
-        self.exact_blocks = None  # {group: [k, v]} tail_dtype ORIGINAL, resident window only
+        self.exact_k = None  # tail_dtype (num_groups, 128, kvh, hd) ORIGINAL
+        self.exact_v = None  # exact rows, resident window only; valid mask gates
+        self.exact_valid = None  # bool (num_groups,): group has exact rows
         self.present = None       # bool (num_groups, 128)
         self.sealed = None        # bool (num_groups,)
         self.group_base = None    # int64 (num_groups,): logical pos of slot 0, -1 unwritten
@@ -908,7 +911,12 @@ class CacheLayer_kvarn(CacheLayer):
             (self.num_groups, KVAR_N_GROUP, self.num_kv_heads, self.head_dim),
             dtype=torch.half, device=device)
         self.stage_v = torch.zeros_like(self.stage_k)
-        self.exact_blocks = {}
+        self.exact_k = torch.zeros(
+            (self.num_groups, KVAR_N_GROUP, self.num_kv_heads, self.head_dim),
+            dtype=self.tail_dtype, device=device)
+        self.exact_v = torch.zeros_like(self.exact_k)
+        self.exact_valid = torch.zeros((self.num_groups,), dtype=torch.bool,
+                                       device=device)
         self.present = torch.zeros((self.num_groups, KVAR_N_GROUP),
                                    dtype=torch.bool, device=device)
         self.sealed = torch.zeros((self.num_groups,), dtype=torch.bool, device=device)
@@ -932,7 +940,9 @@ class CacheLayer_kvarn(CacheLayer):
         self.records = None
         self.stage_k = None
         self.stage_v = None
-        self.exact_blocks = None
+        self.exact_k = None
+        self.exact_v = None
+        self.exact_valid = None
         self.present = None
         self.sealed = None
         self.group_base = None
@@ -966,7 +976,7 @@ class CacheLayer_kvarn(CacheLayer):
             "swa_window": self.swa_window,
             "swa_ring_groups": self.swa_ring_groups,
             "stage_groups": sorted(self._live_stage_groups()),
-            "exact_groups": sorted(self.exact_blocks.keys()),
+            "exact_groups": sorted(self._live_exact_groups()),
         }
 
     # -- internal: store / seal / materialize --------------------------------
@@ -985,11 +995,18 @@ class CacheLayer_kvarn(CacheLayer):
         self.stage_v[g].zero_()
         return [self.stage_k[g], self.stage_v[g]]
 
+    def _live_exact_groups(self):
+        """Groups with resident exact rows (equivalent to the old
+        exact_blocks dict keys)."""
+        return self.exact_valid.nonzero().flatten().tolist()
+
     def _alloc_exact_block(self, g: int):
-        blk = [torch.zeros(self._block_shape(), dtype=self.tail_dtype, device=self.device),
-               torch.zeros(self._block_shape(), dtype=self.tail_dtype, device=self.device)]
-        self.exact_blocks[g] = blk
-        return blk
+        # Fresh blocks read zero (matches the old dict behavior where a
+        # missing entry meant zeros); callers then fill resident slots.
+        self.exact_k[g].zero_()
+        self.exact_v[g].zero_()
+        self.exact_valid[g] = True
+        return [self.exact_k[g], self.exact_v[g]]
 
     def _exact_keep(self, pos: torch.Tensor, n_new: int) -> torch.Tensor:
         """
@@ -1059,7 +1076,7 @@ class CacheLayer_kvarn(CacheLayer):
             self.present[gi] = False
             self.stage_k[gi].zero_()
             self.stage_v[gi].zero_()
-            self.exact_blocks.pop(gi, None)
+            self.exact_valid[gi] = False
             self.group_base[gi] = bnew
             self.page_pinned[page] = False
         self.stage_k[gi, si] = rk[0]
@@ -1067,11 +1084,10 @@ class CacheLayer_kvarn(CacheLayer):
         self.present[gi, si] = True
         if pos0 >= n_new - self.tail_effective - KVAR_N_TAIL_ROLLBACK_TOKENS or \
            (self.has_sink and pos0 < KVAR_N_SINK_TOKENS):
-            eblk = self.exact_blocks.get(gi)
-            if eblk is None:
-                eblk = self._alloc_exact_block(gi)
-            eblk[0][si] = ek[0]
-            eblk[1][si] = ev[0]
+            if not bool(self.exact_valid[gi]):
+                self._alloc_exact_block(gi)
+            self.exact_k[gi, si] = ek[0]
+            self.exact_v[gi, si] = ev[0]
         cur_owner = int(self.page_owner_n[page])
         self.page_owner_n[page] = n_new if cur_owner < 0 \
             else min(cur_owner, n_new)
@@ -1159,7 +1175,7 @@ class CacheLayer_kvarn(CacheLayer):
                 self.present[gi] = False
                 self.stage_k[gi].zero_()
                 self.stage_v[gi].zero_()
-                self.exact_blocks.pop(gi, None)
+                self.exact_valid[gi] = False
                 self.group_base[gi] = bnew
                 page = gi // (PAGE_SIZE // KVAR_N_GROUP)
                 self.page_pinned[page] = False
@@ -1187,11 +1203,10 @@ class CacheLayer_kvarn(CacheLayer):
             self.present[gi, slots] = True
             km = m & keep
             if bool(km.any()):
-                eblk = self.exact_blocks.get(gi)
-                if eblk is None:
-                    eblk = self._alloc_exact_block(gi)
-                eblk[0][s[km]] = ek[km]
-                eblk[1][s[km]] = ev[km]
+                if not bool(self.exact_valid[gi]):
+                    self._alloc_exact_block(gi)
+                self.exact_k[gi, s[km]] = ek[km]
+                self.exact_v[gi, s[km]] = ev[km]
         # Every touched group changed content (stage write, reset or
         # unseal): refresh it on next materialization (idea 2).
         gm = g.to(device=self.device, dtype=torch.long)
@@ -1233,7 +1248,8 @@ class CacheLayer_kvarn(CacheLayer):
         if top // 128 == self._evict_q:
             return
         self._evict_q = top // 128
-        for gi in list(self.exact_blocks.keys()):
+        for gi in self.exact_valid.nonzero().flatten().tolist():
+            gi = int(gi)
             p = gi // gps
             if bool(self.page_pinned[p]):
                 continue
@@ -1244,7 +1260,7 @@ class CacheLayer_kvarn(CacheLayer):
             if self.has_sink and 0 <= b < KVAR_N_GROUP:
                 continue  # logical sink (base 0) stays exact
             if b >= 0 and b + KVAR_N_GROUP <= owner_n - floor:
-                del self.exact_blocks[gi]
+                self.exact_valid[gi] = False
 
     @torch.inference_mode()
     def _seal_groups_batched(self, gs: torch.Tensor):
@@ -1442,15 +1458,14 @@ class CacheLayer_kvarn(CacheLayer):
             s = offs % KVAR_N_GROUP
             for gi in torch.unique(g).tolist():
                 gi = int(gi)
-                eblk = self.exact_blocks.get(gi)
-                if eblk is None:
+                if not bool(self.exact_valid[gi]):
                     continue
                 m = (g == gi)
                 pm, om, sm = pages[m], offs[m], s[m]
                 # NOTE: indexed assignment (not .copy_ on a gather, which would
                 # hit a temporary) so the overlay lands in the temps.
-                k[pm, om] = eblk[0][sm].to(k.dtype)
-                v[pm, om] = eblk[1][sm].to(v.dtype)
+                k[pm, om] = self.exact_k[gi, sm].to(k.dtype)
+                v[pm, om] = self.exact_v[gi, sm].to(v.dtype)
 
     # -- CacheLayer interface --------------------------------------------------
 
@@ -1706,7 +1721,7 @@ class CacheLayer_kvarn(CacheLayer):
                 self.sealed[gt] = False
                 self.stage_k[gt].zero_()
                 self.stage_v[gt].zero_()
-                self.exact_blocks.pop(gt, None)
+                self.exact_valid[gt] = False
                 continue
             self.group_base[gt] = fb
             self.present[gt] = False
@@ -1721,16 +1736,16 @@ class CacheLayer_kvarn(CacheLayer):
                 self.stage_k[gt].zero_()
                 self.stage_v[gt].zero_()
                 # Exact blocks travel too: the destination sequence's tail
-                # may cover these positions.
-                if gf in source.exact_blocks:
-                    sb = source.exact_blocks[gf]
-                    db = self.exact_blocks.get(gt)
-                    if db is None:
-                        db = self._alloc_exact_block(gt)
-                    db[0].copy_(sb[0], non_blocking=True)
-                    db[1].copy_(sb[1], non_blocking=True)
+                # may cover these positions. (Sealed branch is always
+                # full-group, so whole-block copies match the old code.)
+                if bool(source.exact_valid[gf]):
+                    self._alloc_exact_block(gt)
+                    self.exact_k[gt].copy_(source.exact_k[gf],
+                                           non_blocking=True)
+                    self.exact_v[gt].copy_(source.exact_v[gf],
+                                           non_blocking=True)
                 else:
-                    self.exact_blocks.pop(gt, None)
+                    self.exact_valid[gt] = False
             else:
                 self.sealed[gt] = False
                 # Staging travels (or is rebuilt from the sealed records
@@ -1757,18 +1772,17 @@ class CacheLayer_kvarn(CacheLayer):
                 else:
                     self.stage_k[gt].zero_()
                     self.stage_v[gt].zero_()
-                if gf in source.exact_blocks:
-                    sb = source.exact_blocks[gf]
-                    dst = self.exact_blocks.get(gt)
-                    if dst is None:
-                        dst = self._alloc_exact_block(gt)
-                    dst[0][:nrows].copy_(sb[0][:nrows], non_blocking=True)
-                    dst[1][:nrows].copy_(sb[1][:nrows], non_blocking=True)
+                if bool(source.exact_valid[gf]):
+                    self._alloc_exact_block(gt)
+                    self.exact_k[gt, :nrows] \
+                        .copy_(source.exact_k[gf, :nrows], non_blocking=True)
+                    self.exact_v[gt, :nrows] \
+                        .copy_(source.exact_v[gf, :nrows], non_blocking=True)
                     if nrows < KVAR_N_GROUP:
-                        dst[0][nrows:].zero_()
-                        dst[1][nrows:].zero_()
+                        self.exact_k[gt, nrows:].zero_()
+                        self.exact_v[gt, nrows:].zero_()
                 else:
-                    self.exact_blocks.pop(gt, None)
+                    self.exact_valid[gt] = False
         # Destination content changed in every branch above (copied,
         # rebuilt or reset): refresh it on next materialization (idea 2).
         self._dirty_mask[to_page * gps: to_page * gps + gps] = True
@@ -1792,8 +1806,8 @@ class CacheLayer_kvarn(CacheLayer):
         out = [self.records]
         for g in self._live_stage_groups():
             out += [self.stage_k[g], self.stage_v[g]]
-        for g in sorted(self.exact_blocks.keys()):
-            out += self.exact_blocks[g]
+        for g in self._live_exact_groups():
+            out += [self.exact_k[g], self.exact_v[g]]
         return out
 
     def _resident_bytes(self, blocks: dict) -> int:
@@ -1808,8 +1822,10 @@ class CacheLayer_kvarn(CacheLayer):
         # Compressed records plus the compact exact (N+R) history: the
         # persistent footprint. Resident exact is bounded by the sink +
         # tail window, so this lands far below fp16.
-        return int(self.records.numel()) * torch.uint8.itemsize + \
-            self._resident_bytes(self.exact_blocks)
+        n_ex = int(self.exact_valid.sum())
+        blk = KVAR_N_GROUP * self.num_kv_heads * self.head_dim * \
+            self.tail_dtype.itemsize * 2
+        return int(self.records.numel()) * torch.uint8.itemsize + n_ex * blk
 
     @override
     def overhead_size(self):
