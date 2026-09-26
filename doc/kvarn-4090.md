@@ -135,8 +135,8 @@ are recorded above (fuse dequant into attention; batch, don't
 thread); this table is the timing baseline for our own regressions.
 
 Decode @8192, 1.40bpw 27B (64 greedy steps, warm inductor cache):
-fp16 83.7-86.9 tok/s vs kvarn 7.8-32.0 tok/s depending on the step below
-(current: 32.0 tok/s TRITON=1, fp16 86.7 same run).
+fp16 83.7-86.9 tok/s vs kvarn 7.8-35.2 tok/s depending on the step below
+(current: 35.2 tok/s TRITON=1, fp16 86.3 same run).
 Per-token profile (16 cached layers): store ~3.7ms/layer, serve
 ~1.1ms/layer, attention ~0.7ms/layer (fp16 step total 11.6ms).
 
@@ -205,6 +205,19 @@ Generation optimization history (all KLD-identical, same-top 100%):
   kvarn prefill 5.0-5.1s vs 4.9s, run noise). KLD digits identical;
   PARITY=1 clean at 8k; CPU suite 73 passed; triton twins 9 passed
   1 skipped (per-step path agreement + image state asserted).
+- Steady-path call-trimming (all numerics-preserving): `_touch_batch`
+  bsz==1 fast path (whole-row validate + owner max-update, no arange +
+  2D mask, ~8 launches saved; -1 padding filtered, never wraps onto
+  the last owner slot); update_kv length==1 `pos` is a slice, not an
+  alloc+add; fused store takes fp16 exact rows (kernel downcasts on
+  load, same RNE bits -- twin-asserted) with a persistent per-layer
+  status buffer (no per-call alloc); redundant `bt.long()` in the
+  overlay branch dropped: 35.2 tok/s (+10% over 32.0, runs 34.7-35.2,
+  fp16 85.3-86.3 same runs; kvarn prefill 4.9-5.1s, no regression).
+  KLD digits identical; PARITY=1 clean at 8k; CPU 73 + twins green.
+  (Copy+overlay single-kernel fusion was considered and rejected: the
+  copy grid and overlay grid would write the same temp rows from
+  different programs with a required order and no cross-CTA barrier.)
 - torch.compile probe (`eval/kvarn_compile_probe.py`): 585 dynamo
   calls into 63 unique graphs, recompile limit hit on id-keyed
   `params['dev_cache']` -- fragmentation, not fusion. The
