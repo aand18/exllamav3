@@ -841,3 +841,326 @@ def kvarn_triton_dequant_groups(records_G, layout,
               v_bits, do_wht).reshape(Gg, num_kv_heads, slices, 128, 128)
     bv = vt.permute(0, 3, 1, 2, 4).reshape(Gg, 128, num_kv_heads, hd)
     return bk, bv
+
+
+if _have_triton:
+    @triton.jit
+    def _kvarn_online_kvarn_online_kcol(gbase_u8, gbase_f16, C: tl.constexpr, B: tl.constexpr,
+              PAY_OFF, SC2, ZP2, OT2, BITS: tl.constexpr,
+              pid_h, SL: tl.constexpr, t, lane):
+        sl = lane // 128
+        dd = lane % 128
+        c = pid_h * SL + sl
+        pay = gbase_u8 + c * B + PAY_OFF
+        v = dd * 128 + t
+        q = tl.zeros_like(lane)
+        for i in tl.static_range(8):
+            if i < BITS:
+                b = v * BITS + i
+                byteval = tl.load(pay + b // 8)
+                q += ((byteval.to(tl.int32) >> (b % 8)) & 1) << i
+        sc = tl.load(gbase_f16 + (c * B) // 2 + SC2 + dd).to(tl.float32)
+        zp = tl.load(gbase_f16 + (c * B) // 2 + ZP2 + dd).to(tl.float32)
+        oth = tl.load(gbase_f16 + (c * B) // 2 + OT2 + t).to(tl.float32)
+        return (q.to(tl.float32) * sc + zp) * oth
+
+
+    @triton.jit
+    def _kvarn_online_kvarn_online_vrow(gbase_u8, gbase_f16, C: tl.constexpr, B: tl.constexpr,
+              PAY_OFF, SC2, ZP2, OT2, BITS: tl.constexpr,
+              pid_h, SL: tl.constexpr, t, lane):
+        sl = lane // 128
+        dd = lane % 128
+        c = pid_h * SL + sl
+        pay = gbase_u8 + c * B + PAY_OFF
+        v = t * 128 + dd
+        q = tl.zeros_like(lane)
+        for i in tl.static_range(8):
+            if i < BITS:
+                b = v * BITS + i
+                byteval = tl.load(pay + b // 8)
+                q += ((byteval.to(tl.int32) >> (b % 8)) & 1) << i
+        sc = tl.load(gbase_f16 + (c * B) // 2 + SC2 + t).to(tl.float32)
+        zp = tl.load(gbase_f16 + (c * B) // 2 + ZP2 + t).to(tl.float32)
+        oth = tl.load(gbase_f16 + (c * B) // 2 + OT2 + dd).to(tl.float32)
+        return (q.to(tl.float32) * sc + zp) * oth
+
+
+    @triton.jit
+    def _kvarn_online_block_kernel(
+        qw_ptr, rec_ptr, rec_f16_ptr, ids_ptr,
+        m_ptr, l_ptr, out_ptr,  # (KVH, QPK, NB), ..., (KVH, QPK, NB, HD)
+        K_PAY_OFF, K_SC2, K_ZP2, K_OT2, K_BITS: tl.constexpr,
+        V_PAY_OFF, V_SC2, V_ZP2, V_OT2, V_BITS: tl.constexpr,
+        C: tl.constexpr, B: tl.constexpr, SL: tl.constexpr,
+        KVH: tl.constexpr, QPK: tl.constexpr, QPAD: tl.constexpr,
+        HD: tl.constexpr, NB: tl.constexpr, SCALE: tl.constexpr,
+    ):
+        """One program = one (kv head, sealed group). 32 outer iters x 4
+        tokens with a joint block softmax update (depth 32, not 128)."""
+        pid_h = tl.program_id(0)
+        pid_b = tl.program_id(1)
+        g = tl.load(ids_ptr + pid_b)
+        lane = tl.arange(0, HD)
+        qoff = tl.arange(0, QPAD)
+        qmask = qoff < QPK
+        q = tl.load(qw_ptr + (pid_h * QPK) * HD + qoff[:, None] * HD
+                    + lane[None, :], mask=qmask[:, None], other=0.0)
+        m = tl.full([QPAD], float("-inf"), dtype=tl.float32)
+        l = tl.zeros([QPAD], dtype=tl.float32)
+        acc = tl.zeros([QPAD, HD], dtype=tl.float32)
+        gbase_u8 = rec_ptr + g * C * B
+        gbase_f16 = rec_f16_ptr + (g * C * B) // 2
+        for t0 in tl.range(32):
+            t = t0 * 4
+            k0 = _kvarn_online_kvarn_online_kcol(gbase_u8, gbase_f16, C, B, K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
+                       K_BITS, pid_h, SL, t, lane)
+            k1 = _kvarn_online_kvarn_online_kcol(gbase_u8, gbase_f16, C, B, K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
+                       K_BITS, pid_h, SL, t + 1, lane)
+            k2 = _kvarn_online_kvarn_online_kcol(gbase_u8, gbase_f16, C, B, K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
+                       K_BITS, pid_h, SL, t + 2, lane)
+            k3 = _kvarn_online_kvarn_online_kcol(gbase_u8, gbase_f16, C, B, K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
+                       K_BITS, pid_h, SL, t + 3, lane)
+            s0 = tl.sum(q * k0[None, :], axis=1) * SCALE
+            s1 = tl.sum(q * k1[None, :], axis=1) * SCALE
+            s2 = tl.sum(q * k2[None, :], axis=1) * SCALE
+            s3 = tl.sum(q * k3[None, :], axis=1) * SCALE
+            smax = tl.maximum(tl.maximum(s0, s1), tl.maximum(s2, s3))
+            m_new = tl.maximum(m, smax)
+            alpha = tl.exp(m - m_new)
+            e0 = tl.exp(s0 - m_new)
+            e1 = tl.exp(s1 - m_new)
+            e2 = tl.exp(s2 - m_new)
+            e3 = tl.exp(s3 - m_new)
+            l = l * alpha + e0 + e1 + e2 + e3
+            v0 = _kvarn_online_kvarn_online_vrow(gbase_u8, gbase_f16, C, B, V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
+                       V_BITS, pid_h, SL, t, lane)
+            v1 = _kvarn_online_kvarn_online_vrow(gbase_u8, gbase_f16, C, B, V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
+                       V_BITS, pid_h, SL, t + 1, lane)
+            v2 = _kvarn_online_kvarn_online_vrow(gbase_u8, gbase_f16, C, B, V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
+                       V_BITS, pid_h, SL, t + 2, lane)
+            v3 = _kvarn_online_kvarn_online_vrow(gbase_u8, gbase_f16, C, B, V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
+                       V_BITS, pid_h, SL, t + 3, lane)
+            acc = acc * alpha[:, None] + e0[:, None] * v0[None, :] \
+                + e1[:, None] * v1[None, :] + e2[:, None] * v2[None, :] \
+                + e3[:, None] * v3[None, :]
+            m = m_new
+        qoff = tl.arange(0, QPAD)
+        qmask = qoff < QPK
+        tl.store(m_ptr + (pid_h * QPAD * NB) + qoff * NB + pid_b, m,
+                 mask=qmask)
+        tl.store(l_ptr + (pid_h * QPAD * NB) + qoff * NB + pid_b, l,
+                 mask=qmask)
+        tl.store(out_ptr + ((pid_h * QPAD * NB) + qoff[:, None] * NB + pid_b)
+                 * HD + lane[None, :], acc, mask=qmask[:, None])
+
+
+    @triton.jit
+    def _kvarn_online_combine_kernel(
+        m_ptr, l_ptr, acc_ptr,   # (KVH, QPK, NB), ..., (KVH, QPK, NB, HD)
+        out_ptr,                 # (QH, HD) fp32 ORIGINAL domain (WHT folded)
+        KVH: tl.constexpr, QPK: tl.constexpr, QPAD: tl.constexpr,
+        NB: tl.constexpr, NBPAD: tl.constexpr,
+        HD: tl.constexpr, SL: tl.constexpr, SSCALE: tl.constexpr,
+    ):
+        """One program = one q-head: online-reduce NB block partials, then
+        full head WHT in place (per-slice FWHT + cross-slice + scale, same
+        order as _kvarn_wht_hd_kernel). num_warps=1 REQUIRED. NB pads to
+        NBPAD (pow2); scalar block weights come from one-hot selects."""
+        pid = tl.program_id(0)
+        ph = pid // QPK
+        pq = pid % QPK
+        lane = tl.arange(0, HD)
+        nboff = tl.arange(0, NBPAD)
+        nbmask = nboff < NB
+        m = tl.load(m_ptr + (ph * QPAD + pq) * NB + nboff, mask=nbmask,
+                    other=float("-inf"))
+        l = tl.load(l_ptr + (ph * QPAD + pq) * NB + nboff, mask=nbmask, other=0.0)
+        m_all = tl.max(m)
+        e = tl.exp(m - m_all)
+        den = tl.sum(l * e)
+        num = tl.zeros([HD], dtype=tl.float32)
+        for b in tl.range(NBPAD):
+            active = b < NB
+            eb = tl.sum(tl.where(nboff == b, e, 0.0))
+            ab = tl.load(acc_ptr + ((ph * QPAD + pq) * NB + b) * HD + lane,
+                         mask=active, other=0.0)
+            num += ab * eb
+        row = num / den
+        base = out_ptr + pid * HD
+        tl.store(base + lane, row)
+        for _sl in tl.static_range(4):
+            if _sl < SL:
+                _fwht128_block(base + _sl * 128, tl.arange(0, 128))
+        tl.debug_barrier()
+        if SL > 1:
+            cur = tl.load(base + lane)
+            prt = tl.load(base + (lane ^ 128))
+            tl.store(base + lane,
+                     tl.where((lane & 128) == 0, cur + prt, prt - cur))
+            tl.debug_barrier()
+        if SL > 2:
+            cur = tl.load(base + lane)
+            prt = tl.load(base + (lane ^ 256))
+            tl.store(base + lane,
+                     tl.where((lane & 256) == 0, cur + prt, prt - cur))
+            tl.debug_barrier()
+        tl.store(base + lane, tl.load(base + lane) * SSCALE)
+
+
+
+
+if _have_triton:
+    @triton.jit
+    def _kvarn_online_qwht_kernel(
+        q_ptr,               # (QH, HD) fp16 query rows
+        scratch_ptr,         # (QH, HD) fp32 persistent scratch (per-row region)
+        out_ptr,             # (QH, HD) fp32 WHT'd rows
+        QH: tl.constexpr, HD: tl.constexpr, SL: tl.constexpr,
+        SSCALE: tl.constexpr,
+    ):
+        """Task 2: fused fp16->fp32 convert + full head WHT for tiny Q batches.
+        One launch replaces convert + alloc + copy + WHT (5 dispatches). Stage
+        order identical to _kvarn_wht_hd_kernel (per-slice FWHT via the row's
+        own scratch region, cross-slice stages, scale) for bit-exactness.
+        num_warps=1 (FWHT exchange needs lockstep)."""
+        pid = tl.program_id(0)
+        cols = tl.arange(0, HD)
+        base = scratch_ptr + pid * HD
+        # Convert straight into this row's scratch region.
+        tl.store(base + cols, tl.load(q_ptr + pid * HD + cols).to(tl.float32))
+        for _sl in tl.static_range(4):
+            if _sl < SL:
+                sbase = base + _sl * 128
+                scols = tl.arange(0, 128)
+                tl.debug_barrier()
+                for _s in tl.static_range(7):
+                    s = 1 << _s
+                    cur = tl.load(sbase + scols)
+                    prt = tl.load(sbase + (scols ^ s))
+                    tl.store(sbase + scols,
+                             tl.where((scols & s) == 0, cur + prt, prt - cur))
+                    tl.debug_barrier()
+                tl.store(sbase + scols,
+                         tl.load(sbase + scols) * 0.08838834764831845)
+        tl.debug_barrier()
+        if SL > 1:
+            cur = tl.load(base + cols)
+            prt = tl.load(base + (cols ^ 128))
+            tl.store(base + cols,
+                     tl.where((cols & 128) == 0, cur + prt, prt - cur))
+            tl.debug_barrier()
+        if SL > 2:
+            cur = tl.load(base + cols)
+            prt = tl.load(base + (cols ^ 256))
+            tl.store(base + cols,
+                     tl.where((cols & 256) == 0, cur + prt, prt - cur))
+            tl.debug_barrier()
+        tl.store(out_ptr + pid * HD + cols,
+                 tl.load(base + cols) * SSCALE)
+
+
+
+
+def _kvarn_online_buffers(layer, qh, qpad, hd, dev):
+    """Lazy persistent online-serve workspace (no per-step allocs).
+
+    Sized for max groups (num_groups); steps slice [:nb]. Mirrors the
+    _ov_stash pattern: allocate once, reuse across steps. Holds (m, l)
+    block stats, fp32 block outputs, WHT'd queries + Q-WHT scratch, and
+    the final output rows. Small vs the image it replaces (~2.5MB/layer
+    at 8k-class geometry vs 35MB image).
+    """
+    G = int(layer.num_groups)
+    need = (qh, qpad, G, hd)
+    have = getattr(layer, "_ov_online_shape", None)
+    if have != need or getattr(layer, "_ov_online_m", None) is None:
+        kvh = int(layer.num_kv_heads)
+        layer._ov_online_m = torch.empty((kvh, qpad, G), dtype=torch.float32,
+                                         device=dev)
+        layer._ov_online_l = torch.empty((kvh, qpad, G), dtype=torch.float32,
+                                         device=dev)
+        layer._ov_online_acc = torch.empty((kvh, qpad, G, hd),
+                                           dtype=torch.float32, device=dev)
+        layer._ov_online_qw = torch.empty((qh, hd), dtype=torch.float32,
+                                          device=dev)
+        layer._ov_online_qs = torch.empty((qh, hd), dtype=torch.float32,
+                                          device=dev)
+        layer._ov_online_out = torch.empty((qh, hd), dtype=torch.float32,
+                                           device=dev)
+        layer._ov_online_shape = need
+    return (layer._ov_online_m, layer._ov_online_l, layer._ov_online_acc,
+            layer._ov_online_qw, layer._ov_online_qs, layer._ov_online_out)
+
+
+def kvarn_triton_qwht(q, scratch, out, slices, sscale):
+    """Fused fp16->fp32 convert + full head WHT for tiny Q batches.
+
+    One launch replaces convert + alloc + copy + WHT (5 dispatches).
+    Stage order identical to _kvarn_wht_hd_kernel: bit-exact vs
+    kvarn_triton_wht_rows. Loud failure (never silent) when unrunnable.
+    """
+    if not _have_triton:
+        raise RuntimeError(
+            "KVarN Triton Q-WHT requires triton (import failed on this host).")
+    if not q.is_cuda:
+        raise RuntimeError(
+            "KVarN Triton Q-WHT requires CUDA tensors, got "
+            f"{q.device}.")
+    qh, hd = q.shape
+    assert out.shape == (qh, hd) and scratch.shape == (qh, hd)
+    assert out.dtype == torch.float32 and scratch.dtype == torch.float32
+    assert slices * 128 == hd
+    _kvarn_online_qwht_kernel[(qh,)](q, scratch, out, qh, hd, slices,
+                                     sscale, num_warps=1)
+    return out
+
+
+def kvarn_triton_online_decode(layer, qw, ids, qpk, scale):
+    """Fused online attention over sealed groups (imageless serve).
+
+    qw: (QH, HD) fp32 WHT'd queries (via kvarn_triton_qwht). ids: (NB,)
+    int64 sealed group ids. Returns (QH, HD) fp32 out in the ORIGINAL
+    domain (out-WHT folded into the combine). 2 launches + 0 syncs
+    (NB from shape). Tail/open rows are NOT covered here: the caller
+    serves them from exact/staging and merges (global online combine).
+    Loud failure (never silent) when unrunnable.
+    """
+    if not _have_triton:
+        raise RuntimeError(
+            "KVarN Triton online decode requires triton (import failed).")
+    dev = qw.device
+    if dev.type != "cuda":
+        raise RuntimeError(
+            "KVarN Triton online decode requires CUDA tensors, got "
+            f"{qw.device}.")
+    kvh, hd = int(layer.num_kv_heads), int(layer.head_dim)
+    sl = int(layer.slices)
+    assert hd == sl * 128
+    qh = kvh * qpk
+    assert qw.shape == (qh, hd)
+    nb = int(ids.numel())
+    if nb == 0:
+        return torch.zeros((qh, hd), dtype=torch.float32, device=dev)
+    qpad = 1 << (qpk - 1).bit_length()
+    nbpad = 1 << (nb - 1).bit_length()
+    m, l, acc, _, _, out = _kvarn_online_buffers(layer, qh, qpad, hd, dev)
+    L = layer.layout
+    rec = layer.records
+    rec_f16 = rec.view(torch.float16)
+    _kvarn_online_block_kernel[(kvh, nb,)](
+        qw, rec, rec_f16, ids, m, l, acc,
+        L.k_payload_off,
+        L.k_s_col_off // 2, L.k_zp_off // 2, L.k_s_row_off // 2,
+        int(layer.k_bits),
+        L.v_payload_off,
+        L.v_s_row_off // 2, L.v_zp_off // 2, L.v_s_col_off // 2,
+        int(layer.v_bits),
+        rec.shape[1], rec.shape[2], sl,
+        kvh, qpk, qpad, hd, nb, scale,
+        num_warps=4)
+    _kvarn_online_combine_kernel[(qh,)](
+        m, l, acc, out, kvh, qpk, qpad, nb, nbpad, hd, sl,
+        1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5),
+        num_warps=1)
+    return out
