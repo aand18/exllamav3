@@ -934,6 +934,18 @@ class CacheLayer_kvarn(CacheLayer):
         # nonzero sync entirely (the fused store keeps the image current
         # via write-through, so the mask is empty almost every step).
         self._dirty_any = False
+        # Slot-remap tables for windowed staging/exact (memory plan):
+        # live groups map 1:1 onto S_STAGE/S_EXACT slots; group-id
+        # indexed tensors shrink to slot-indexed windows in Task 3/4.
+        # Until then these tables exist but nothing reads them.
+        self._stage_slots = torch.full((4,), -1, dtype=torch.int64,
+                                       device=device)
+        self._stage_rev = torch.full((self.num_groups,), -1,
+                                     dtype=torch.int64, device=device)
+        self._exact_slots = torch.full((4,), -1, dtype=torch.int64,
+                                       device=device)
+        self._exact_rev = torch.full((self.num_groups,), -1,
+                                     dtype=torch.int64, device=device)
         # Page -> groups map (num_pages, gps): constant gather replacing
         # per-call pages[:,None]*gps + arange in get_kv (~3 launches).
         _gps = PAGE_SIZE // KVAR_N_GROUP
@@ -972,9 +984,53 @@ class CacheLayer_kvarn(CacheLayer):
         self._img_v = None
         self._dirty_mask = None
         self._dirty_any = False
+        self._stage_slots = None
+        self._stage_rev = None
+        self._exact_slots = None
+        self._exact_rev = None
         self._page_groups = None
         self._evict_tick = 0
         self._store_status = None
+
+    # -- Slot-remap for windowed staging/exact (memory plan) -----------------
+
+    def _stage_slot(self, g: int) -> int:
+        """Slot holding group g's staging rows; assigns a free slot."""
+        s = int(self._stage_rev[g])
+        if s >= 0:
+            return s
+        free = (self._stage_slots < 0).nonzero().flatten()
+        assert free.numel(), "KVarN: staging slot overflow"
+        s = int(free[0])
+        self._stage_slots[s] = g
+        self._stage_rev[g] = s
+        return s
+
+    def _stage_release(self, g: int) -> None:
+        """Free group g's staging slot (idempotent)."""
+        s = int(self._stage_rev[g])
+        if s >= 0:
+            self._stage_slots[s] = -1
+            self._stage_rev[g] = -1
+
+    def _exact_slot(self, g: int) -> int:
+        """Slot holding group g's exact rows; assigns a free slot."""
+        s = int(self._exact_rev[g])
+        if s >= 0:
+            return s
+        free = (self._exact_slots < 0).nonzero().flatten()
+        assert free.numel(), "KVarN: exact slot overflow"
+        s = int(free[0])
+        self._exact_slots[s] = g
+        self._exact_rev[g] = s
+        return s
+
+    def _exact_release(self, g: int) -> None:
+        """Free group g's exact slot (idempotent)."""
+        s = int(self._exact_rev[g])
+        if s >= 0:
+            self._exact_slots[s] = -1
+            self._exact_rev[g] = -1
 
     # -- M4 record access (for online-dequant Triton/CUDA kernels) ----------
 
