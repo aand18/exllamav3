@@ -288,8 +288,8 @@ def test_copy_page():
     assert not bool(dst2.sealed[0])
     # M4: compact per-group blocks travel remapped (src page-1 head group
     # is physical group 2, dst page-0 head group is physical group 0).
-    assert torch.equal(dst2.stage_blocks[0][0][:44], layer.stage_blocks[2][0][:44])
-    assert torch.equal(dst2.stage_blocks[0][1][:44], layer.stage_blocks[2][1][:44])
+    assert torch.equal(dst2.stage_k[0][:44], layer.stage_k[2][:44])
+    assert torch.equal(dst2.stage_v[0][:44], layer.stage_v[2][:44])
     assert torch.equal(dst2.exact_blocks[0][0][:44], layer.exact_blocks[2][0][:44])
 
 
