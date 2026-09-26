@@ -58,8 +58,8 @@ def main():
           f"probed: {type(lay0).__name__}", flush=True)
     assert "kvarn" in type(lay0).__name__.lower(), type(lay0).__name__
 
-    # A. get_kv serve alone (block table for full past, fixed seqlens).
-    bt = torch.arange(n // 256, dtype=torch.int32, device="cuda:0") \
+    # A. get_kv serve alone (block table covers the whole allocation).
+    bt = torch.arange(max_tok // 256, dtype=torch.int32, device="cuda:0") \
         .unsqueeze(0).expand(1, -1).contiguous()
     seql = torch.tensor([n], dtype=torch.int32)
     t0 = time.time()
