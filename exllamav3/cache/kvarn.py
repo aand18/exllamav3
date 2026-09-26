@@ -1533,8 +1533,16 @@ class CacheLayer_kvarn(CacheLayer):
                 self.num_kv_heads, self.slices, do_wht=True)
             if kvarn_triton_parity_check():
                 bk_r, bv_r = self._dequant_groups_batched_torch(Gs)
-                ref_k = kvarn_wht_head(bk_r, self.head_dim)
-                ref_v = kvarn_wht_head(bv_r, self.head_dim)
+                # Per-128-slice reference (NOT the full head WHT): the
+                # fused output has the per-slice FWHT done with the
+                # cross-slice stage pending (applied by _refresh_into via
+                # kvarn_wht_slices, same split as the torch path would
+                # get from kvarn_wht_head = per-slice + cross-slice).
+                sl = self.slices
+                ref_k = kvarn_hadamard_128(
+                    bk_r.reshape(-1, sl, KVAR_N_GROUP)).reshape_as(bk_r)
+                ref_v = kvarn_hadamard_128(
+                    bv_r.reshape(-1, sl, KVAR_N_GROUP)).reshape_as(bv_r)
                 assert torch.equal(bk_t, ref_k) and \
                     torch.equal(bv_t, ref_v), \
                     "KVarN Triton fused dequant+WHT disagrees with the " \

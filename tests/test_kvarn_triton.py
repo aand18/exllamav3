@@ -170,6 +170,15 @@ def test_wht_rows_matches_torch_head():
         got = kt.kvarn_triton_wht_rows(x, hd)
         ref = kvarn.kvarn_wht_head(x, hd)
         assert torch.equal(got, ref), hd
+    # Scale regression: the per-128 FWHT stages exchange values across
+    # lanes, and tl.debug_barrier does not sync warps (triton 3.8/sm_89:
+    # 0/6 exact at 1200 rows with 4/8 warps, nondeterministic scattered
+    # corruption). Kernels launch single-warp now; these grids must stay
+    # exact (they failed every trial before the fix).
+    for hd, nrows in ((128, 1500), (256, 800)):
+        y = torch.randn(nrows, hd, dtype=torch.float32, device="cuda")
+        assert torch.equal(kt.kvarn_triton_wht_rows(y, hd),
+                           kvarn.kvarn_wht_head(y, hd)), (hd, nrows)
 
 
 @pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
