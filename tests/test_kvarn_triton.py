@@ -269,6 +269,20 @@ def test_fused_serve_matches_torch_path():
                 assert torch.equal(ka, kb) and torch.equal(va, vb), (hd, step)
                 pos += length
                 step += 1
+            # The Triton path serves the persistent image in place: the
+            # last get_kv's stashed overlay + dirty bits are transient
+            # serve state, not a records disagreement. Restore the stash
+            # (get_kv entry would do it on the next call) then refresh
+            # dirty groups (idempotent recompute from records) before
+            # comparing image state; served outputs were already asserted
+            # equal every step above.
+            if bool(getattr(B, "_ov_pending", False)):
+                kt.kvarn_triton_unoverlay(B._img_k, B._img_v, B)
+            assert not bool(getattr(B, "_ov_pending", False))
+            _d = B._dirty_mask.nonzero().flatten()
+            if _d.numel():
+                B._refresh_groups(_d)
+                B._dirty_mask[_d] = False
             for name in ("records", "sealed", "present", "group_base",
                          "page_owner_n", "stage_k", "stage_v",
                          "exact_valid", "exact_k", "exact_v",
@@ -309,10 +323,14 @@ def test_overlay_matches_torch_loop():
         lay._apply_exact_overlay(t1k, t1v, se, bt)
         t2k = lay._img_k.clone()
         t2v = lay._img_v.clone()
+        # stash=None: unit-test purity on throwaway clones (no stash, no
+        # pending flag); production get_kv passes the layer stash.
         kt.kvarn_triton_overlay(t2k, t2v, lay, se, bt[0], gps, 128,
                                 lay.tail_effective)
+        assert not bool(getattr(lay, "_ov_pending", False))
     assert torch.equal(t1k, t2k)
     assert torch.equal(t1v, t2v)
+    assert not bool(lay._dirty_mask.any())
 
 
 def test_default_path_is_torch():
