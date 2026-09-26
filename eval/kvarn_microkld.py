@@ -144,13 +144,15 @@ def main():
 
     t0 = time.time()
     l_fp16, s_fp16 = run(model, c_fp16, ids, args.chunk)
-    print(f"fp16 prefill: {time.time() - t0:.1f}s", flush=True)
+    dt = time.time() - t0
+    print(f"fp16 prefill: {dt:.1f}s ({args.ntok / dt:.0f} tok/s)", flush=True)
     torch.cuda.empty_cache()
 
     t0 = time.time()
     l_kvarn, s_kvarn = run(model, c_kvarn, ids, args.chunk)
-    print(f"kvarn{k_bits}/kvarn{v_bits} prefill: {time.time() - t0:.1f}s",
-          flush=True)
+    dt = time.time() - t0
+    print(f"kvarn{k_bits}/kvarn{v_bits} prefill: {dt:.1f}s "
+          f"({args.ntok / dt:.0f} tok/s)", flush=True)
 
     p = F.log_softmax(l_kvarn, dim=-1)
     q = F.log_softmax(l_fp16, dim=-1)
