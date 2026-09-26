@@ -405,7 +405,9 @@ def kvarn_triton_store_row(layer, rows_k, rows_v, pages_1, offs_1, pos_1,
             "KVarN Triton store requires CUDA tensors, got "
             f"{rows_k.device}.")
     kvh, hd = layer.num_kv_heads, layer.head_dim
-    stacked = torch.stack((rows_k.float(), rows_v.float()))
+    # One convert (not two): stack the fp16 rows, then widen once.
+    # Identical values, one fewer dispatch + one fewer temp.
+    stacked = torch.stack((rows_k, rows_v)).float()
     # stacked is a fresh fp32 contiguous temp: transform in place
     # (same values, minus the alloc+copy).
     rkv = kvarn_triton_wht_rows(stacked, hd, inplace=True)
@@ -421,12 +423,20 @@ def kvarn_triton_store_row(layer, rows_k, rows_v, pages_1, offs_1, pos_1,
         img_k, img_v, do_img = rows_k, rows_v, False
     else:
         do_img = True
+    # Callers pass long already (block_table.long() upstream): skip the
+    # no-op converts (same tensor object .to() would return, minus three
+    # dispatches per layer per step).
+    if pages_1.dtype != torch.int64:
+        pages_1 = pages_1.to(torch.int64)
+    if offs_1.dtype != torch.int64:
+        offs_1 = offs_1.to(torch.int64)
+    if pos_1.dtype != torch.int64:
+        pos_1 = pos_1.to(torch.int64)
     _kvarn_store_row_kernel[(2 * kvh,)](
         rk, rv,
         rows_k.reshape(kvh, hd).contiguous(),
         rows_v.reshape(kvh, hd).contiguous(),
-        pages_1.to(torch.int64), offs_1.to(torch.int64),
-        pos_1.to(torch.int64),
+        pages_1, offs_1, pos_1,
         layer.stage_k, layer.stage_v,
         layer.exact_k, layer.exact_v, layer.exact_valid,
         layer.group_base, layer.sealed, layer.present,
