@@ -118,10 +118,13 @@ KVAR_N_GROUP = 128
 # exact groups map 1:1 onto slots; overflow is a loud assert.
 # Staging needs a full prefill chunk transiently (the torch loop stages
 # every group before the end-of-call batched seal): 40 covers chunk 4096
-# + margin. Exact writes are bounded by the sink+tail keep window
-# regardless of chunk size, so 4 suffices there.
+# + margin. Exact needs two chunk-boundary tails + sink transiently
+# (eviction only runs at end of call, so the previous tail lingers):
+# 8 covers that + margin for dense layers. SWA layers additionally hold
+# up to their visible window, so they size up from the window in
+# __init__ (still context-independent); see n_exact_slots.
 KVAR_N_STAGE_SLOTS = 40
-KVAR_N_EXACT_SLOTS = 4
+KVAR_N_EXACT_SLOTS = 8
 KVAR_N_INV_SQRT_128 = 0.08838834764831845
 KVAR_N_SUPPORTED_HEAD_DIMS = (128, 256, 512)
 KVAR_N_SINKHORN_ITERS = 16
@@ -752,9 +755,10 @@ class CacheLayer_kvarn(CacheLayer):
     sealed together (same group boundaries) with different payload
     widths.
 
-    Exact rows (ORIGINAL domain, ``tail_dtype``) live in on-demand
-    per-group exact rows (``exact_k``/``exact_v`` static tensors gated by
-    ``exact_valid``) covering only the resident window: the
+    Exact rows (ORIGINAL domain, ``tail_dtype``) live in slot-windowed
+    exact blocks (``exact_k``/``exact_v`` shaped ``(S_EXACT, 128, ...)``,
+    resolved through ``_exact_slot``/``_exact_rev``, gated by the
+    group-indexed ``exact_valid``) covering only the resident window: the
     logical sink (non-SWA) plus the trailing ``tail_effective`` tokens
     plus one rollback group (Bee compact N+R exact-history ring).
     Rotated-domain fp16 staging (``stage_k``/``stage_v`` static tensors,
@@ -889,15 +893,26 @@ class CacheLayer_kvarn(CacheLayer):
         # stays under it). CPU ubatch analog is one page.
         self.swa_ring_groups = kvarn_swa_ring_groups(
             self.tail_window, self.swa_window, PAGE_SIZE) if self.is_swa else 0
+        # Exact window bound (Task 4): dense layers hold sink + two
+        # chunk-boundary tails transiently (KVAR_N_EXACT_SLOTS covers
+        # it); SWA layers hold up to their visible window + transients,
+        # so they size up from the window (still context-independent).
+        self.n_exact_slots = KVAR_N_EXACT_SLOTS
+        if self.is_swa and self.swa_window > 0:
+            self.n_exact_slots = max(
+                KVAR_N_EXACT_SLOTS,
+                (self.swa_window + self.tail_effective +
+                 KVAR_N_TAIL_ROLLBACK_TOKENS + KVAR_N_GROUP - 1) //
+                KVAR_N_GROUP + 4)
 
         self.num_pages = max_num_tokens // PAGE_SIZE
         self.num_groups = max_num_tokens // KVAR_N_GROUP
         self.ncols = self.num_kv_heads * self.slices
 
         self.records = None       # uint8 (num_groups, ncols, tile_bytes)
-        self.stage_k = None  # half (num_groups, 128, kvh, hd) rotated fp16
+        self.stage_k = None  # half (S_STAGE, 128, kvh, hd) rotated fp16
         self.stage_v = None  # staging for unsealed groups; all-zero == none
-        self.exact_k = None  # tail_dtype (num_groups, 128, kvh, hd) ORIGINAL
+        self.exact_k = None  # tail_dtype (S_EXACT, 128, kvh, hd) ORIGINAL
         self.exact_v = None  # exact rows, resident window only; valid mask gates
         self.exact_valid = None  # bool (num_groups,): group has exact rows
         self.present = None       # bool (num_groups, 128)
@@ -923,8 +938,13 @@ class CacheLayer_kvarn(CacheLayer):
              self.head_dim),
             dtype=torch.half, device=device)
         self.stage_v = torch.zeros_like(self.stage_k)
+        # Windowed exact (memory plan): S_EXACT slots through
+        # _exact_slot/_exact_rev; exact_valid stays group-indexed
+        # (flag tensor). Invariant: valid ⟺ assigned (resets and
+        # eviction release; alloc assigns).
         self.exact_k = torch.zeros(
-            (self.num_groups, KVAR_N_GROUP, self.num_kv_heads, self.head_dim),
+            (self.n_exact_slots, KVAR_N_GROUP, self.num_kv_heads,
+             self.head_dim),
             dtype=self.tail_dtype, device=device)
         self.exact_v = torch.zeros_like(self.exact_k)
         self.exact_valid = torch.zeros((self.num_groups,), dtype=torch.bool,
@@ -954,7 +974,7 @@ class CacheLayer_kvarn(CacheLayer):
                                        dtype=torch.int64, device=device)
         self._stage_rev = torch.full((self.num_groups,), -1,
                                      dtype=torch.int64, device=device)
-        self._exact_slots = torch.full((KVAR_N_EXACT_SLOTS,), -1,
+        self._exact_slots = torch.full((self.n_exact_slots,), -1,
                                        dtype=torch.int64, device=device)
         self._exact_rev = torch.full((self.num_groups,), -1,
                                      dtype=torch.int64, device=device)
@@ -1102,10 +1122,13 @@ class CacheLayer_kvarn(CacheLayer):
     def _alloc_exact_block(self, g: int):
         # Fresh blocks read zero (matches the old dict behavior where a
         # missing entry meant zeros); callers then fill resident slots.
-        self.exact_k[g].zero_()
-        self.exact_v[g].zero_()
+        # Assigns a window slot (valid ⟺ assigned: resets/eviction
+        # release, so a valid block always has a slot).
+        s = self._exact_slot(g)
+        self.exact_k[s].zero_()
+        self.exact_v[s].zero_()
         self.exact_valid[g] = True
-        return [self.exact_k[g], self.exact_v[g]]
+        return [self.exact_k[s], self.exact_v[s]]
 
     def _exact_keep(self, pos: torch.Tensor, n_new: int) -> torch.Tensor:
         """
@@ -1217,11 +1240,13 @@ class CacheLayer_kvarn(CacheLayer):
         slot = self._stage_slot(gi)
         if bold != bnew:
             # Fresh group: reset bookkeeping (nothing live to preserve).
+            # The exact slot is released (valid ⟺ assigned invariant).
             self.sealed[gi] = False
             self.present[gi] = False
             self.stage_k[slot].zero_()
             self.stage_v[slot].zero_()
             self.exact_valid[gi] = False
+            self._exact_release(gi)
             self.group_base[gi] = bnew
             self.page_pinned[page] = False
         self.stage_k[slot, si] = rk[0]
@@ -1231,8 +1256,9 @@ class CacheLayer_kvarn(CacheLayer):
            (self.has_sink and pos0 < KVAR_N_SINK_TOKENS):
             if not bool(self.exact_valid[gi]):
                 self._alloc_exact_block(gi)
-            self.exact_k[gi, si] = ek[0]
-            self.exact_v[gi, si] = ev[0]
+            es = int(self._exact_rev[gi])
+            self.exact_k[es, si] = ek[0]
+            self.exact_v[es, si] = ev[0]
         cur_owner = int(self.page_owner_n[page])
         self.page_owner_n[page] = n_new if cur_owner < 0 \
             else min(cur_owner, n_new)
@@ -1357,11 +1383,13 @@ class CacheLayer_kvarn(CacheLayer):
             if bold != bnew:
                 # New content (first write or page reuse): reset the group.
                 # A reused page stops aliasing its prompt-cache sibling.
+                # The exact slot is released (valid ⟺ assigned invariant).
                 self.sealed[gi] = False
                 self.present[gi] = False
                 self.stage_k[slot].zero_()
                 self.stage_v[slot].zero_()
                 self.exact_valid[gi] = False
+                self._exact_release(gi)
                 self.group_base[gi] = bnew
                 page = gi // (PAGE_SIZE // KVAR_N_GROUP)
                 self.page_pinned[page] = False
@@ -1391,8 +1419,9 @@ class CacheLayer_kvarn(CacheLayer):
             if bool(km.any()):
                 if not bool(self.exact_valid[gi]):
                     self._alloc_exact_block(gi)
-                self.exact_k[gi, s[km]] = ek[km]
-                self.exact_v[gi, s[km]] = ev[km]
+                es = int(self._exact_rev[gi])
+                self.exact_k[es, s[km]] = ek[km]
+                self.exact_v[es, s[km]] = ev[km]
         # Every touched group changed content (stage write, reset or
         # unseal): refresh it on next materialization (idea 2).
         gm = g.to(device=self.device, dtype=torch.long)
@@ -1451,6 +1480,12 @@ class CacheLayer_kvarn(CacheLayer):
                 # Logical sink (base 0) stays exact.
                 drop = drop & ~((b >= 0) & (b < KVAR_N_GROUP))
             self.exact_valid[res[drop]] = False
+            # Release is vectorized and sync-free (dropped groups always
+            # had slots by the valid ⟺ assigned invariant; guard the
+            # mask for the degenerate empty call).
+            rel = self._exact_rev[res[drop]]
+            self._exact_slots[rel[rel >= 0]] = -1
+            self._exact_rev[res[drop]] = -1
 
     @torch.inference_mode()
     def _seal_groups_batched(self, gs: torch.Tensor):
@@ -1652,12 +1687,16 @@ class CacheLayer_kvarn(CacheLayer):
                 gi = int(gi)
                 if not bool(self.exact_valid[gi]):
                     continue
+                # Exact is slot-windowed (valid ⟺ assigned: a valid group
+                # always has a slot; loud if the invariant breaks).
+                es = int(self._exact_rev[gi])
+                assert es >= 0, "KVarN: valid exact block without a slot"
                 m = (g == gi)
                 pm, om, sm = pages[m], offs[m], s[m]
                 # NOTE: indexed assignment (not .copy_ on a gather, which would
                 # hit a temporary) so the overlay lands in the temps.
-                k[pm, om] = self.exact_k[gi, sm].to(k.dtype)
-                v[pm, om] = self.exact_v[gi, sm].to(v.dtype)
+                k[pm, om] = self.exact_k[es, sm].to(k.dtype)
+                v[pm, om] = self.exact_v[es, sm].to(v.dtype)
 
     # -- CacheLayer interface --------------------------------------------------
 
@@ -2048,6 +2087,7 @@ class CacheLayer_kvarn(CacheLayer):
                 self.sealed[gt] = False
                 self._stage_release(gt)
                 self.exact_valid[gt] = False
+                self._exact_release(gt)
                 continue
             self.group_base[gt] = fb
             self.present[gt] = False
@@ -2063,14 +2103,24 @@ class CacheLayer_kvarn(CacheLayer):
                 # Exact blocks travel too: the destination sequence's tail
                 # may cover these positions. (Sealed branch is always
                 # full-group, so whole-block copies match the old code.)
+                # Exact is slot-windowed: unassigned source reads as
+                # zeros (cannot occur for valid blocks by invariant,
+                # but the copy stays total).
+                ef = int(source._exact_rev[gf])
                 if bool(source.exact_valid[gf]):
-                    self._alloc_exact_block(gt)
-                    self.exact_k[gt].copy_(source.exact_k[gf],
-                                           non_blocking=True)
-                    self.exact_v[gt].copy_(source.exact_v[gf],
-                                           non_blocking=True)
+                    et = self._exact_slot(gt)
+                    self.exact_valid[gt] = True
+                    if ef < 0:
+                        self.exact_k[et].zero_()
+                        self.exact_v[et].zero_()
+                    else:
+                        self.exact_k[et].copy_(source.exact_k[ef],
+                                               non_blocking=True)
+                        self.exact_v[et].copy_(source.exact_v[ef],
+                                               non_blocking=True)
                 else:
                     self.exact_valid[gt] = False
+                    self._exact_release(gt)
             else:
                 self.sealed[gt] = False
                 # Staging travels (or is rebuilt from the sealed records
@@ -2105,17 +2155,28 @@ class CacheLayer_kvarn(CacheLayer):
                         self.stage_v[st, nrows:].zero_()
                 else:
                     self._stage_release(gt)
+                # Exact travels when present, through both rev maps
+                # (unassigned source reads as zeros).
+                ef = int(source._exact_rev[gf])
                 if bool(source.exact_valid[gf]):
-                    self._alloc_exact_block(gt)
-                    self.exact_k[gt, :nrows] \
-                        .copy_(source.exact_k[gf, :nrows], non_blocking=True)
-                    self.exact_v[gt, :nrows] \
-                        .copy_(source.exact_v[gf, :nrows], non_blocking=True)
-                    if nrows < KVAR_N_GROUP:
-                        self.exact_k[gt, nrows:].zero_()
-                        self.exact_v[gt, nrows:].zero_()
+                    et = self._exact_slot(gt)
+                    self.exact_valid[gt] = True
+                    if ef < 0:
+                        self.exact_k[et].zero_()
+                        self.exact_v[et].zero_()
+                    else:
+                        self.exact_k[et, :nrows] \
+                            .copy_(source.exact_k[ef, :nrows],
+                                   non_blocking=True)
+                        self.exact_v[et, :nrows] \
+                            .copy_(source.exact_v[ef, :nrows],
+                                   non_blocking=True)
+                        if nrows < KVAR_N_GROUP:
+                            self.exact_k[et, nrows:].zero_()
+                            self.exact_v[et, nrows:].zero_()
                 else:
                     self.exact_valid[gt] = False
+                    self._exact_release(gt)
         # Destination content changed in every branch above (copied,
         # rebuilt or reset): refresh it on next materialization (idea 2).
         self._dirty_mask[to_page * gps: to_page * gps + gps] = True
@@ -2143,7 +2204,9 @@ class CacheLayer_kvarn(CacheLayer):
             assert s >= 0, "KVarN: live staging group without a slot"
             out += [self.stage_k[s], self.stage_v[s]]
         for g in self._live_exact_groups():
-            out += [self.exact_k[g], self.exact_v[g]]
+            s = int(self._exact_rev[g])
+            assert s >= 0, "KVarN: live exact group without a slot"
+            out += [self.exact_k[s], self.exact_v[s]]
         return out
 
     def _resident_bytes(self, blocks: dict) -> int:

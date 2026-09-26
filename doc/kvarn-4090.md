@@ -165,23 +165,25 @@ at all lengths. End-to-end allocator peaks are equal within 0.1GB --
 but that is shared weights/temps dominating, NOT cache parity.
 Cache-only accounting at 8k (per-tensor bytes, 16 layers):
 
-| store | fp16 | kvarn |
-|-------|------|-------|
-| pages (fp16 full ctx) | 554MB | — |
-| image `_img_k/_v` (fp16 full ctx) | — | 554MB |
-| staging `stage_k/_v` (fp16, all groups) | — | 554MB |
-| exact `exact_k/_v` (tail dtype, all groups) | — | 554MB |
-| records (quantized) | — | 151MB |
-| overlay stash + masks | — | ~17MB |
-| total | 0.55GB | 1.83GB |
+| store | fp16 | kvarn (Task 3) | kvarn (Task 4) |
+|-------|------|-------|-------|
+| pages (fp16 full ctx) | 554MB | — | — |
+| image `_img_k/_v` (fp16 full ctx) | — | 554MB | 554MB |
+| staging `stage_k/_v` (fp16, 40 slots) | — | 336MB | 336MB |
+| exact `exact_k/_v` (tail dtype, 8 slots) | — | 554MB | 67MB |
+| records (quantized) | — | 151MB | 151MB |
+| overlay stash + masks | — | ~17MB | ~17MB |
+| total | 0.55GB | 1.59GB | 1.11GB |
 
-The quantized records (the actual win: 151MB vs 554MB) are buried
-under three full-context fp16 duplicates. The persistent image (the
-speed play) costs exactly one fp16 cache by construction, so the
-memory goal is currently INVERTED: more VRAM, not less. Reclaiming it
-needs imageless serve (online dequant, Bee-style fused attention)
-and/or windowed staging+exact instead of per-group statics -- a
-storage-layer redesign, scoped separately.
+The quantized records (the actual win: 151MB vs 554MB) were buried
+under three full-context fp16 duplicates. Tasks 3+4 windowed staging
+(40 slots, 336MB: a full prefill chunk transiently) and exact (8 slots,
+67MB: sink + two chunk-boundary tails; SWA layers size up from their
+visible window, still context-independent), cutting cache-only 1.83GB
+to 1.11GB with KLD-identical digits (8k same-top 100%). What remains is
+the persistent image (the speed play) at exactly one fp16 cache by
+construction: reclaiming it needs imageless serve (online dequant,
+Bee-style fused attention) -- scoped separately.
 Per-token profile (16 cached layers): store ~3.7ms/layer, serve
 ~1.1ms/layer, attention ~0.7ms/layer (fp16 step total 11.6ms).
 
