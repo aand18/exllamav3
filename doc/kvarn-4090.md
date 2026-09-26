@@ -135,8 +135,8 @@ are recorded above (fuse dequant into attention; batch, don't
 thread); this table is the timing baseline for our own regressions.
 
 Decode @8192, 1.40bpw 27B (64 greedy steps, warm inductor cache):
-fp16 86.0-86.6 tok/s vs kvarn 7.8-19.0 tok/s depending on the step below
-(current: 19.0 tok/s TRITON=1, fp16 86.5 same run).
+fp16 86.0-86.6 tok/s vs kvarn 7.8-19.5 tok/s depending on the step below
+(current: 19.5 tok/s TRITON=1, fp16 86.3 same run).
 Per-token profile (16 cached layers): store ~3.7ms/layer, serve
 ~1.1ms/layer, attention ~0.7ms/layer (fp16 step total 11.6ms).
 
@@ -156,6 +156,13 @@ Generation optimization history (all KLD-identical, same-top 100%):
 - `_touch_batch` batch-vectorized (`9a8427a`, 3 syncs/entry -> 1
   whole-batch validation sync): 19.0 tok/s (+114% over baseline,
   TRITON=1, fp16 86.5 same run). KLD digits identical throughout.
+- Phase 2b sync cuts (`39dcd7f` deferred `int(n_new)` past the fused
+  store, `923f08c` count-guarded open-staging append instead of
+  `bool(any())`, 2 syncs/layer saved): 19.5 tok/s (delta within run
+  noise -- the remaining wall is launch count, not syncs, per Kineto).
+  The unguarded append crashed the all-sealed refresh (empty cat
+  through the WHT reshape, caught by the 8k KLD, not the suites);
+  the `Gs_o.numel()` count guard is load-bearing.
 - Triton FWHT exactness fixes (`aa88720`, same runs as the 19.0
   number): `tl.debug_barrier` does not sync warps (triton 3.8/sm_89,
   nondeterministic corruption at 1000+ rows) -> all FWHT launches
