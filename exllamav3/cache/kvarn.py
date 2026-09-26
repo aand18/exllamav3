@@ -1009,10 +1009,13 @@ class CacheLayer_kvarn(CacheLayer):
             prefix = bt[b, :npages]
             assert int(prefix.min()) >= 0 and int(prefix.max()) < self.num_pages, \
                 "KVarN: block table page out of range"
-            for p in prefix.tolist():
-                p = int(p)
-                if n > int(self.page_owner_n[p]):
-                    self.page_owner_n[p] = n
+            # Vector max-update (was a per-page Python loop with 3 syncs
+            # per page: O(ctx) syncs per token). Identical semantics.
+            cur = self.page_owner_n[prefix]
+            self.page_owner_n[prefix] = torch.where(
+                cur < n,
+                torch.tensor(n, device=cur.device, dtype=torch.int64),
+                cur)
 
     def _store_row_single(self, pages, offs, pos, n_new,
                           rk, rv, ek, ev, g, s) -> bool:
