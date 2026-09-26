@@ -939,6 +939,11 @@ class CacheLayer_kvarn(CacheLayer):
         # contexts keep the memory-slim full rematerialization path.
         self._img_ok = self.num_pages <= 128
         self._evict_tick = 0  # store calls since the last evict scan
+        # Scratch for the fused single-row store's [code, group] report:
+        # the kernel overwrites both words every launch, so one persistent
+        # buffer replaces a per-call alloc (no fill needed, no staleness).
+        self._store_status = torch.zeros(2, dtype=torch.int64,
+                                         device=device)
 
     @override
     def free(self):
@@ -959,6 +964,7 @@ class CacheLayer_kvarn(CacheLayer):
         self._dirty_mask = None
         self._page_groups = None
         self._evict_tick = 0
+        self._store_status = None
 
     # -- M4 record access (for online-dequant Triton/CUDA kernels) ----------
 
@@ -1045,6 +1051,23 @@ class CacheLayer_kvarn(CacheLayer):
         seqlens = cache_seqlens.long()
         bsz = seqlens.numel()  # shape only, no sync
         if bsz == 0:
+            return
+        if bsz == 1:
+            # Steady single-sequence path (decode appends and batch-1
+            # prefill): the whole row validates and updates without the
+            # arange + 2D-mask machinery (~8 launches saved). The
+            # whole-row range check is a superset of the in-use check
+            # (padding is -1 by contract; anything else out of range is
+            # a harness bug), and -1 padding is filtered (never wraps
+            # onto the last owner's slot).
+            row = bt[0]
+            if bool(((row >= self.num_pages) | (row < -1)).any()):
+                raise AssertionError(
+                    "KVarN: block table page out of range")
+            idx = row[(row >= 0) & (row < self.num_pages)]
+            n_b = seqlens[0] + int(length)
+            cur = self.page_owner_n[idx]
+            self.page_owner_n[idx] = torch.where(cur < n_b, n_b, cur)
             return
         # Vectorized over the batch: no .item()/.tolist() in steady
         # state (was 3 syncs per entry: seqlens int + min/max asserts).
@@ -1745,7 +1768,6 @@ class CacheLayer_kvarn(CacheLayer):
             assert kvarn_triton_available(), \
                 "EXL3_KVARN_TRITON=1 but the Triton path is unavailable " \
                 "(needs triton + CUDA); unset it for the torch path."
-            bt = block_table.long()
             kvarn_triton_overlay(k, v, self, cache_seqlens, bt[0],
                                  gps, KVAR_N_SINK_TOKENS, self.tail_effective)
         else:
@@ -1765,7 +1787,9 @@ class CacheLayer_kvarn(CacheLayer):
         seqlens = cache_seqlens.long()
         self._touch_batch(seqlens, bt, length)
         for b in range(bsz):
-            pos = seqlens[b] + torch.arange(length, device=bt.device)
+            # Length-1 (every decode step) is a slice, not an alloc+add.
+            pos = seqlens[b:b + 1] if length == 1 else \
+                seqlens[b] + torch.arange(length, device=bt.device)
             pages = bt[b, pos // PAGE_SIZE]
             offs = pos % PAGE_SIZE
             self._store_rows(k[pages, offs], v[pages, offs], pages, offs,
@@ -1783,7 +1807,9 @@ class CacheLayer_kvarn(CacheLayer):
         seqlens = cache_seqlens.long()
         self._touch_batch(seqlens, bt, length)
         for b in range(bsz):
-            pos = seqlens[b] + torch.arange(length, device=bt.device)
+            # Length-1 (every decode step) is a slice, not an alloc+add.
+            pos = seqlens[b:b + 1] if length == 1 else \
+                seqlens[b] + torch.arange(length, device=bt.device)
             pages = bt[b, pos // PAGE_SIZE]
             offs = pos % PAGE_SIZE
             self._store_rows(k[b], v[b], pages, offs, pos, seqlens[b] + length)

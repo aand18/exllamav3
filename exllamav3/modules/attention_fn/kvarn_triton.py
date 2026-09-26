@@ -383,13 +383,14 @@ def kvarn_triton_store_row(layer, rows_k, rows_v, pages_1, offs_1, pos_1,
     rv = rkv[1].reshape(kvh, hd).contiguous()
     tail_keep = int(layer.tail_effective) + rollback_tokens
     sink_n = sink_tokens if layer.has_sink else 0
-    status = torch.zeros(2, dtype=torch.int64, device=dev)
+    # Exact rows ride in as fp16 (no .to(tail_dtype) alloc+copy): the
+    # kernel downcasts on load (same RNE result the torch fallback gets
+    # from rows.to(tail_dtype); the fused-store twin test asserts it).
+    status = layer._store_status
     _kvarn_store_row_kernel[(2 * kvh,)](
         rk, rv,
-        rows_k.reshape(kvh, hd).contiguous().to(
-            layer.tail_dtype),
-        rows_v.reshape(kvh, hd).contiguous().to(
-            layer.tail_dtype),
+        rows_k.reshape(kvh, hd).contiguous(),
+        rows_v.reshape(kvh, hd).contiguous(),
         pages_1.to(torch.int64), offs_1.to(torch.int64),
         pos_1.to(torch.int64),
         layer.stage_k, layer.stage_v,
