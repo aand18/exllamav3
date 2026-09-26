@@ -49,7 +49,10 @@ def main():
     bs = _bshape(n + args.steps + 8)
     states, _ = populate(model, cache, ids, args.chunk, n)
 
-    opt_forward = torch.compile(model.forward, mode="reduce-overhead",
+    # Default inductor (no cudagraphs): fuses elementwise chains without
+    # choking on the host->device copies in the forward. reduce-overhead
+    # graphs trip on those copies (cudaErrorStreamCaptureUnsupported).
+    opt_forward = torch.compile(model.forward, mode="default",
                                 dynamic=False)
     tok = ids[:, -1:]
     past = n
@@ -70,12 +73,17 @@ def main():
         del logits
     torch.cuda.synchronize()
     t0 = time.time()
+    fallback = 0
     for _ in range(args.steps):
         p = {"cache": cache, "attn_mode": "flash_attn",
              "batch_shape": (1, bs), "past_len": past}
         if states is not None:
             p["recurrent_states"] = states
-        logits = opt_forward(tok, p)
+        try:
+            logits = opt_forward(tok, p)
+        except Exception:  # noqa: BLE001 - runtime fallback, keep timing
+            fallback += 1
+            logits = model.forward(tok, p)
         states = p.get("recurrent_states")
         tok = logits.argmax(dim=-1)[:, -1:]
         past += 1
@@ -83,7 +91,8 @@ def main():
     torch.cuda.synchronize()
     dt = time.time() - t0
     print(f"compiled decode: {args.steps / dt:.1f} tok/s "
-          f"({args.steps} steps from {n} ctx)", flush=True)
+          f"({args.steps} steps from {n} ctx, {fallback} fallbacks)",
+          flush=True)
     try:
         from torch._dynamo.utils import counters
         print(f"dynamo counters: {dict(counters['stats'])}", flush=True)
