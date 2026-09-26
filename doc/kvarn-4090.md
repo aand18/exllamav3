@@ -135,8 +135,8 @@ are recorded above (fuse dequant into attention; batch, don't
 thread); this table is the timing baseline for our own regressions.
 
 Decode @8192, 1.40bpw 27B (64 greedy steps, warm inductor cache):
-fp16 83.7-86.6 tok/s vs kvarn 7.8-28.8 tok/s depending on the step below
-(current: 28.8 tok/s TRITON=1, fp16 86.5 same run).
+fp16 83.7-86.9 tok/s vs kvarn 7.8-29.6 tok/s depending on the step below
+(current: 29.0 tok/s TRITON=1, fp16 85.4 same run).
 Per-token profile (16 cached layers): store ~3.7ms/layer, serve
 ~1.1ms/layer, attention ~0.7ms/layer (fp16 step total 11.6ms).
 
@@ -185,6 +185,15 @@ Generation optimization history (all KLD-identical, same-top 100%):
   112ms vs Self CUDA 19ms -- starved on the host. Top CPU: index
   29ms (448 calls x ~65us dispatch each), copy_ 18ms,
   nonzero/unique 18ms, to-casts 9ms, 109 DtoH syncs/step.
+- Sync-free vectorized evict (`_evict_q` -> `_evict_tick` tick gate +
+  `_evict_exact_all(n_rows)`: one vectorized mask over the resident set,
+  no `int(max())`/per-group `int()` reads; prefill-scale calls scan
+  immediately, decode-scale every 256th): 29.0 tok/s (+0.7%, runs
+  29.0-29.6, fp16 85.4-86.9 same runs; kvarn prefill 4.9s). KLD digits
+  identical (median 0.000001, mean 0.000020, max 0.000395, p99
+  0.000249, p99.9 0.000380, same-top 100.00%); PARITY=1 clean at 8k;
+  CPU suite 73 passed. Post-evict Kineto: index 15.5ms still top,
+  copy_ down to 1145 calls / 5.4ms, nonzero 560 calls / 13.0ms.
 - torch.compile probe (`eval/kvarn_compile_probe.py`): 585 dynamo
   calls into 63 unique graphs, recompile limit hit on id-keyed
   `params['dev_cache']` -- fragmentation, not fusion. The

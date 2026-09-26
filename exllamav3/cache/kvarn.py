@@ -938,7 +938,7 @@ class CacheLayer_kvarn(CacheLayer):
         # Incremental image only pays when the allocation is modest; huge
         # contexts keep the memory-slim full rematerialization path.
         self._img_ok = self.num_pages <= 128
-        self._evict_q = -1  # owner high-water quantum of the last evict scan
+        self._evict_tick = 0  # store calls since the last evict scan
 
     @override
     def free(self):
@@ -958,7 +958,7 @@ class CacheLayer_kvarn(CacheLayer):
         self._img_v = None
         self._dirty_mask = None
         self._page_groups = None
-        self._evict_q = -1
+        self._evict_tick = 0
 
     # -- M4 record access (for online-dequant Triton/CUDA kernels) ----------
 
@@ -1164,10 +1164,10 @@ class CacheLayer_kvarn(CacheLayer):
                 PAGE_SIZE // KVAR_N_GROUP, KVAR_N_SINK_TOKENS,
                 KVAR_N_TAIL_ROLLBACK_TOKENS)
             if code == 0:
-                self._evict_exact_all()
+                self._evict_exact_all(1)
                 return
             if code == 2:
-                self._evict_exact_all()
+                self._evict_exact_all(1)
                 self._seal_group(gg)
                 self._dirty_mask[gg] = True
                 return
@@ -1206,8 +1206,8 @@ class CacheLayer_kvarn(CacheLayer):
         base = pos - s
         if rows_k.shape[0] == 1 and \
                 self._store_row_single(pages, offs, pos, n_new,
-                                       rk, rv, ek, ev, g, s):
-            self._evict_exact_all()
+                                        rk, rv, ek, ev, g, s):
+            self._evict_exact_all(1)
             gi = int(g[0])
             if bool(self.present[gi].all()) and not bool(self.sealed[gi]):
                 if not (self.has_sink and int(self.group_base[gi]) == 0):
@@ -1268,7 +1268,7 @@ class CacheLayer_kvarn(CacheLayer):
             p = int(p)
             if n_new > int(self.page_owner_n[p]):
                 self.page_owner_n[p] = n_new
-        self._evict_exact_all()
+        self._evict_exact_all(int(rows_k.shape[0]))
         if self.tail_native_exact:
             return
         ug = torch.unique(g)
@@ -1282,40 +1282,41 @@ class CacheLayer_kvarn(CacheLayer):
                 self._seal_groups_batched(seal_gs)
 
     @torch.inference_mode()
-    def _evict_exact_all(self):
+    def _evict_exact_all(self, n_rows: int = 0):
         """
         Drop every resident exact block fully below its owner's compact
         window (``base + 128 <= owner_n - N - R``), keeping the sink and
         prompt-cache-pinned pages. Owners are refreshed by
-        ``_touch_batch`` on every update call, so a single scan over the
+        ``_touch_batch`` on every update call, so a periodic scan over the
         (small) resident set keeps memory bounded as the window slides.
+
+        Fully sync-free: dropped blocks are strictly below the served
+        sink+tail overlay window, so WHEN eviction runs is numerically
+        invisible -- no high-water read needed. Prefill-scale calls
+        (n_rows >= 128, a shape-only int) scan immediately, covering
+        multi-quantum jumps; decode-scale calls scan every 256th call.
+        The old int(max()) quantum gate cost a DtoH sync per layer per
+        call (16/step, Kineto top-5); the per-group int() reads are gone
+        too (one vectorized mask over the resident set).
         """
+        self._evict_tick += 1
+        if n_rows < KVAR_N_GROUP and self._evict_tick < 256:
+            return
+        self._evict_tick = 0
         floor = self.tail_effective + KVAR_N_TAIL_ROLLBACK_TOKENS
         gps = PAGE_SIZE // KVAR_N_GROUP
-        # Cadence gate: eviction only frees memory (served rows always come
-        # from the resident sink/tail window, and copy_page carries exact
-        # data either way), so scanning when the owner high-water crosses a
-        # 128-boundary is numerically invisible and amortizes the scan from
-        # every forward to ~1/128 of forwards. (A call-count gate would
-        # skip the high-water read itself, but it changes few-call flows
-        # like the compact tests, whose exact key sets are asserted.)
-        top = int(self.page_owner_n.max())
-        if top // 128 == self._evict_q:
-            return
-        self._evict_q = top // 128
-        for gi in self.exact_valid.nonzero().flatten().tolist():
-            gi = int(gi)
-            p = gi // gps
-            if bool(self.page_pinned[p]):
-                continue
-            owner_n = int(self.page_owner_n[p])
-            if owner_n < 0:
-                continue
-            b = int(self.group_base[gi])
-            if self.has_sink and 0 <= b < KVAR_N_GROUP:
-                continue  # logical sink (base 0) stays exact
-            if b >= 0 and b + KVAR_N_GROUP <= owner_n - floor:
-                self.exact_valid[gi] = False
+        res = self.exact_valid.nonzero().flatten()
+        if res.numel():  # shape only, no sync
+            p = res // gps
+            owner = self.page_owner_n[p]
+            b = self.group_base[res]
+            drop = (owner >= 0) & (b >= 0) & \
+                (b + KVAR_N_GROUP <= owner - floor) & \
+                ~self.page_pinned[p]
+            if self.has_sink:
+                # Logical sink (base 0) stays exact.
+                drop = drop & ~((b >= 0) & (b < KVAR_N_GROUP))
+            self.exact_valid[res[drop]] = False
 
     @torch.inference_mode()
     def _seal_groups_batched(self, gs: torch.Tensor):
