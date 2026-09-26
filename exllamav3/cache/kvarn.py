@@ -1099,8 +1099,26 @@ class CacheLayer_kvarn(CacheLayer):
         n_new = int(n_new)
         # One batched WHT for K+V (was two calls): same per-element
         # math, ~half the launches. Bit-exact (batching preserves order).
-        rkv = kvarn_wht_head(torch.stack((rows_k.float(), rows_v.float())),
-                             self.head_dim).half().to(dev)
+        # With EXL3_KVARN_TRITON=1 the fused Triton row-WHT runs instead
+        # (1 launch); PARITY=1 asserts it against this torch reference.
+        if _kvarn_use_triton():
+            from ..modules.attention_fn.kvarn_triton import (
+                kvarn_triton_available, kvarn_triton_wht_rows,
+                kvarn_triton_parity_check)
+            assert kvarn_triton_available(), \
+                "EXL3_KVARN_TRITON=1 but the Triton path is unavailable " \
+                "(needs triton + CUDA); unset it for the torch path."
+            stacked = torch.stack((rows_k.float(), rows_v.float()))
+            rkv_t = kvarn_triton_wht_rows(stacked, self.head_dim)
+            if kvarn_triton_parity_check():
+                rkv_r = kvarn_wht_head(stacked, self.head_dim)
+                assert torch.equal(rkv_t, rkv_r), \
+                    "KVarN Triton store WHT disagrees with torch"
+            rkv = rkv_t
+        else:
+            rkv = kvarn_wht_head(torch.stack((rows_k.float(), rows_v.float())),
+                                 self.head_dim)
+        rkv = rkv.half().to(dev)
         rk, rv = rkv[0], rkv[1]
         ek = rows_k.to(self.tail_dtype)
         ev = rows_v.to(self.tail_dtype)
