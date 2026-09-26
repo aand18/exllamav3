@@ -1630,8 +1630,12 @@ class CacheLayer_kvarn(CacheLayer):
                 rot_v.append(bv)
                 rot_gs.append(Gs_s)
         open_m = ~sealed_m
-        if bool(open_m.any()):
-            Gs_o = Gs[open_m]
+        # Emptiness guard on COUNT (shape only, zero syncs) -- not
+        # bool(any()) (a CPU sync per layer per call). Appending an
+        # empty staging read would make `if rot_k:` truthy below and
+        # crash the all-sealed refresh inside the WHT reshape.
+        Gs_o = Gs[open_m]
+        if Gs_o.numel():
             # Static staging reads zeros for never-written groups: no
             # tolist loop, no per-group syncs.
             rot_k.append(self.stage_k[Gs_o].float())
