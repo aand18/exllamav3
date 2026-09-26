@@ -239,17 +239,27 @@ if _have_triton:
         present_ptr,                     # (G, 128) bool
         owner_ptr,                       # (P,) int64 page owners
         pinned_ptr,                      # (P,) bool
-        dirty_ptr,                       # (G,) bool
+        img_k_ptr, img_v_ptr,            # (P, 256, kvh, HD) fp16 image (or dummy)
         status_ptr,                      # (2,) int64 out: [code, group]
         KVH: tl.constexpr, HD: tl.constexpr, GPS: tl.constexpr,
         TAIL_KEEP: tl.constexpr, SINK_N: tl.constexpr,
         HAS_SINK: tl.constexpr, TAIL_IS_BF16: tl.constexpr,
+        DO_IMG: tl.constexpr,
     ):
         # Fused single-row decode store (bsz 1, length 1, non-SWA).
         # Grid (2*KVH,) programs x HD lanes. All policy is predicated
         # (no Python branches on tensor values); steady appends need
         # zero CPU syncs to launch, one status read after.
-        # Codes: 0 ok, 1 slow-path fallback, 2 seal group status[1].
+        # Codes: 0 ok (image current via write-through), 1 slow-path
+        # fallback, 2 seal group status[1], 3 fresh group (image needs
+        # a refresh for the reset siblings; the row itself is current).
+        # Write-through keeps the persistent image current for pure
+        # appends (the WHT'd row lands in staging AND the image), so the
+        # per-step dirty sweep finds an empty mask and skips the open
+        # refresh. Bit-identical to refresh-from-staging (same fp32 row,
+        # single final RNE cast, WHT is per-row over HD). Pruned entirely
+        # when the layer has no image yet (DO_IMG off: dummy pointers
+        # never touched).
         pid = tl.program_id(0)
         is_k = (pid // KVH) == 0
         h = pid % KVH
@@ -276,6 +286,15 @@ if _have_triton:
         tl.store(stage_v_ptr + s_off, row_v.to(tl.float16),
                  mask=(~is_k) & go)
         tl.store(present_ptr + g * 128 + s, True, mask=go)
+        # Image write-through (pure appends keep the image current, so
+        # the sweep stays empty; fresh groups still need a refresh for
+        # the reset siblings -> code 3 below).
+        if DO_IMG:
+            i_off = (page * 256 + offs) * KVH * HD + h * HD + cols
+            tl.store(img_k_ptr + i_off, row_k.to(tl.float16),
+                     mask=is_k & go)
+            tl.store(img_v_ptr + i_off, row_v.to(tl.float16),
+                     mask=(~is_k) & go)
 
         tl.store(sealed_ptr + g, False, mask=fresh)
         tl.store(exact_valid_ptr + g, False, mask=fresh)
@@ -304,12 +323,16 @@ if _have_triton:
                              tl.minimum(cur_owner, n_new))
         new_owner = tl.where(n_new > new_owner, n_new, new_owner)
         tl.store(owner_ptr + page, new_owner, mask=go)
-        tl.store(dirty_ptr + g, True, mask=go)
+        # No device-side dirty: pure appends are image-current via
+        # write-through; completion/fresh are reported by code and the
+        # host dirties (it owns the Python-side dirty flag, which the
+        # device cannot set).
 
         full = tl.sum(tl.load(present_ptr + g * 128 + tl.arange(0, 128))
                       .to(tl.int32)) == 128
         sink_skip = HAS_SINK & (bnew == 0)
-        code = tl.where(slow, 1, tl.where(full & (~sink_skip), 2, 0))
+        code = tl.where(slow, 1, tl.where(full & (~sink_skip), 2,
+                         tl.where(fresh, 3, 0)))
         tl.store(status_ptr, code)
         tl.store(status_ptr + 1, g)
 
@@ -354,17 +377,24 @@ def kvarn_triton_wht_rows(x, head_dim: int, inplace: bool = False):
 
 
 def kvarn_triton_store_row(layer, rows_k, rows_v, pages_1, offs_1, pos_1,
-                           gps, sink_tokens, rollback_tokens):
+                           gps, sink_tokens, rollback_tokens,
+                           img_k=None, img_v=None):
     """Fused single-row decode store (bsz 1, length 1, non-SWA caller).
 
     Row WHT (1 launch) + fused write kernel (1 launch): stage/exact
-    writes, present/base/owner/valid/dirty updates. Policy events
-    (reuse with live content, sealed overwrite) bail with code 1;
-    a completed group reports code 2 and its id for the torch sealer.
-    Returns (code: int, group: int) -- one status read, the only CPU
-    sync. Small ints (gps, sink/rollback sizes) come from the caller so
-    this module never imports the cache package (no cycle, no stub
-    fragility). Loud failure (never silent) when unrunnable.
+    writes, present/base/owner/valid updates, image write-through.
+    Policy events (reuse with live content, sealed overwrite) bail with
+    code 1; a completed group reports code 2 and its id for the torch
+    sealer; a fresh (reset) group reports code 3 (image needs a refresh
+    for the reset siblings). Returns (code: int, group: int) -- one
+    status read, the only CPU sync. Small ints (gps, sink/rollback
+    sizes) come from the caller so this module never imports the cache
+    package (no cycle, no stub fragility). Loud failure (never silent)
+    when unrunnable.
+
+    img_k/img_v: the persistent fp16 image for write-through, or None
+    (no image yet / legacy temps: the write-through is pruned and the
+    refresh path owns the rows as before).
     """
     if not _have_triton:
         raise RuntimeError(
@@ -387,6 +417,10 @@ def kvarn_triton_store_row(layer, rows_k, rows_v, pages_1, offs_1, pos_1,
     # kernel downcasts on load (same RNE result the torch fallback gets
     # from rows.to(tail_dtype); the fused-store twin test asserts it).
     status = layer._store_status
+    if img_k is None:
+        img_k, img_v, do_img = rows_k, rows_v, False
+    else:
+        do_img = True
     _kvarn_store_row_kernel[(2 * kvh,)](
         rk, rv,
         rows_k.reshape(kvh, hd).contiguous(),
@@ -396,11 +430,13 @@ def kvarn_triton_store_row(layer, rows_k, rows_v, pages_1, offs_1, pos_1,
         layer.stage_k, layer.stage_v,
         layer.exact_k, layer.exact_v, layer.exact_valid,
         layer.group_base, layer.sealed, layer.present,
-        layer.page_owner_n, layer.page_pinned, layer._dirty_mask,
+        layer.page_owner_n, layer.page_pinned,
+        img_k, img_v,
         status,
         kvh, hd, gps,
         tail_keep, sink_n, bool(layer.has_sink),
         layer.tail_dtype == torch.bfloat16,
+        do_img,
     )
     code, g = status.tolist()
     return int(code), int(g)
