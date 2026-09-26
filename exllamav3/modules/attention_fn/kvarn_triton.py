@@ -60,6 +60,50 @@ def kvarn_triton_parity_check() -> bool:
 
 if _have_triton:
     @triton.jit
+    def _fwht128_block(row_ptr, cols):
+        # 7 in-place FWHT stages + 1/sqrt(128) norm over 128 fp32 values.
+        # Caller seeds row_ptr first; block barrier per stage (128 lanes
+        # = 4 warps). Subtractions use (lower - upper), matching the torch
+        # reference (odd-parity positions carry the minus).
+        tl.debug_barrier()
+        for _s in tl.static_range(7):
+            s = 1 << _s
+            cur = tl.load(row_ptr + cols)
+            prt = tl.load(row_ptr + (cols ^ s))
+            tl.store(row_ptr + cols,
+                     tl.where((cols & s) == 0, cur + prt, prt - cur))
+            tl.debug_barrier()
+        tl.store(row_ptr + cols,
+                 tl.load(row_ptr + cols) * 0.08838834764831845)
+
+    @triton.jit
+    def _kvarn_wht_hd_kernel(x_ptr, HD: tl.constexpr, SLICES: tl.constexpr,
+                             SSCALE: tl.constexpr):
+        # Head-wide WHT for one (HD,) row: per-128 FWHT per slice, then
+        # cross-slice stages. Matches kvarn_wht_head bit-exact (FWHT is an
+        # involution, so forward and inverse share this kernel).
+        pid = tl.program_id(0)
+        cols = tl.arange(0, HD)
+        base = x_ptr + pid * HD
+        for _sl in tl.static_range(4):
+            if _sl < SLICES:
+                _fwht128_block(base + _sl * 128, tl.arange(0, 128))
+        tl.debug_barrier()
+        if SLICES > 1:
+            cur = tl.load(base + cols)
+            prt = tl.load(base + (cols ^ 128))
+            tl.store(base + cols,
+                     tl.where((cols & 128) == 0, cur + prt, prt - cur))
+            tl.debug_barrier()
+        if SLICES > 2:
+            cur = tl.load(base + cols)
+            prt = tl.load(base + (cols ^ 256))
+            tl.store(base + cols,
+                     tl.where((cols & 256) == 0, cur + prt, prt - cur))
+            tl.debug_barrier()
+        tl.store(base + cols, tl.load(base + cols) * SSCALE)
+
+    @triton.jit
     def _kvarn_row_kernel(
         pay_ptr, sc_ptr, zp_ptr, oth_ptr, out_ptr,
         PAY: tl.constexpr,   # payload bytes per tile (drop-in bound, unused)
@@ -95,21 +139,7 @@ if _have_triton:
             # scratch (XOR butterfly: partner of i at stride s is i^s).
             # Same stage order and norm as kvarn_hadamard_128.
             tl.store(row_ptr + cols, tile_out)
-            # Cross-warp RAW hazard: 128 lanes = 4 warps, so every
-            # stage's stores need a block barrier before the next
-            # stage's (gather) loads.
-            tl.debug_barrier()
-            for _s in tl.static_range(7):
-                s = 1 << _s
-                cur = tl.load(row_ptr + cols)
-                prt = tl.load(row_ptr + (cols ^ s))
-                # Odd lane holds upper-half (b), partner the lower (a):
-                # torch reference stores a-b there, i.e. prt-cur.
-                tl.store(row_ptr + cols,
-                         tl.where((cols & s) == 0, cur + prt, prt - cur))
-                tl.debug_barrier()
-            tl.store(row_ptr + cols,
-                     tl.load(row_ptr + cols) * 0.08838834764831845)
+            _fwht128_block(row_ptr, cols)
 
 
 def kvarn_triton_dequant_side(payload: torch.Tensor, sc: torch.Tensor,
@@ -184,6 +214,30 @@ def kvarn_triton_dequant_group(records_g: torch.Tensor, layout,
             bk[:, h, d0:d1] = k_tiles[c].T
             bv[:, h, d0:d1] = v_tiles[c]
     return bk, bv
+
+
+def kvarn_triton_wht_rows(x, head_dim: int):
+    """
+    Head-wide forward WHT over (..., HD) fp32 CUDA, HD in {128, 256, 512}.
+    Matches kvarn_wht_head bit-exact (FWHT is an involution). One launch.
+    Loud failure (never silent) when the Triton path cannot run.
+    """
+    if not _have_triton:
+        raise RuntimeError(
+            "KVarN Triton WHT requires triton (import failed on this host).")
+    if not x.is_cuda:
+        raise RuntimeError(
+            "KVarN Triton WHT requires CUDA tensors, got "
+            f"{x.device}.")
+    slices = head_dim // 128
+    assert head_dim in (128, 256, 512) and slices * 128 == head_dim
+    sscale = 1.0 if slices == 1 else (0.7071067811865475 if slices == 2
+                                      else 0.5)
+    flat = x.float().reshape(-1, head_dim)
+    out = torch.empty_like(flat)
+    out.copy_(flat)
+    _kvarn_wht_hd_kernel[(flat.shape[0],)](out, head_dim, slices, sscale)
+    return out.reshape(*x.shape[:-1], head_dim)
 
 
 def kvarn_triton_dequant_groups(records_G, layout,
