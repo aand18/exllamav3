@@ -135,8 +135,9 @@ are recorded above (fuse dequant into attention; batch, don't
 thread); this table is the timing baseline for our own regressions.
 
 Decode @8192, 1.40bpw 27B (64 greedy steps, warm inductor cache):
-fp16 83.7-86.9 tok/s vs kvarn 7.8-35.2 tok/s depending on the step below
-(current: 35.2 tok/s TRITON=1, fp16 86.3 same run).
+fp16 83.7-86.9 tok/s vs kvarn 7.8-36.2 tok/s depending on the step below
+(current: 36.2 tok/s TRITON=1 parity-off, 35.7 PARITY=1 same code;
+fp16 85.5-86.7 same runs).
 Per-token profile (16 cached layers): store ~3.7ms/layer, serve
 ~1.1ms/layer, attention ~0.7ms/layer (fp16 step total 11.6ms).
 
@@ -215,6 +216,19 @@ Generation optimization history (all KLD-identical, same-top 100%):
   overlay branch dropped: 35.2 tok/s (+10% over 32.0, runs 34.7-35.2,
   fp16 85.3-86.3 same runs; kvarn prefill 4.9-5.1s, no regression).
   KLD digits identical; PARITY=1 clean at 8k; CPU 73 + twins green.
+- Serve-from-image, stash-first (no clones): the Triton overlay lands
+  in place on the persistent image; pre-overlay rows are stashed
+  in-kernel to per-layer buffers and restored by a separate
+  `kvarn_triton_unoverlay` launch in update_kv (own grid barrier: the
+  tail slides every step, so same-kernel ordering would race). The
+  dirty-writeback variant was measured first and reverted (17.4-17.6
+  tok/s: every overlay dirtied sealed tail groups, forcing a batched
+  dequant refresh per step, doubled by PARITY=1): 36.2 tok/s parity-off
+  (+3% over 35.2, 35.7 PARITY=1 same code, fp16 85.5-86.7 same runs;
+  kvarn prefill 4.8-5.1s, no regression). KLD digits identical
+  (median 0.000001, mean 0.000020, max 0.000395, p99 0.000249,
+  p99.9 0.000380, same-top 100.00%); PARITY=1 clean at 8k; CPU 77
+  passed 6 skipped + triton twins 10 passed.
   (Copy+overlay single-kernel fusion was considered and rejected: the
   copy grid and overlay grid would write the same temp rows from
   different programs with a required order and no cross-CTA barrier.)

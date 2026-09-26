@@ -1712,20 +1712,31 @@ class CacheLayer_kvarn(CacheLayer):
         #
         # Idea 2: the image persists across forwards; only groups dirtied
         # since the last call are rematerialized (decode: ~1 group). The
-        # overlay is per-call (depends on seqlens), so the image stays
-        # pre-overlay and each call serves a clone. Modest allocations
-        # only (num_pages <= 128); huge contexts keep the memory-slim
+        # overlay is per-call (depends on seqlens). The Triton path serves
+        # the persistent image directly (in-place overlay + in-kernel
+        # stash, restored after the forward, no clones); the torch
+        # fallback still serves a clone (the overlay mutates its target).
+        # Modest allocations only
+        # (num_pages <= 128); huge contexts keep the memory-slim
         # full rematerialization below.
         kvh, hd = self.num_kv_heads, self.head_dim
         dev = self.device
         gps = PAGE_SIZE // KVAR_N_GROUP
-        bt = block_table.long()
         if self._img_ok:
             if self._img_k is None:
                 self._img_k = torch.zeros(
                     (self.num_pages, PAGE_SIZE, kvh, hd),
                     dtype=torch.half, device=dev)
                 self._img_v = torch.zeros_like(self._img_k)
+            # A previous serve-from-image overlay may still be pending
+            # (twin-test order is update_direct -> get_kv without an
+            # update_kv in between; production always has update_kv, which
+            # also restores). Restore first: idempotent, gated, zero syncs
+            # when nothing is pending.
+            if bool(getattr(self, "_ov_pending", False)):
+                from ..modules.attention_fn.kvarn_triton import (
+                    kvarn_triton_unoverlay)
+                kvarn_triton_unoverlay(self._img_k, self._img_v, self)
             # Global dirty sweep, no resident-pages restriction: refresh
             # recomputes image rows from records/staging (the truth), so
             # it is idempotent -- a not-currently-resident dirty group
@@ -1738,10 +1749,42 @@ class CacheLayer_kvarn(CacheLayer):
             if dirty.numel():
                 self._refresh_groups(dirty)
                 self._dirty_mask[dirty] = False
-            # Serve a copy: the overlay mutates its target.
+            if _kvarn_use_triton() and not self.is_swa and \
+                    cache_seqlens.numel() == 1:
+                # Serve-from-image: overlay lands in place on the
+                # persistent image (2 full-image clones + 2 casts saved
+                # per layer per step). Overwritten rows are stashed
+                # in-kernel and put back by kvarn_triton_unoverlay in
+                # update_kv after the forward -- served rows are
+                # bit-identical to overlay-on-clone (the overlay region
+                # is disjoint from the append rows update_kv reads back,
+                # and refresh-from-records backstops every dirty group).
+                from ..modules.attention_fn.kvarn_triton import (
+                    kvarn_triton_available, kvarn_triton_overlay,
+                    _kvarn_overlay_stash)
+                assert kvarn_triton_available(), \
+                    "EXL3_KVARN_TRITON=1 but the Triton path is unavailable " \
+                    "(needs triton + CUDA); unset it for the torch path."
+                maxw = KVAR_N_SINK_TOKENS + int(self.tail_effective)
+                stash = _kvarn_overlay_stash(self, maxw, dev)
+                kvarn_triton_overlay(self._img_k, self._img_v, self,
+                                     cache_seqlens,
+                                     block_table[0].to(dtype=torch.int32,
+                                                       device=dev),
+                                     gps, KVAR_N_SINK_TOKENS,
+                                     self.tail_effective,
+                                     stash=stash)
+                return self._img_k, self._img_v
+            # Torch fallback (SWA / multi-row / TRITON=0): the overlay
+            # mutates its target, so it still lands on throwaway clones
+            # (bandwidth-cheap; the loop was the cost).
+            bt = block_table.long()
             k = self._img_k.clone()
             v = self._img_v.clone()
+            self._apply_exact_overlay(k, v, cache_seqlens, block_table)
+            return k, v
         else:
+            bt = block_table.long()
             if bt.shape[0] == 1:
                 # Steady decode: one row, pages distinct by construction, so
                 # a range mask replaces the sort (same set, same order, no
@@ -1760,8 +1803,9 @@ class CacheLayer_kvarn(CacheLayer):
                 Gs = Gs[Gs < self.num_groups]
                 if Gs.numel():
                     self._refresh_groups_legacy(Gs, k, v)
-        # Fused exact overlay (1 launch, zero syncs) when opted in; the
-        # clone above stays (it is bandwidth-cheap; the loop was the cost).
+        # Huge-context legacy path: k/v are fresh temps owned by this
+        # call, so both overlay variants mutate them directly (no clones
+        # anywhere here, no dirty writeback: there is no image to keep).
         if _kvarn_use_triton() and not self.is_swa and cache_seqlens.numel() == 1:
             from ..modules.attention_fn.kvarn_triton import (
                 kvarn_triton_available, kvarn_triton_overlay)
@@ -1780,6 +1824,14 @@ class CacheLayer_kvarn(CacheLayer):
         # k/v are the paged fp16 temps returned by get_kv (with the new rows
         # merged in by the attention fallback); persist rows
         # [seqlens, seqlens+length) per batch entry.
+        # Restore any pending serve-from-image overlay first (even when
+        # length == 0): the forward has consumed it, and the next get_kv
+        # must see the pre-overlay image. Append rows are disjoint from
+        # the overlay window, so restore-before-store is safe.
+        if bool(getattr(self, "_ov_pending", False)):
+            from ..modules.attention_fn.kvarn_triton import (
+                kvarn_triton_unoverlay)
+            kvarn_triton_unoverlay(self._img_k, self._img_v, self)
         if length == 0:
             return
         bsz = cache_seqlens.numel()
@@ -1800,6 +1852,14 @@ class CacheLayer_kvarn(CacheLayer):
                          k: torch.Tensor, v: torch.Tensor, length: int):
         # k/v: (bsz, length, kvh, hd) new contiguous rows at
         # positions cache_seqlens..+length.
+        # Twin-test order can leave a served overlay pending across a
+        # direct append (update_direct -> get_kv has no update_kv between);
+        # get_kv entry already restores, this is the belt-and-braces copy
+        # for direct-only flows. Gated no-op when nothing is pending.
+        if bool(getattr(self, "_ov_pending", False)):
+            from ..modules.attention_fn.kvarn_triton import (
+                kvarn_triton_unoverlay)
+            kvarn_triton_unoverlay(self._img_k, self._img_v, self)
         if length == 0:
             return
         bsz = cache_seqlens.numel()
