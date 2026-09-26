@@ -229,6 +229,60 @@ def test_fused_store_matches_torch_path():
 
 
 @pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
+def test_fused_serve_matches_torch_path():
+    # Twin layers, mixed single/multi-row writes with a get_kv after
+    # every step: full Triton (fused store + serve + overlay + dequant)
+    # vs pure torch. Served outputs must match every step and all state
+    # (including the persistent image) at the end, across seal
+    # boundaries, for every head dim (per-128 vs cross-slice WHT).
+    from types import SimpleNamespace
+
+    for hd in (128, 256, 512):
+        def make():
+            attn = SimpleNamespace(num_kv_heads=2, head_dim=hd,
+                                   qsa_indexer=None)
+            lay = kvarn.CacheLayer_kvarn(None, attn, 0, 1024,
+                                         k_bits=4, v_bits=4, is_swa=False)
+            lay.alloc(torch.device("cuda"))
+            return lay
+
+        torch.manual_seed(100 + hd)
+        A, B = make(), make()
+        bt = torch.arange(4, dtype=torch.int32, device="cuda").view(1, 4)
+        old = os.environ.get("EXL3_KVARN_TRITON")
+        try:
+            pos, step = 0, 0
+            while pos < 512:
+                length = 1 if step % 3 else 100
+                length = min(length, 512 - pos)
+                k = torch.randn(1, length, 2, hd, dtype=torch.float16,
+                                device="cuda")
+                v = torch.randn(1, length, 2, hd, dtype=torch.float16,
+                                device="cuda")
+                se = torch.tensor([pos], dtype=torch.int32, device="cuda")
+                os.environ["EXL3_KVARN_TRITON"] = "1"
+                B.update_kv_direct(se, bt, k, v, length)
+                kb, vb = B.get_kv(se + length, bt)
+                del os.environ["EXL3_KVARN_TRITON"]
+                A.update_kv_direct(se, bt, k, v, length)
+                ka, va = A.get_kv(se + length, bt)
+                assert torch.equal(ka, kb) and torch.equal(va, vb), (hd, step)
+                pos += length
+                step += 1
+            for name in ("records", "sealed", "present", "group_base",
+                         "page_owner_n", "stage_k", "stage_v",
+                         "exact_valid", "exact_k", "exact_v",
+                         "_img_k", "_img_v"):
+                assert torch.equal(getattr(A, name), getattr(B, name)), \
+                    (hd, name)
+        finally:
+            if old is None:
+                os.environ.pop("EXL3_KVARN_TRITON", None)
+            else:
+                os.environ["EXL3_KVARN_TRITON"] = old
+
+
+@pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
 def test_overlay_matches_torch_loop():
     # Fused overlay kernel must equal _apply_exact_overlay row-for-row,
     # including absent-block skips (sink + tail window over 300 tokens).
