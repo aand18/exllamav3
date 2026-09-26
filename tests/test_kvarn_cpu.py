@@ -290,7 +290,7 @@ def test_copy_page():
     # is physical group 2, dst page-0 head group is physical group 0).
     assert torch.equal(dst2.stage_k[0][:44], layer.stage_k[2][:44])
     assert torch.equal(dst2.stage_v[0][:44], layer.stage_v[2][:44])
-    assert torch.equal(dst2.exact_blocks[0][0][:44], layer.exact_blocks[2][0][:44])
+    assert torch.equal(dst2.exact_k[0][:44], layer.exact_k[2][:44])
 
 
 def test_storage_size_beats_fp16_and_quant():
