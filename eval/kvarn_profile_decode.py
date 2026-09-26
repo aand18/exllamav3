@@ -61,7 +61,9 @@ def main():
     # A. get_kv serve alone (block table covers the whole allocation).
     bt = torch.arange(max_tok // 256, dtype=torch.int32, device="cuda:0") \
         .unsqueeze(0).expand(1, -1).contiguous()
-    seql = torch.tensor([n], dtype=torch.int32)
+    # Triton kernels need CUDA pointers (production always passes CUDA
+    # seqlens); CPU tensors raise "Pointer argument cannot be accessed".
+    seql = torch.tensor([n], dtype=torch.int32, device="cuda:0")
     t0 = time.time()
     # NOTE: get_kv mutates layer state in place (dirty mask, image
     # refresh), so direct calls need inference_mode, same as the
@@ -81,9 +83,10 @@ def main():
     t0 = time.time()
     with torch.inference_mode():
         for i in range(args.steps):
-            se = torch.tensor([n + i], dtype=torch.int32)
+            se = torch.tensor([n + i], dtype=torch.int32, device="cuda:0")
             lay0.update_kv_direct(se, bt, k1, v1, 1)
-            se2 = torch.tensor([n + i + 1], dtype=torch.int32)
+            se2 = torch.tensor([n + i + 1], dtype=torch.int32,
+                               device="cuda:0")
             k, v = lay0.get_kv(se2, bt)
             del k, v
     torch.cuda.synchronize()
