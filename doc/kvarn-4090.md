@@ -147,13 +147,20 @@ Generation optimization history (all KLD-identical, same-top 100%):
   (`36d420a`, was O(ctx) syncs/token), K+V stacked store WHT
   (`d4998a6`), exact-evict on 128-boundaries (`737976e`,
   provably final-state-equivalent): 11.1-11.3 tok/s (+27%).
-- Remaining ~5ms/layer/token is ~40 launches + ~10 syncs of
-  irreducible torch-eager overhead (row WHT, indexed assigns,
-  overlay bookkeeping). Closing the last ~8x needs fused
-  store/serve kernels or a compile-friendly (static-structure) cache
-  backend -- a follow-up project, not micro-opts. Speculative
-  (draft-target) decoding would multiply effective tok/s
-  orthogonally.
+- Ping-pong WHT (`294f238`) and Triton row-WHT kernel shared by
+  dequant+store (`b2997ca`, parity-proven): ~zero end-to-end (cost is
+  launch/sync count, not math). Now 12.1 tok/s (+36%).
+- Kineto, 5 decode steps @8192: ~3000 aten calls/step, Self CPU
+  112ms vs Self CUDA 19ms -- starved on the host. Top CPU: index
+  29ms (448 calls x ~65us dispatch each), copy_ 18ms,
+  nonzero/unique 18ms, to-casts 9ms, 109 DtoH syncs/step.
+- torch.compile probe (`eval/kvarn_compile_probe.py`): 585 dynamo
+  calls into 63 unique graphs, recompile limit hit on id-keyed
+  `params['dev_cache']` -- fragmentation, not fusion. The
+  compile-friendly backend (static structures replacing dicts +
+  dynamic shapes + .item()) is confirmed as the necessary project;
+  a flag flip cannot do it. Speculative (draft-target) decoding
+  would multiply effective tok/s orthogonally.
 
 ### Qwen3.8-27B dense 5.00bpw (`SC_5.00bpw_H6`)
 
