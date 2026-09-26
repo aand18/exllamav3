@@ -316,10 +316,13 @@ if _have_triton:
     # NOTE: kvarn_triton_wht_rows defined below (unchanged position).
 
 
-def kvarn_triton_wht_rows(x, head_dim: int):
+def kvarn_triton_wht_rows(x, head_dim: int, inplace: bool = False):
     """
     Head-wide forward WHT over (..., HD) fp32 CUDA, HD in {128, 256, 512}.
     Matches kvarn_wht_head bit-exact (FWHT is an involution). One launch.
+    With inplace=True the kernel runs directly on x (must be a contiguous
+    fp32 temp -- same values out as the copy path, minus the alloc+copy;
+    used for the fresh serve/store buffers). Default stays out-of-place.
     Loud failure (never silent) when the Triton path cannot run.
     """
     if not _have_triton:
@@ -333,13 +336,20 @@ def kvarn_triton_wht_rows(x, head_dim: int):
     assert head_dim in (128, 256, 512) and slices * 128 == head_dim
     sscale = 1.0 if slices == 1 else (0.7071067811865475 if slices == 2
                                       else 0.5)
-    flat = x.float().reshape(-1, head_dim)
-    out = torch.empty_like(flat)
-    out.copy_(flat)
+    if inplace:
+        assert x.dtype == torch.float32 and x.is_contiguous(), \
+            "KVarN Triton in-place WHT needs a contiguous fp32 temp."
+        out = x.reshape(-1, head_dim)
+        n = out.shape[0]
+    else:
+        flat = x.float().reshape(-1, head_dim)
+        out = torch.empty_like(flat)
+        out.copy_(flat)
+        n = flat.shape[0]
     # num_warps=1: per-128 FWHT stages exchange values across lanes and
     # tl.debug_barrier does not sync warps (see _fwht128_block comment).
-    _kvarn_wht_hd_kernel[(flat.shape[0],)](out, head_dim, slices, sscale,
-                                           num_warps=1)
+    _kvarn_wht_hd_kernel[(n,)](out, head_dim, slices, sscale,
+                               num_warps=1)
     return out.reshape(*x.shape[:-1], head_dim)
 
 
@@ -366,7 +376,9 @@ def kvarn_triton_store_row(layer, rows_k, rows_v, pages_1, offs_1, pos_1,
             f"{rows_k.device}.")
     kvh, hd = layer.num_kv_heads, layer.head_dim
     stacked = torch.stack((rows_k.float(), rows_v.float()))
-    rkv = kvarn_triton_wht_rows(stacked, hd)
+    # stacked is a fresh fp32 contiguous temp: transform in place
+    # (same values, minus the alloc+copy).
+    rkv = kvarn_triton_wht_rows(stacked, hd, inplace=True)
     rk = rkv[0].reshape(kvh, hd).contiguous()
     rv = rkv[1].reshape(kvh, hd).contiguous()
     tail_keep = int(layer.tail_effective) + rollback_tokens
@@ -587,8 +599,10 @@ def kvarn_triton_serve_open(tgt_k, tgt_v, layer, ids):
     grid = (D, 128, 2 * kvh)
     _kvarn_serve_gather_kernel[grid](
         layer.stage_k, layer.stage_v, ids, buf_k, buf_v, kvh, hd)
-    buf_k = kvarn_triton_wht_rows(buf_k, hd)
-    buf_v = kvarn_triton_wht_rows(buf_v, hd)
+    # bufs are fresh fp32 contiguous temps: transform in place
+    # (same values, minus two allocs+copies).
+    buf_k = kvarn_triton_wht_rows(buf_k, hd, inplace=True)
+    buf_v = kvarn_triton_wht_rows(buf_v, hd, inplace=True)
     flat_k = tgt_k.reshape(-1, 128, kvh, hd)
     flat_v = tgt_v.reshape(-1, 128, kvh, hd)
     _kvarn_serve_scatter_kernel[grid](

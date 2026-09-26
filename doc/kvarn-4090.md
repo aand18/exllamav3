@@ -135,8 +135,8 @@ are recorded above (fuse dequant into attention; batch, don't
 thread); this table is the timing baseline for our own regressions.
 
 Decode @8192, 1.40bpw 27B (64 greedy steps, warm inductor cache):
-fp16 83.7-86.9 tok/s vs kvarn 7.8-29.6 tok/s depending on the step below
-(current: 29.0 tok/s TRITON=1, fp16 85.4 same run).
+fp16 83.7-86.9 tok/s vs kvarn 7.8-32.0 tok/s depending on the step below
+(current: 32.0 tok/s TRITON=1, fp16 86.7 same run).
 Per-token profile (16 cached layers): store ~3.7ms/layer, serve
 ~1.1ms/layer, attention ~0.7ms/layer (fp16 step total 11.6ms).
 
@@ -194,6 +194,17 @@ Generation optimization history (all KLD-identical, same-top 100%):
   0.000249, p99.9 0.000380, same-top 100.00%); PARITY=1 clean at 8k;
   CPU suite 73 passed. Post-evict Kineto: index 15.5ms still top,
   copy_ down to 1145 calls / 5.4ms, nonzero 560 calls / 13.0ms.
+- Global dirty sweep + in-place WHT (no new kernels): get_kv consumes
+  `_dirty_mask.nonzero()` directly instead of the ~13-op
+  resident-pages -> page-groups -> dirty chain (refresh is idempotent,
+  recomputed from records/staging, so the pages restriction was pure
+  rediscovery); `kvarn_triton_wht_rows(..., inplace=True)` runs the head
+  kernel on the fresh serve/store fp32 temps minus alloc+copy (parity
+  path stays out-of-place: its input feeds the torch reference):
+  32.0 tok/s (+10% over 29.0, runs 31.9-32.0, fp16 86.2-86.7 same runs;
+  kvarn prefill 5.0-5.1s vs 4.9s, run noise). KLD digits identical;
+  PARITY=1 clean at 8k; CPU suite 73 passed; triton twins 9 passed
+  1 skipped (per-step path agreement + image state asserted).
 - torch.compile probe (`eval/kvarn_compile_probe.py`): 585 dynamo
   calls into 63 unique graphs, recompile limit hit on id-keyed
   `params['dev_cache']` -- fragmentation, not fusion. The

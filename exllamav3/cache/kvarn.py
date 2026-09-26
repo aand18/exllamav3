@@ -1697,33 +1697,38 @@ class CacheLayer_kvarn(CacheLayer):
         dev = self.device
         gps = PAGE_SIZE // KVAR_N_GROUP
         bt = block_table.long()
-        if bt.shape[0] == 1:
-            # Steady decode: one row, pages distinct by construction, so
-            # a range mask replaces the sort (same set, same order, no
-            # sync, ~5 launches saved). Multi-row batches keep unique
-            # (rows may alias pages via prompt-cache sharing).
-            row = bt[0]
-            pages = row[(row >= 0) & (row < self.num_pages)].to(dev)
-        else:
-            pages = torch.unique(bt).to(dev)
-            pages = pages[(pages >= 0) & (pages < self.num_pages)]
         if self._img_ok:
             if self._img_k is None:
                 self._img_k = torch.zeros(
                     (self.num_pages, PAGE_SIZE, kvh, hd),
                     dtype=torch.half, device=dev)
                 self._img_v = torch.zeros_like(self._img_k)
-            if pages.numel():
-                Gs = self._page_groups[pages].reshape(-1)
-                Gs = Gs[Gs < self.num_groups]
-                dirty = Gs[self._dirty_mask[Gs]]
-                if dirty.numel():
-                    self._refresh_groups(dirty)
-                    self._dirty_mask[dirty] = False
+            # Global dirty sweep, no resident-pages restriction: refresh
+            # recomputes image rows from records/staging (the truth), so
+            # it is idempotent -- a not-currently-resident dirty group
+            # refreshes to the same values it would get when it turns
+            # resident, and any later content change re-dirties before
+            # serving. One nonzero replaces the ~13-op
+            # pages->groups->dirty chain (resident mask, page-groups
+            # gather, two masked filters) per layer per step.
+            dirty = self._dirty_mask.nonzero().flatten()
+            if dirty.numel():
+                self._refresh_groups(dirty)
+                self._dirty_mask[dirty] = False
             # Serve a copy: the overlay mutates its target.
             k = self._img_k.clone()
             v = self._img_v.clone()
         else:
+            if bt.shape[0] == 1:
+                # Steady decode: one row, pages distinct by construction, so
+                # a range mask replaces the sort (same set, same order, no
+                # sync, ~5 launches saved). Multi-row batches keep unique
+                # (rows may alias pages via prompt-cache sharing).
+                row = bt[0]
+                pages = row[(row >= 0) & (row < self.num_pages)].to(dev)
+            else:
+                pages = torch.unique(bt).to(dev)
+                pages = pages[(pages >= 0) & (pages < self.num_pages)]
             k = torch.zeros((self.num_pages, PAGE_SIZE, kvh, hd),
                             dtype=torch.half, device=dev)
             v = torch.zeros_like(k)
