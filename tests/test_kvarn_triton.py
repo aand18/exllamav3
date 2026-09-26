@@ -172,6 +172,53 @@ def test_wht_rows_matches_torch_head():
         assert torch.equal(got, ref), hd
 
 
+@pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
+def test_fused_store_matches_torch_path():
+    # Twin layers on CUDA: identical single-row appends across seal
+    # boundaries, fused path (env on) vs torch path (env off). All state
+    # plus get_kv outputs must be identical.
+    from types import SimpleNamespace
+
+    def make():
+        attn = SimpleNamespace(num_kv_heads=2, head_dim=128,
+                               qsa_indexer=None)
+        lay = kvarn.CacheLayer_kvarn(None, attn, 0, 512,
+                                     k_bits=4, v_bits=4)
+        lay.alloc(torch.device("cuda"))
+        return lay
+
+    torch.manual_seed(7)
+    A, B = make(), make()
+    bt = torch.arange(2, dtype=torch.int32, device="cuda").view(1, 2)
+    old = os.environ.get("EXL3_KVARN_TRITON")
+    try:
+        with torch.inference_mode():
+            for step in range(300):
+                k = torch.randn(1, 1, 2, 128, dtype=torch.float16,
+                                device="cuda")
+                v = torch.randn(1, 1, 2, 128, dtype=torch.float16,
+                                device="cuda")
+                se = torch.tensor([step], dtype=torch.int32, device="cuda")
+                os.environ["EXL3_KVARN_TRITON"] = "1"
+                B.update_kv_direct(se, bt, k, v, 1)
+                del os.environ["EXL3_KVARN_TRITON"]
+                A.update_kv_direct(se, bt, k, v, 1)
+        for name in ("records", "sealed", "present", "group_base",
+                     "page_owner_n", "stage_k", "stage_v",
+                     "exact_valid", "exact_k", "exact_v"):
+            assert torch.equal(getattr(A, name), getattr(B, name)), name
+        with torch.inference_mode():
+            se = torch.tensor([300], dtype=torch.int32, device="cuda")
+            ka, va = A.get_kv(se, bt)
+            kb, vb = B.get_kv(se, bt)
+        assert torch.equal(ka, kb) and torch.equal(va, vb)
+    finally:
+        if old is None:
+            os.environ.pop("EXL3_KVARN_TRITON", None)
+        else:
+            os.environ["EXL3_KVARN_TRITON"] = old
+
+
 def test_default_path_is_torch():
     # Default env (unset): the gate is off, so sealed-group reads use the
     # tested torch loop. Any regression here breaks the whole CPU suite,
