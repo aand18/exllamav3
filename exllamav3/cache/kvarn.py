@@ -511,18 +511,22 @@ def kvarn_unpack_bits(payload: torch.Tensor, n_values: int, bits: int) -> torch.
 # --------------------------------------------------------------------------
 
 def kvarn_hadamard_128(x: torch.Tensor) -> torch.Tensor:
-    """FWHT + *1/sqrt(128) over the last dim (llama-kvarn.cpp:668-686)."""
-    x = x.clone().contiguous()
+    """FWHT + *1/sqrt(128) over the last dim (llama-kvarn.cpp:668-686).
+
+    Ping-pong buffers instead of per-stage clones: identical math, ~3x
+    fewer launches/allocs (Kineto: clone/copy dominated decode CPU).
+    """
+    src = x.clone().contiguous()
+    dst = torch.empty_like(src)
     s = 1
     while s < KVAR_N_GROUP:
-        v = x.reshape(*x.shape[:-1], -1, 2, s)
-        a = v[..., 0, :].clone()
-        b = v[..., 1, :].clone()
-        v[..., 0, :] = a + b
-        v[..., 1, :] = a - b
+        v = src.reshape(*src.shape[:-1], -1, 2, s)
+        w = dst.reshape(*dst.shape[:-1], -1, 2, s)
+        w[..., 0, :] = v[..., 0, :] + v[..., 1, :]
+        w[..., 1, :] = v[..., 0, :] - v[..., 1, :]
+        src, dst = dst, src
         s *= 2
-    x.mul_(KVAR_N_INV_SQRT_128)
-    return x
+    return src.mul_(KVAR_N_INV_SQRT_128)
 
 
 def kvarn_wht_slices(x: torch.Tensor, head_dim: int) -> torch.Tensor:
@@ -536,18 +540,19 @@ def kvarn_wht_slices(x: torch.Tensor, head_dim: int) -> torch.Tensor:
     if slices == 1:
         return x
     prefix = x.shape[:-1]
-    v = x.reshape(-1, slices, KVAR_N_GROUP)
+    src = x.reshape(-1, slices, KVAR_N_GROUP)
+    dst = torch.empty_like(src)
     scale = 0.7071067811865475 if slices == 2 else 0.5
-    # FWHT over the slice axis
+    # FWHT over the slice axis (ping-pong, no per-stage clones)
     s = 1
     while s < slices:
-        vv = v.reshape(v.shape[0], -1, 2, s, KVAR_N_GROUP)
-        a = vv[:, :, 0].clone()
-        b = vv[:, :, 1].clone()
-        vv[:, :, 0] = a + b
-        vv[:, :, 1] = a - b
+        vv = src.reshape(src.shape[0], -1, 2, s, KVAR_N_GROUP)
+        ww = dst.reshape(dst.shape[0], -1, 2, s, KVAR_N_GROUP)
+        ww[:, :, 0] = vv[:, :, 0] + vv[:, :, 1]
+        ww[:, :, 1] = vv[:, :, 0] - vv[:, :, 1]
+        src, dst = dst, src
         s *= 2
-    return (v * scale).reshape(*prefix, head_dim)
+    return (src * scale).reshape(*prefix, head_dim)
 
 
 def kvarn_wht_head(x: torch.Tensor, head_dim: int) -> torch.Tensor:
