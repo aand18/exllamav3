@@ -929,6 +929,11 @@ class CacheLayer_kvarn(CacheLayer):
         self._img_v = None  # allocated lazily in get_kv; None = not yet built
         self._dirty_mask = torch.zeros((self.num_groups,), dtype=torch.bool,
                                        device=device)
+        # Python-side mirror of "mask is non-empty": every mask-True site
+        # sets this, the sweep clears it. Lets steady steps skip the
+        # nonzero sync entirely (the fused store keeps the image current
+        # via write-through, so the mask is empty almost every step).
+        self._dirty_any = False
         # Page -> groups map (num_pages, gps): constant gather replacing
         # per-call pages[:,None]*gps + arange in get_kv (~3 launches).
         _gps = PAGE_SIZE // KVAR_N_GROUP
@@ -962,6 +967,7 @@ class CacheLayer_kvarn(CacheLayer):
         self._img_k = None
         self._img_v = None
         self._dirty_mask = None
+        self._dirty_any = False
         self._page_groups = None
         self._evict_tick = 0
         self._store_status = None
@@ -1182,17 +1188,29 @@ class CacheLayer_kvarn(CacheLayer):
             assert kvarn_triton_available(), \
                 "EXL3_KVARN_TRITON=1 but the Triton path is unavailable " \
                 "(needs triton + CUDA); unset it for the torch path."
+            img = self._img_k if self._img_k is not None else None
             code, gg = kvarn_triton_store_row(
                 self, rows_k, rows_v, pages, offs, pos,
                 PAGE_SIZE // KVAR_N_GROUP, KVAR_N_SINK_TOKENS,
-                KVAR_N_TAIL_ROLLBACK_TOKENS)
+                KVAR_N_TAIL_ROLLBACK_TOKENS,
+                img, self._img_v if img is not None else None)
             if code == 0:
+                # Pure append: the image is current via write-through,
+                # nothing dirtied (the sweep below stays empty).
                 self._evict_exact_all(1)
                 return
             if code == 2:
                 self._evict_exact_all(1)
                 self._seal_group(gg)
                 self._dirty_mask[gg] = True
+                self._dirty_any = True
+                return
+            if code == 3:
+                # Fresh group reset: the row itself wrote through, but
+                # the reset siblings need a refresh from staging.
+                self._evict_exact_all(1)
+                self._dirty_mask[gg] = True
+                self._dirty_any = True
                 return
             # code == 1: fall through to the torch paths below.
         # Torch fallbacks need the Python int (single sync, same as the
@@ -1237,6 +1255,7 @@ class CacheLayer_kvarn(CacheLayer):
                     self._seal_group(gi)
             gv = g.to(device=self.device, dtype=torch.long)
             self._dirty_mask[gv[(gv >= 0) & (gv < self.num_groups)]] = True
+            self._dirty_any = True
             return
         for gi in torch.unique(g).tolist():
             gi = int(gi)
@@ -1287,6 +1306,7 @@ class CacheLayer_kvarn(CacheLayer):
         # unseal): refresh it on next materialization (idea 2).
         gm = g.to(device=self.device, dtype=torch.long)
         self._dirty_mask[gm[(gm >= 0) & (gm < self.num_groups)]] = True
+        self._dirty_any = True
         for p in torch.unique(pages).tolist():
             p = int(p)
             if n_new > int(self.page_owner_n[p]):
@@ -1385,6 +1405,7 @@ class CacheLayer_kvarn(CacheLayer):
         self.records[gs] = recs
         self.sealed[gs] = True
         self._dirty_mask[gs.to(self.device)] = True
+        self._dirty_any = True
         # M4: staging is freed on seal; only the single open group (plus
         # the sink) retains fp16 staging. Exact blocks stay for the
         # overlay over sealed tail groups.
@@ -1410,6 +1431,7 @@ class CacheLayer_kvarn(CacheLayer):
                                       self.layout, rec)
         self.sealed[g] = True
         self._dirty_mask[g] = True
+        self._dirty_any = True
         # M4: staging is freed on seal; only the single open group (plus
         # the sink) retains fp16 staging. Exact blocks stay for the
         # overlay over sealed tail groups.
@@ -1728,6 +1750,13 @@ class CacheLayer_kvarn(CacheLayer):
                     (self.num_pages, PAGE_SIZE, kvh, hd),
                     dtype=torch.half, device=dev)
                 self._img_v = torch.zeros_like(self._img_k)
+                # First build: every appended row predates the image (and
+                # fused stores before the image existed wrote staging
+                # only), so the whole image is stale by construction.
+                # Mark all groups dirty: the sweep below materializes
+                # everything once, then write-through keeps it current.
+                self._dirty_mask.fill_(True)
+                self._dirty_any = True
             # A previous serve-from-image overlay may still be pending
             # (twin-test order is update_direct -> get_kv without an
             # update_kv in between; production always has update_kv, which
@@ -1742,13 +1771,16 @@ class CacheLayer_kvarn(CacheLayer):
             # it is idempotent -- a not-currently-resident dirty group
             # refreshes to the same values it would get when it turns
             # resident, and any later content change re-dirties before
-            # serving. One nonzero replaces the ~13-op
-            # pages->groups->dirty chain (resident mask, page-groups
-            # gather, two masked filters) per layer per step.
-            dirty = self._dirty_mask.nonzero().flatten()
-            if dirty.numel():
-                self._refresh_groups(dirty)
-                self._dirty_mask[dirty] = False
+            # serving. The Python-side flag skips the nonzero sync when
+            # nothing dirtied since the last sweep (steady decode: the
+            # fused store keeps the image current via write-through, so
+            # this is almost every step).
+            if self._dirty_any:
+                dirty = self._dirty_mask.nonzero().flatten()
+                if dirty.numel():
+                    self._refresh_groups(dirty)
+                    self._dirty_mask[dirty] = False
+                self._dirty_any = False
             if _kvarn_use_triton() and not self.is_swa and \
                     cache_seqlens.numel() == 1:
                 # Serve-from-image: overlay lands in place on the
@@ -1978,6 +2010,7 @@ class CacheLayer_kvarn(CacheLayer):
         # Destination content changed in every branch above (copied,
         # rebuilt or reset): refresh it on next materialization (idea 2).
         self._dirty_mask[to_page * gps: to_page * gps + gps] = True
+        self._dirty_any = True
         # The shared content aliases one logical prefix now: the source
         # page is known-shared and the destination page is a new alias, so
         # both skip eviction until one of them is rewritten (which unpins
