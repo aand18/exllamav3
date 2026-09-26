@@ -134,10 +134,21 @@ so timing is not directly comparable. The architectural lessons taken
 are recorded above (fuse dequant into attention; batch, don't
 thread); this table is the timing baseline for our own regressions.
 
-Decode @8192, 1.40bpw 27B (64 greedy steps, warm inductor cache):
-fp16 83.7-87.0 tok/s vs kvarn 7.8-64.5 tok/s depending on the step below
-(current: 64.5 tok/s TRITON=1 parity-off, runs 63.4-64.5, 63.0 PARITY=1
-same code; fp16 86.1-87.0 same runs).
+Protocol: prefill at 8k/16k/32k + 256 greedy decode tokens (tg) at
+each length, 27B dense 1.40bpw, `EXL3_KVARN_TRITON=1` parity-off
+(PARITY=1 alongside for the gate). Peaks are allocator peaks per
+phase (weights + cache + temps; prefill peaks include the full-length
+fp32 scoring logits, decode peaks are the honest cache comparison).
+
+| ctx | fp16 pre | kvarn pre | fp16 dec (peak) | kvarn dec (peak) | KLD same-top |
+|-----|----------|-----------|-----------------|------------------|--------------|
+| 8192 | 3.3s, 2449 tok/s (12.5GB) | 4.8s, 1696 tok/s (13.1GB) | 88.1 tok/s (11.9GB) | 58.3 tok/s (12.0GB) | 100.00% |
+| 16384 | 6.7s, 2458 tok/s (14.1GB) | 9.5s, 1722 tok/s (15.2GB) | 83.0 tok/s (14.1GB) | 58.7 tok/s (14.1GB) | 100.00% |
+| 32768 | 14.3s, 2293 tok/s (17.4GB) | 19.9s, 1643 tok/s (19.5GB) | 76.2 tok/s (18.4GB) | 56.9 tok/s (18.4GB) | 100.00% |
+
+PARITY=1 same code: 58.0/58.4/56.3 tok/s decode; KLD digits identical
+at all lengths. Kvarn costs no extra VRAM end-to-end vs fp16 at any
+length (decode peaks equal within 0.1GB).
 Per-token profile (16 cached layers): store ~3.7ms/layer, serve
 ~1.1ms/layer, attention ~0.7ms/layer (fp16 step total 11.6ms).
 
@@ -253,6 +264,19 @@ Generation optimization history (all KLD-identical, same-top 100%):
   same code, fp16 86.1-87.0 same runs; kvarn prefill 5.0s, no
   regression). KLD digits identical; PARITY=1 clean at 8k; CPU 77 +
   twins 10 green.
+- Batched single-group seal (256-step runs exposed an 88ms/seal cliff:
+  37.7 tok/s over 256 steps vs 64.5 over 120): `_seal_group` delegated
+  to `_seal_groups_batched` (one Sinkhorn+quantize per K/V over all
+  tiles; records bit-identical): 59.1-59.5 tok/s over 256 steps from 8k
+  (58.0 PARITY=1, fp16 88.1-88.5 same runs). KLD identical; CPU 77 +
+  twins 10 green.
+- Image to 160 pages (~40k tokens): 32k+256 needs 129 pages and the
+  legacy path rematerializes the whole context per step (8.2 tok/s at
+  32k vs 64.4 fp16). 56.9 tok/s over 256 steps from 32k (56.3 PARITY=1,
+  fp16 76.1-76.4 same runs); 16k holds 59.1 (58.4 PARITY=1, fp16 83.0).
+  KLD same-top 100% at all three lengths; decode peaks equal to fp16
+  within 0.1GB (see protocol table). Harness now prints prefill tok/s
+  and per-phase peak VRAM.
   (Copy+overlay single-kernel fusion was considered and rejected: the
   copy grid and overlay grid would write the same temp rows from
   different programs with a required order and no cross-CTA barrier.)
