@@ -38,7 +38,8 @@ def main():
     if args.moe_cpu_offload:
         config.infer_params.moe_cpu_offload = args.moe_cpu_offload
     model = Model.from_config(config)
-    c_kvarn = Cache(model, max_num_tokens=args.ntok, layer_type=CacheLayer_kvarn,
+    max_tok = ((args.ntok + args.steps + 255) // 256) * 256
+    c_kvarn = Cache(model, max_num_tokens=max_tok, layer_type=CacheLayer_kvarn,
                     k_bits=k_bits, v_bits=v_bits)
     model.load(args.device, progressbar=False)
 
@@ -73,13 +74,30 @@ def main():
     t_serve = (time.time() - t0) / args.steps * 1000
     print(f"A serve-only get_kv (1 layer): {t_serve:.2f} ms/call", flush=True)
 
+    # B. update (1 row) + get_kv (true decode mix, 1 layer).
+    kvh, hd = lay0.num_kv_heads, lay0.head_dim
+    k1 = torch.randn(1, 1, kvh, hd, dtype=torch.half, device="cuda:0")
+    v1 = torch.randn(1, 1, kvh, hd, dtype=torch.half, device="cuda:0")
+    t0 = time.time()
+    with torch.inference_mode():
+        for i in range(args.steps):
+            se = torch.tensor([n + i], dtype=torch.int32)
+            lay0.update_kv_direct(se, bt, k1, v1, 1)
+            se2 = torch.tensor([n + i + 1], dtype=torch.int32)
+            k, v = lay0.get_kv(se2, bt)
+            del k, v
+    torch.cuda.synchronize()
+    t_mix = (time.time() - t0) / args.steps * 1000
+    print(f"B update+get_kv (1 layer): {t_mix:.2f} ms/call "
+          f"(store ~= {t_mix - t_serve:.2f} ms)", flush=True)
+
     # B/C need full-model forwards; report per-step totals via forward.
     tok = ids[:, -1:]
     past = n
     t0 = time.time()
     for _ in range(args.steps):
         p = {"cache": c_kvarn, "attn_mode": "flash_attn",
-             "batch_shape": (1, n), "past_len": past}
+             "batch_shape": (1, max_tok), "past_len": past}
         if states is not None:
             p["recurrent_states"] = states
         logits = model.forward(tok, p)
