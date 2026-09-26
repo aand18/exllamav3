@@ -1118,7 +1118,10 @@ class CacheLayer_kvarn(CacheLayer):
         """
         rows_k/rows_v: (T, kvh, hd) fp16 ORIGINAL domain, at logical
         positions ``pos`` ((T,) long) with owning-sequence length
-        ``n_new``. Rotates into staging, mirrors exact copies for the
+        ``n_new`` (plain int or 0-d tensor: callers pass the tensor form
+        to avoid a CPU sync; only the torch fallback paths below
+        materialize the Python int, the fused Triton steady path never
+        touches it). Rotates into staging, mirrors exact copies for the
         resident window (sink + trailing N+R), marks present, seals newly
         completed groups (eager seal stays: completed groups seal even
         inside the tail window; the overlay keeps serving them exact).
@@ -1136,11 +1139,13 @@ class CacheLayer_kvarn(CacheLayer):
         pages = pages.to(torch.long)
         offs = offs.to(torch.long)
         pos = pos.to(torch.long)
-        n_new = int(n_new)
         # Fused single-row store (decode appends): 2 launches + 1 status
         # sync instead of ~50 launches + ~10 syncs. Policy events bail
         # (code 1) into the torch paths below; completed groups come back
-        # for the torch sealer (code 2).
+        # for the torch sealer (code 2). The fused path never reads
+        # n_new (position math resolves in-kernel), so the int()
+        # materialization stays below it: steady decode pays zero syncs
+        # here, fallback paths keep the exact old behavior.
         if rows_k.shape[0] == 1 and not self.is_swa and _kvarn_use_triton():
             from ..modules.attention_fn.kvarn_triton import (
                 kvarn_triton_available, kvarn_triton_store_row)
@@ -1160,6 +1165,9 @@ class CacheLayer_kvarn(CacheLayer):
                 self._dirty_mask[gg] = True
                 return
             # code == 1: fall through to the torch paths below.
+        # Torch fallbacks need the Python int (single sync, same as the
+        # old caller-side int); the fused path above never paid it.
+        n_new = int(n_new)
         # One batched WHT for K+V (was two calls): same per-element
         # math, ~half the launches. Bit-exact (batching preserves order).
         # With EXL3_KVARN_TRITON=1 the fused Triton row-WHT runs instead
@@ -1723,7 +1731,7 @@ class CacheLayer_kvarn(CacheLayer):
             pages = bt[b, pos // PAGE_SIZE]
             offs = pos % PAGE_SIZE
             self._store_rows(k[pages, offs], v[pages, offs], pages, offs,
-                             pos, int(seqlens[b]) + length)
+                             pos, seqlens[b] + length)
 
     @override
     def update_kv_direct(self, cache_seqlens: torch.Tensor, block_table: torch.Tensor,
@@ -1740,7 +1748,7 @@ class CacheLayer_kvarn(CacheLayer):
             pos = seqlens[b] + torch.arange(length, device=bt.device)
             pages = bt[b, pos // PAGE_SIZE]
             offs = pos % PAGE_SIZE
-            self._store_rows(k[b], v[b], pages, offs, pos, int(seqlens[b]) + length)
+            self._store_rows(k[b], v[b], pages, offs, pos, seqlens[b] + length)
 
     @override
     def copy_page(self, source: CacheLayer_kvarn, from_page: int, to_page: int,
