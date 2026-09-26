@@ -413,9 +413,12 @@ if _have_triton:
         exact_k_ptr, exact_v_ptr,         # (G, 128, kvh, HD) tail dtype
         exact_valid_ptr,                  # (G,) bool
         seqlens_ptr, bt_ptr,              # (1,) int32 n, (P,) int32 pages
+        sk_ptr, sv_ptr,                   # (MAXW, kvh, HD) fp16 stash
+        slin_ptr, svalid_ptr,             # (MAXW,) int32 lin / bool valid
         KVH: tl.constexpr, HD: tl.constexpr, GPS: tl.constexpr,
         TAIL_EFF: tl.constexpr, SINK_N: tl.constexpr,
         HAS_SINK: tl.constexpr, TAIL_IS_BF16: tl.constexpr, MAXW: tl.constexpr,
+        DO_STASH: tl.constexpr,
     ):
         # Fused exact overlay: sink + tail rows gathered from the exact
         # blocks into the fp16 temps. Grid (MAXW,) programs x (kvh*HD)
@@ -451,17 +454,79 @@ if _have_triton:
         else:
             ek = tl.load(exact_k_ptr + e_off, mask=valid)
             ev = tl.load(exact_v_ptr + e_off, mask=valid)
+        # Stash-first (active rows only; every pid owns its slot, so no
+        # cross-program race): stash the pre-overlay rows, then land the
+        # overlay. The restore kernel in update_kv puts these back after
+        # the forward, which retires the 2 full-image clones. valid[]
+        # doubles as the activity record: inactive pids clear it every
+        # call, so restore never replays a stale row. Pruned entirely on
+        # throwaway temps (DO_STASH off: dummy pointers never touched).
+        if DO_STASH:
+            s_off = pid * KVH * HD + h * HD + d
+            oldk = tl.load(img_k_ptr + i_off, mask=active)
+            oldv = tl.load(img_v_ptr + i_off, mask=active)
+            tl.store(sk_ptr + s_off, oldk, mask=active)
+            tl.store(sv_ptr + s_off, oldv, mask=active)
+            tl.store(slin_ptr + pid, page * 256 + offs, mask=active)
+            tl.store(svalid_ptr + pid, active)
         tl.store(img_k_ptr + i_off, ek, mask=valid)
         tl.store(img_v_ptr + i_off, ev, mask=valid)
 
 
+if _have_triton:
+    @triton.jit
+    def _kvarn_unoverlay_kernel(
+        img_k_ptr, img_v_ptr,             # (P, 256, kvh, HD) fp16 image
+        sk_ptr, sv_ptr,                   # (MAXW, kvh, HD) fp16 stash
+        slin_ptr, svalid_ptr,             # (MAXW,) int32 lin / bool valid
+        KVH: tl.constexpr, HD: tl.constexpr, MAXW: tl.constexpr,
+    ):
+        # Restore stashed rows after the forward consumed the overlay.
+        # Separate launch from the overlay (grid barrier): the tail slides
+        # every step, so restore rows and overlay rows of consecutive
+        # calls overlap under different pid mappings -- same-kernel
+        # ordering would be a cross-program race. Consumes the valid bits
+        # (clears them) so a later call without an overlay is a no-op.
+        pid = tl.program_id(0)
+        lane = tl.arange(0, KVH * HD)
+        h = lane // HD
+        d = lane % HD
+        v = tl.load(svalid_ptr + pid)
+        lin = tl.load(slin_ptr + pid)
+        s_off = pid * KVH * HD + h * HD + d
+        i_off = lin * KVH * HD + h * HD + d
+        tl.store(img_k_ptr + i_off, tl.load(sk_ptr + s_off), mask=v)
+        tl.store(img_v_ptr + i_off, tl.load(sv_ptr + s_off), mask=v)
+        tl.store(svalid_ptr + pid, False)
+
+
+def _kvarn_overlay_stash(layer, maxw, dev):
+    """Lazy persistent overlay-stash buffers (no per-call alloc)."""
+    sk = getattr(layer, "_ov_stash_k", None)
+    if sk is None or sk.shape[0] != maxw:
+        kvh, hd = layer.num_kv_heads, layer.head_dim
+        layer._ov_stash_k = torch.zeros((maxw, kvh, hd),
+                                        dtype=torch.half, device=dev)
+        layer._ov_stash_v = torch.zeros((maxw, kvh, hd),
+                                        dtype=torch.half, device=dev)
+        layer._ov_lin = torch.zeros((maxw,), dtype=torch.int32, device=dev)
+        layer._ov_valid = torch.zeros((maxw,), dtype=torch.bool, device=dev)
+        layer._ov_pending = False
+    return (layer._ov_stash_k, layer._ov_stash_v,
+            layer._ov_lin, layer._ov_valid)
+
+
 def kvarn_triton_overlay(image_k, image_v, layer, seqlens_1, bt_1,
-                         gps, sink_tokens, tail_effective):
+                         gps, sink_tokens, tail_effective, stash=None):
     """Fused exact overlay into fp16 image temps (non-SWA caller).
 
     One launch replaces the per-group Python loop (tolist + int syncs +
     per-group assigns). Absent exact blocks are skipped, matching the
     torch fallback row-for-row. Loud failure when unrunnable.
+
+    stash: None (overlay onto throwaway temps: legacy path, unit tests)
+    or the tuple from _kvarn_overlay_stash (serve-from-image: rows are
+    stashed in-kernel for kvarn_triton_unoverlay after the forward).
     """
     if not _have_triton:
         raise RuntimeError(
@@ -473,15 +538,46 @@ def kvarn_triton_overlay(image_k, image_v, layer, seqlens_1, bt_1,
     kvh, hd = layer.num_kv_heads, layer.head_dim
     dev = image_k.device
     maxw = sink_tokens + int(tail_effective)
+    if stash is None:
+        sk, sv, slin, svalid, do_stash = image_k, image_v, image_k, image_k, False
+    else:
+        sk, sv, slin, svalid, do_stash = (*stash, True)
     _kvarn_overlay_kernel[(maxw,)](
         image_k, image_v,
         layer.exact_k, layer.exact_v, layer.exact_valid,
         seqlens_1.to(dtype=torch.int32, device=dev),
         bt_1.to(dtype=torch.int32, device=dev),
+        sk, sv, slin, svalid,
         kvh, hd, gps,
         int(tail_effective), sink_tokens, bool(layer.has_sink),
         layer.tail_dtype == torch.bfloat16, maxw,
+        do_stash,
     )
+    if do_stash:
+        layer._ov_pending = True
+
+
+def kvarn_triton_unoverlay(image_k, image_v, layer):
+    """Restore stashed rows after the forward consumed the overlay.
+
+    Gated by the layer's pending flag (plain bool, zero syncs): without
+    a preceding stashed overlay this is a no-op. Loud failure when
+    unrunnable.
+    """
+    if not bool(getattr(layer, "_ov_pending", False)):
+        return
+    if not _have_triton:
+        raise RuntimeError(
+            "KVarN Triton unoverlay requires triton (import failed on this host).")
+    kvh, hd = layer.num_kv_heads, layer.head_dim
+    maxw = int(layer._ov_valid.shape[0])
+    _kvarn_unoverlay_kernel[(maxw,)](
+        image_k, image_v,
+        layer._ov_stash_k, layer._ov_stash_v,
+        layer._ov_lin, layer._ov_valid,
+        kvh, hd, maxw,
+    )
+    layer._ov_pending = False
 
 
 def kvarn_triton_wht_slices(x):
