@@ -183,7 +183,37 @@ visible window, still context-independent), cutting cache-only 1.83GB
 to 1.11GB with KLD-identical digits (8k same-top 100%). What remains is
 the persistent image (the speed play) at exactly one fp16 cache by
 construction: reclaiming it needs imageless serve (online dequant,
-Bee-style fused attention) -- scoped separately.
+Bee-style fused attention) -- decided below (Task 5: NO-GO).
+
+### Task 5 decision: NO-GO on imageless online serve (stop Phase 2)
+
+Spike: true-fused decode kernel (program per kv-head x sealed-group,
+128-token online loop straight from records, no per-token FWHT -- the
+WHT is symmetric orthogonal so dot(Q,Hk) = dot(HQ,k): Q rows are WHT'd
+once per step with the proven kernel, attention accumulates in the WHT
+domain, output WHT'd once at the end; stage-2 block-combine in torch).
+Spike deleted after the decision per plan; design preserved in
+`.superpowers/sdd/kvarn-mem-plan/task-5-report.md`.
+
+- Row-math vs `kvarn_triton_dequant_groups` (kvh=4, hd=256): torch.equal
+  on every tile, 4-bit and 5-bit presets. PASS.
+- Attention vs torch fp32 reference: RMSE 3e-08 (online-vs-two-pass
+  softmax agrees to rounding). PASS.
+- 8k decode probe, one 27B layer (kvh=4, hd=256, 6 q-heads/kv, 63 sealed
+  groups = 8064 rows): fp16 production paged attention 0.1150 ms/step
+  (14.03 ns/row) vs spike 0.2531 ms/step incl. Q/out WHTs (31.38 ns/row).
+  Per-row ratio spike/fp16 = 2.24; GO needed <= 1.11. NO-GO.
+- Breakdown: the fused stage-1 core runs at 9.8 ns/row (BEATS fp16) --
+  the algorithm is sound. The gap is dispatch-bound scaffolding (~60%:
+  torch block-combine 98us + two tiny WHT launches 95us). A Task-6
+  fusion would project to ~1.2-1.3x, still missing the line; the
+  everything-goes-right projection sits exactly on it with zero margin.
+  A gate that needs everything to go right is not a GO.
+- Consequence: stop Phase 2 (Tasks 6-7 dead: no full kernel, no default
+  flip). Keep Phase 1 gains: windowed staging+exact, 1.83 -> 1.11GB
+  cache-only, KLD-identical. Imageless serve stays future work (a
+  prefill/varlen variant has more parallelism and might GO -- out of
+  scope; the HQ-trick reformulation is validated and reusable).
 Per-token profile (16 cached layers): store ~3.7ms/layer, serve
 ~1.1ms/layer, attention ~0.7ms/layer (fp16 step total 11.6ms).
 
