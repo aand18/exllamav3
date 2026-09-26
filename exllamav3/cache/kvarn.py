@@ -1036,21 +1036,36 @@ class CacheLayer_kvarn(CacheLayer):
         """
         bt = block_table.long()
         seqlens = cache_seqlens.long()
-        for b in range(seqlens.numel()):
-            n = int(seqlens[b]) + int(length)
-            if n <= 0:
-                continue
-            npages = (n + PAGE_SIZE - 1) // PAGE_SIZE
-            prefix = bt[b, :npages]
-            assert int(prefix.min()) >= 0 and int(prefix.max()) < self.num_pages, \
-                "KVarN: block table page out of range"
-            # Vector max-update (was a per-page Python loop with 3 syncs
-            # per page: O(ctx) syncs per token). Identical semantics.
-            cur = self.page_owner_n[prefix]
-            self.page_owner_n[prefix] = torch.where(
-                cur < n,
-                torch.tensor(n, device=cur.device, dtype=torch.int64),
-                cur)
+        bsz = seqlens.numel()  # shape only, no sync
+        if bsz == 0:
+            return
+        # Vectorized over the batch: no .item()/.tolist() in steady
+        # state (was 3 syncs per entry: seqlens int + min/max asserts).
+        # n_vec stays a tensor; per-entry slicing uses a broadcast mask
+        # so no Python int is ever needed. One validation sync for the
+        # whole batch preserves the loud out-of-range failure.
+        n_vec = seqlens + int(length)
+        npages = (n_vec + PAGE_SIZE - 1) // PAGE_SIZE
+        npages = torch.where(n_vec > 0, npages,
+                             torch.zeros_like(npages))
+        max_cols = bt.shape[1]
+        cols = torch.arange(max_cols, device=bt.device)
+        mask = cols.unsqueeze(0) < npages.unsqueeze(1)
+        # Single validation sync for the whole batch (was 2 per entry
+        # via min/max). Empty selection validates clean (no-op below).
+        sel = bt[mask]
+        if sel.numel() and bool(((sel < 0) | (sel >= self.num_pages)).any()):
+            raise AssertionError(
+                "KVarN: block table page out of range")
+        # Max-update per entry (identical semantics to the per-entry
+        # loop; _store_rows still applies the min-drop for page reuse
+        # after this, so reuse final state is unchanged). Empty masks
+        # are no-ops: no per-entry syncs.
+        for b in range(bsz):
+            idx = bt[b][mask[b]]
+            n_b = n_vec[b]
+            cur = self.page_owner_n[idx]
+            self.page_owner_n[idx] = torch.where(cur < n_b, n_b, cur)
 
     def _store_row_single(self, pages, offs, pos, n_new,
                           rk, rv, ek, ev, g, s) -> bool:
