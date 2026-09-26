@@ -2,7 +2,8 @@ from types import SimpleNamespace
 
 from . import Model, Config, Cache, Tokenizer
 from .loader import SafetensorsCollection, VariantSafetensorsCollection
-from .cache import CacheLayer_fp16, CacheLayer_quant
+from .cache import CacheLayer_fp16, CacheLayer_quant, CacheLayer_kvarn
+from .cache.kvarn import kvarn_parse_preset, kvarn_parse_swa_pair
 from .generator.sampler import ComboSampler
 from argparse import ArgumentParser
 import yaml
@@ -77,6 +78,7 @@ def add_args(
 
     parser.add_argument("-lv", "--load_verbose", action = "store_true", help = "Verbose output while loading")
     parser.add_argument("-asnf", "--autosplit_no_forward", action = "store_true", help = "Skip forward pass in autosplit, for debug purposes.")
+    parser.add_argument("-nw", "--no_warmup", action = "store_true", help = "Skip the post-load warmup (kernel compilation, GEMM autotuning and graph workspaces are then paid on the first requests instead)")
 
     parser.add_argument("-layer_map", "--layer_map", type = str, help = "RYS layer map as a list of ints or (inclusive) ranges, example: 0..15,11..31 (repeats layers 11 through 15 once)", default = None)
 
@@ -108,10 +110,14 @@ def add_args(
 
     if cache:
         parser.add_argument("-cs", "--cache_size", type = int, help = f"Total cache size in tokens, default: {default_cache_size}", default = default_cache_size)
-        parser.add_argument("-cq", "--cache_quant", type = str, help = "Use quantized cache. Specify either kv_bits or k_bits,v_bits pair")
+        parser.add_argument("-cq", "--cache_quant", type = str, help = "Use quantized cache. Specify either kv_bits or k_bits,v_bits pair, or a KVarN preset: kvarnN symmetric (N = 2,3,4,5,6,8) or kvarnK,kvarnV asymmetric (full Bee 36-combo table, e.g. kvarn5,kvarn4 balanced default)")
         parser.add_argument("-cca", "--cache_compand_a", type = float, help = "Compand a value for simulated cache, default: 0.0", default = 0.0)
         parser.add_argument("-ccs", "--cpu_cache_size", type = float, help = f"CPU second-tier cache size, in GB, default: {default_cpu_cache_size}", default = default_cpu_cache_size)
         parser.add_argument("-rcs", "--recurrent_cache_size", type = float, help = f"CPU second-tier cache size, in GB, default: {default_recurrent_cache_size}", default = default_recurrent_cache_size)
+        parser.add_argument("-kvt", "--kv_tail_tokens", type = int, help = "KVarN exact tail size in tokens (0/omitted => intrinsic 128 floor, positive values ceil to 128-groups, capped at cache size, SWA layers capped at the sliding window; full-window => native exact). Ignored for non-KVarN caches.", default = 0)
+        parser.add_argument("-kvt_type", "--kv_tail_type", type = str, help = "KVarN exact tail dtype: f16 (default) or bf16. Ignored for non-KVarN caches.", default = "f16")
+        parser.add_argument("-kvsk", "--kv_swa_k", "--kv-swa-k", type = str, help = "KVarN SWA-layer K preset override: kvarnN or bare N with N in {2,3,4,5,6,8} (e.g. kvarn8 or 8). Requires --kv-swa-v; omit both to reuse the -cq preset for SWA layers. Ignored for non-KVarN caches.", default = None)
+        parser.add_argument("-kvsv", "--kv_swa_v", "--kv-swa-v", type = str, help = "KVarN SWA-layer V preset override: kvarnN or bare N with N in {2,3,4,5,6,8} (e.g. kvarn6 or 6). Requires --kv-swa-k; omit both to reuse the -cq preset for SWA layers. Ignored for non-KVarN caches.", default = None)
 
     if add_draft_model_args:
         parser.add_argument("-dm", "--draft_model_dir", type = str, help = "Path to draft model directory", default = None)
@@ -274,30 +280,71 @@ def init(
     )
     if "cache_size" in vars(args):
         if args.cache_quant is not None:
-            split = [int(bits) for bits in args.cache_quant.split(",")]
-            if len(split) == 1:
-                k_bits = v_bits = split[0]
-            elif len(split) == 2:
-                k_bits, v_bits = tuple(split)
+            cq = args.cache_quant.strip().lower()
+            if cq.startswith("kvarn"):
+                try:
+                    k_bits, v_bits = kvarn_parse_preset(cq)
+                except ValueError as e:
+                    raise ValueError(str(e)) from None
+                try:
+                    swa_k_bits, swa_v_bits = kvarn_parse_swa_pair(
+                        getattr(args, "kv_swa_k", None),
+                        getattr(args, "kv_swa_v", None),
+                        (k_bits, v_bits),
+                    )
+                except ValueError as e:
+                    raise ValueError(str(e)) from None
+                # No override requested: inherit the main preset on every
+                # layer (each layer self-selects from is_swa anyway).
+                swa_override = (swa_k_bits, swa_v_bits) != (k_bits, v_bits)
+                kvarn_kwargs = dict(
+                    k_bits = k_bits,
+                    v_bits = v_bits,
+                    tail_tokens = getattr(args, "kv_tail_tokens", 0) or 0,
+                    tail_type = getattr(args, "kv_tail_type", "f16") or "f16",
+                    **({"swa_k_bits": swa_k_bits, "swa_v_bits": swa_v_bits}
+                       if swa_override else {}),
+                )
+                cache = Cache(
+                    model,
+                    max_num_tokens = args.cache_size,
+                    layer_type = CacheLayer_kvarn,
+                    max_history = max_history,
+                    max_batch_size = args.autosplit_max_batch_size,
+                    **kvarn_kwargs,
+                )
+                draft_cache = Cache(
+                    draft_model,
+                    max_num_tokens = args.cache_size,
+                    layer_type = CacheLayer_kvarn,
+                    **kvarn_kwargs,
+                ) if draft_model_dir else None
             else:
-                raise ValueError("Specify either one or two bitrates for cache quantization")
-            cache = Cache(
-                model,
-                max_num_tokens = args.cache_size,
-                layer_type = CacheLayer_quant,
-                k_bits = k_bits,
-                v_bits = v_bits,
-                compand_a = args.cache_compand_a,
-                max_history = max_history,
-                max_batch_size = args.autosplit_max_batch_size,
-            )
-            draft_cache = Cache(
-                draft_model,
-                max_num_tokens = args.cache_size,
-                layer_type = CacheLayer_quant,
-                k_bits = k_bits,
-                v_bits = v_bits
-            ) if draft_model_dir else None
+                split = [int(bits) for bits in args.cache_quant.split(",")]
+                if len(split) == 1:
+                    k_bits = v_bits = split[0]
+                elif len(split) == 2:
+                    k_bits, v_bits = tuple(split)
+                else:
+                    raise ValueError("Specify either one or two bitrates for cache quantization")
+                cache = Cache(
+                    model,
+                    max_num_tokens = args.cache_size,
+                    layer_type = CacheLayer_quant,
+                    k_bits = k_bits,
+                    v_bits = v_bits,
+                    compand_a = args.cache_compand_a,
+                    max_history = max_history,
+                    max_batch_size = args.autosplit_max_batch_size,
+                )
+                draft_cache = Cache(
+                    draft_model,
+                    max_num_tokens = args.cache_size,
+                    layer_type = CacheLayer_quant,
+                    k_bits = k_bits,
+                    v_bits = v_bits,
+                    compand_a = args.cache_compand_a,
+                ) if draft_model_dir else None
         else:
             cache = Cache(
                 model,
@@ -369,6 +416,16 @@ def init(
         max_chunk_size = args.chunk_size,
         **kwargs
     )
+
+    # Warmup (before any generator is attached to the cache)
+    if not getattr(args, "no_warmup", False):
+        printp(not quiet, f" -- Warming up...")
+        model.warmup(
+            cache = cache,
+            max_chunk_size = args.chunk_size,
+            progressbar = progress,
+            verbose = args.load_verbose,
+        )
 
     # Load tokenizer
     if load_tokenizer:

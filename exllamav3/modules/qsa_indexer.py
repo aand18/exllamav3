@@ -54,9 +54,13 @@ class QSAIndexer(Module):
         qmap: str | None = None,
         out_dtype: torch.dtype | None = None,
         qbits_key: str = "bits",
+        submodules: dict | None = None,
     ):
         super().__init__(config = config, key = key, qmap = None)
         assert kv_heads == 1, "QSAIndexer assumes a single raw key head"
+        self.kv_heads = kv_heads
+        self.token_budget_ = token_budget
+        self.rms_norm_eps = rms_norm_eps
         self.hidden_size = hidden_size
         self.n_heads = n_heads
         self.head_dim = head_dim
@@ -65,7 +69,13 @@ class QSAIndexer(Module):
         self.block_topk = token_budget // compress_ratio
         self.scale = 1.0 / math.sqrt(head_dim)
 
-        self.index_qk_proj = Linear(
+        # In a TP worker the submodules arrive prebuilt (imported from the parent process)
+        def _sub(name, factory):
+            m = submodules[name] if submodules is not None else factory()
+            self.register_submodule(m)
+            return m
+
+        self.index_qk_proj = _sub("index_qk_proj", lambda: Linear(
             config = config,
             key = f"{key}.index_qk_proj",
             in_features = hidden_size,
@@ -73,12 +83,43 @@ class QSAIndexer(Module):
             qmap = qmap + ".input" if qmap is not None else None,
             out_dtype = torch.half,
             qbits_key = qbits_key,
-        )
-        self.q_layernorm = RMSNorm(config, f"{key}.q_layernorm", rms_norm_eps, constant_bias = 1.0)
-        self.k_layernorm = RMSNorm(config, f"{key}.k_layernorm", rms_norm_eps, constant_bias = 1.0)
-        self.register_submodule(self.index_qk_proj)
-        self.register_submodule(self.q_layernorm)
-        self.register_submodule(self.k_layernorm)
+        ))
+        self.q_layernorm = _sub("q_layernorm", lambda: RMSNorm(config, f"{key}.q_layernorm", rms_norm_eps, constant_bias = 1.0))
+        self.k_layernorm = _sub("k_layernorm", lambda: RMSNorm(config, f"{key}.k_layernorm", rms_norm_eps, constant_bias = 1.0))
+
+    # Tensor-parallel: the indexer is headless (one raw key head, per-token block selection shared
+    # by all attention heads) and small; it is replicated on the rank that holds its attention
+    # layer whole (Attention places QSA layers with max_devices = 1)
+    _tp_submodules = ("index_qk_proj", "q_layernorm", "k_layernorm")
+
+    def storage_size(self):
+        return self.index_qk_proj.storage_size()
+
+    def tp_export(self, plan, producer):
+        assert self.device is not None, "Cannot export module for TP before loading."
+        return {
+            "cls": QSAIndexer,
+            "kwargs": {
+                "key": self.key,
+                "hidden_size": self.hidden_size,
+                "n_heads": self.n_heads,
+                "kv_heads": self.kv_heads,
+                "head_dim": self.head_dim,
+                "token_budget": self.token_budget_,
+                "compress_ratio": self.compress_ratio,
+                "rms_norm_eps": self.rms_norm_eps,
+            },
+            **{n: getattr(self, n).tp_export(plan, producer) for n in self._tp_submodules},
+            "device": self.device,
+        }
+
+    @staticmethod
+    def tp_import(local_context, exported, plan):
+        # Submodule keys are not in the plan: whole (unsplit) imports
+        subs = {n: exported[n]["cls"].tp_import(local_context, exported[n], plan) for n in QSAIndexer._tp_submodules}
+        module = QSAIndexer(config = None, **exported["kwargs"], submodules = subs)
+        module.device = local_context["device"]
+        return module
 
     @override
     def optimizer_targets(self):
@@ -650,6 +691,7 @@ class QSAIndexer(Module):
         """
         from .attention_fn.qsa_triton import qsa_sparse_attend_rows
         from ..cache.quant import CacheLayer_quant
+        from ..cache.kvarn import CacheLayer_kvarn
         bsz, seq = q.shape[:2]
         indices = self.select_indices_paged(layer, q_idx, block_table, cache_seqlens_cpu)
         bt_rows = block_table.int().unsqueeze(1).expand(bsz, seq, -1) \
@@ -658,6 +700,15 @@ class QSAIndexer(Module):
             # Packed pages, dequantized online by the gather kernel
             qk, sk, qv, sv, kb, vb = layer.get_qkv()
             k_arg, v_arg, qc, page_size = qk, qv, (sk, sv, kb, vb), qk.shape[1]
+        elif isinstance(layer, CacheLayer_kvarn):
+            # KVarN takes the dequant path everywhere (no packed pages for
+            # online kernels): serve the merged fp16 image (sealed body +
+            # exact sink/tail overlay) for referenced pages. Current tokens
+            # were already stored by update_kv_direct before this call.
+            k_mat, v_mat = layer.get_kv(cache_seqlens_cpu, block_table, -1)
+            k_arg = k_mat.view(-1, attn.num_kv_heads, attn.head_dim)
+            v_arg = v_mat.view(-1, attn.num_kv_heads, attn.head_dim)
+            qc, page_size = None, k_mat.shape[1]
         else:
             k_arg = layer.k.view(-1, attn.num_kv_heads, attn.head_dim)
             v_arg = layer.v.view(-1, attn.num_kv_heads, attn.head_dim)

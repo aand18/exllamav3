@@ -3,24 +3,8 @@ import os
 
 import torch
 
-try:
-    import triton
-    import triton.language as tl
-    has_triton = True
-except ImportError:
-    has_triton = False
-
-    # Triton dummy functions so import doesn't break if Triton is unavailable
-    class _DummyTritonLanguage:
-        constexpr = object()
-
-    class _DummyTriton:
-        @staticmethod
-        def jit(fn):
-            return fn
-
-    triton = _DummyTriton()
-    tl = _DummyTritonLanguage()
+import triton
+import triton.language as tl
 
 from .common import AttnArgs, get_non_causal_span_arglist
 
@@ -361,9 +345,6 @@ def paged_attn_triton(
     q/k/v are [batch, seq, heads, dim], caches are [pages, page_size, kv_heads, dim],
     block_table is [batch, pages_per_seq], and cache_seqlens is the pre-append length.
     """
-    if not has_triton:
-        raise RuntimeError("paged_attn_triton requires Triton, but Triton is not available")
-
     _check_tensor("q", q)
     _check_tensor("k_cache", k_cache)
     _check_tensor("v_cache", v_cache)
@@ -508,9 +489,6 @@ def paged_attn_triton_longq(
     num_stages: int = 1,
 ) -> torch.Tensor:
     """Long-query paged attention path that groups GQA sibling Q heads per program."""
-    if not has_triton:
-        raise RuntimeError("paged_attn_triton_longq requires Triton, but Triton is not available")
-
     _check_tensor("q", q)
     _check_tensor("k_cache", k_cache)
     _check_tensor("v_cache", v_cache)
@@ -641,7 +619,6 @@ def paged_attn_triton_longq(
 
 def fn_triton_paged_attn(args: AttnArgs) -> torch.Tensor | None:
     if (
-        not has_triton or
         args.is_varlen() or
         not args.has_kv_cache() or
         args.q_len > 256 or
@@ -672,7 +649,6 @@ def fn_triton_paged_attn(args: AttnArgs) -> torch.Tensor | None:
 
 def fn_triton_paged_attn_longq(args: AttnArgs) -> torch.Tensor | None:
     if (
-        not has_triton or
         args.is_varlen() or
         not args.has_kv_cache() or
         args.q_len <= 256 or
@@ -1037,9 +1013,17 @@ def _paged_attn_decode_combine_kernel(
     BLOCK_M: tl.constexpr,
     BLOCK_H: tl.constexpr,
     BLOCK_ROWS: tl.constexpr,
+    ROWS_SUB: tl.constexpr,
+    D_SUB: tl.constexpr,
 ):
-    """Flash-decoding phase 2: reduce the per-split partial accumulators."""
+    """Flash-decoding phase 2: reduce the per-split partial accumulators. Grid axis 1 splits
+    the program's (BLOCK_ROWS, HD_PAD) tile into (ROWS_SUB, D_SUB) sub-tiles so the serial
+    walk over the splits runs on many CTAs (decode launches only a few programs)."""
     pid = tl.program_id(0)
+    sub = tl.program_id(1)
+    D_CHUNKS: tl.constexpr = HD_PAD // D_SUB
+    r_c = sub // D_CHUNKS
+    d_c = sub - r_c * D_CHUNKS
 
     group_size = n_q_heads // n_kv_heads
     h_blocks = tl.cdiv(group_size, BLOCK_H)
@@ -1048,46 +1032,68 @@ def _paged_attn_decode_combine_kernel(
     batch = bh // n_kv_heads
     kv_head = bh - batch * n_kv_heads
 
-    rows = tl.arange(0, BLOCK_ROWS)
+    rows = r_c * ROWS_SUB + tl.arange(0, ROWS_SUB)
     row_q = rows % BLOCK_M
     row_h_local = h_block * BLOCK_H + (rows // BLOCK_M)
     q_head = kv_head * group_size + row_h_local
     valid_row = (row_q < q_len) & (row_h_local < group_size)
 
-    offs_d = tl.arange(0, HD_PAD)
+    offs_d = d_c * D_SUB + tl.arange(0, D_SUB)
     d_mask = offs_d < head_dim
 
-    m_max = tl.full((BLOCK_ROWS,), -float("inf"), tl.float32)
-    for s in range(num_splits):
-        ml_base = (pid * num_splits + s) * BLOCK_ROWS * 2
-        m_s = tl.load(partial_ml + ml_base + rows * 2)
-        m_max = tl.maximum(m_max, m_s)
+    # Splits are walked S_BLK at a time as one masked tile load per pass: a scalar loop with a
+    # runtime trip count and no pipelining serializes a full load latency per split (65 splits
+    # at a 2K sparse context cost 20 us), a tile load amortizes it
+    S_BLK: tl.constexpr = 16
+    offs_s = tl.arange(0, S_BLK)
+    m_max = tl.full((ROWS_SUB,), -float("inf"), tl.float32)
+    for s0 in range(0, num_splits, S_BLK):
+        sidx = s0 + offs_s
+        s_mask = sidx < num_splits
+        ml_idx = ((pid * num_splits + sidx)[:, None] * BLOCK_ROWS + rows[None, :]) * 2
+        m_s = tl.load(partial_ml + ml_idx, mask=s_mask[:, None], other=-float("inf"))
+        m_max = tl.maximum(m_max, tl.max(m_s, axis=0))
 
     if HAS_SINKS:
         # Learned per-head sink joins the softmax denominator at the final reduction
         sink = tl.load(sinks + q_head, mask=valid_row, other=0.0).to(tl.float32)
         m_max = tl.maximum(m_max, sink)
 
-    l_sum = tl.zeros((BLOCK_ROWS,), tl.float32)
-    acc = tl.zeros((BLOCK_ROWS, HD_PAD), tl.float32)
+    l_sum = tl.zeros((ROWS_SUB,), tl.float32)
+    acc = tl.zeros((ROWS_SUB, D_SUB), tl.float32)
     m_safe = tl.where(m_max == -float("inf"), 0.0, m_max)
-    for s in range(num_splits):
-        ml_base = (pid * num_splits + s) * BLOCK_ROWS * 2
-        m_s = tl.load(partial_ml + ml_base + rows * 2)
-        l_s = tl.load(partial_ml + ml_base + rows * 2 + 1)
-        w = tl.where(m_s == -float("inf"), 0.0, tl.exp(m_s - m_safe))
-        po_base = (pid * num_splits + s) * BLOCK_ROWS * HD_PAD
-        o_s = tl.load(partial_o + po_base + rows[:, None] * HD_PAD + offs_d[None, :])
-        acc += o_s * w[:, None]
-        l_sum += l_s * w
+    for s0 in range(0, num_splits, S_BLK):
+        sidx = s0 + offs_s
+        s_mask = sidx < num_splits
+        ml_idx = ((pid * num_splits + sidx)[:, None] * BLOCK_ROWS + rows[None, :]) * 2
+        m_s = tl.load(partial_ml + ml_idx, mask=s_mask[:, None], other=-float("inf"))
+        l_s = tl.load(partial_ml + ml_idx + 1, mask=s_mask[:, None], other=0.0)
+        w = tl.where(m_s == -float("inf"), 0.0, tl.exp(m_s - m_safe[None, :]))
+        po_idx = (pid * num_splits + sidx)[:, None, None] * (BLOCK_ROWS * HD_PAD) \
+            + rows[None, :, None] * HD_PAD + offs_d[None, None, :]
+        o_s = tl.load(partial_o + po_idx, mask=s_mask[:, None, None], other=0.0)
+        acc += tl.sum(o_s * w[:, :, None], axis=0)
+        l_sum += tl.sum(l_s * w, axis=0)
 
     if HAS_SINKS:
         l_sum += tl.exp(sink - m_safe)
     out_tile = acc / tl.where(l_sum[:, None] == 0.0, 1.0, l_sum[:, None])
     if QCV > 0:
-        out_tile = _rot_h32(out_tile, h32, BLOCK_ROWS, HD_PAD)
+        out_tile = _rot_h32(out_tile, h32, ROWS_SUB, D_SUB)   # 32-wide groups: D_SUB % 32 == 0
     out_base = ((batch * q_len + row_q) * n_q_heads + q_head) * head_dim
     tl.store(out + out_base[:, None] + offs_d[None, :], out_tile, mask=valid_row[:, None] & d_mask[None, :])
+
+
+def combine_subtiles(block_rows: int, hd_pad: int) -> tuple[int, int]:
+    """(ROWS_SUB, D_SUB) for the combine kernel: the smallest sub-tile whose h32 rotation still
+    forms a >= 16-row tl.dot (ROWS_SUB * D_SUB >= 512), D_SUB a multiple of 32."""
+    d_sub = min(128, hd_pad)
+    rows_sub = min(block_rows, max(1, 512 // d_sub))
+    while rows_sub * d_sub < 512 and d_sub < hd_pad:
+        d_sub *= 2
+    if rows_sub * d_sub < 512:
+        rows_sub, d_sub = block_rows, hd_pad
+    return rows_sub, d_sub
 
 
 _decode_sm_count = {}
@@ -1118,9 +1124,6 @@ def paged_attn_triton_decode(
     """Flash-decoding paged attention for short queries: the kv sequence is split across
     programs (sized from the block table, so no host sync on cache_seqlens) and reduced in a
     second pass. GQA sibling q heads share K/V tiles within a program."""
-    if not has_triton:
-        raise RuntimeError("paged_attn_triton_decode requires Triton, but Triton is not available")
-
     _check_tensor("q", q)
     _check_tensor("block_table", block_table, None)
     _check_tensor("cache_seqlens", cache_seqlens, None)
@@ -1199,7 +1202,7 @@ def paged_attn_triton_decode(
         if dev not in _decode_sm_count:
             _decode_sm_count[dev] = torch.cuda.get_device_properties(q.device).multi_processor_count
         target = 2 * _decode_sm_count[dev]
-        num_splits = max(1, min(target // programs, triton.cdiv(max_k_len, 4 * block_n), 128))
+        num_splits = max(1, min(target // programs, triton.cdiv(max_k_len, 1 * block_n), 128))
     split_len = triton.cdiv(triton.cdiv(max_k_len, num_splits), block_n) * block_n
 
     if num_splits > 1:
@@ -1230,10 +1233,11 @@ def paged_attn_triton_decode(
         )
 
         if num_splits > 1:
-            _paged_attn_decode_combine_kernel[(programs,)](
+            rows_sub, d_sub = combine_subtiles(block_rows, hd_pad)
+            _paged_attn_decode_combine_kernel[(programs, (block_rows // rows_sub) * (hd_pad // d_sub))](
                 partial_o, partial_ml, out, h32,
                 num_splits, sinks, qcv, has_sinks, q_len, n_q_heads, n_kv_heads, head_dim, hd_pad,
-                block_m, block_h, block_rows,
+                block_m, block_h, block_rows, rows_sub, d_sub,
                 num_warps=4, num_stages=1,
             )
     return out
@@ -1241,7 +1245,6 @@ def paged_attn_triton_decode(
 
 def fn_triton_paged_attn_decode(args: AttnArgs) -> torch.Tensor | None:
     if (
-        not has_triton or
         args.is_varlen() or
         not args.has_kv_cache() or
         args.q_len > 16 or
@@ -1734,9 +1737,6 @@ def paged_attn_triton_prefill(
     touching the cache -- kv positions at or above cache_seqlens[b] read from them. The direct
     form also works without a cache at all (k_cache = None), covering plain non-cached
     attention."""
-    if not has_triton:
-        raise RuntimeError("paged_attn_triton_prefill requires Triton, but Triton is not available")
-
     _check_tensor("q", q)
 
     bsz, q_len, n_q_heads, head_dim = q.shape
@@ -1965,7 +1965,6 @@ def paged_attn_triton_prefill(
 def fn_triton_attn_nocache(args: AttnArgs) -> torch.Tensor | None:
     """Non-cached attention through the prefill kernel's direct-kv source (NEW_KV=2)."""
     if (
-        not has_triton or
         args.is_varlen() or
         args.has_kv_cache() or
         args.dim > 512 or
@@ -1991,7 +1990,6 @@ def fn_triton_attn_nocache(args: AttnArgs) -> torch.Tensor | None:
 
 def fn_triton_paged_attn_prefill(args: AttnArgs) -> torch.Tensor | None:
     if (
-        not has_triton or
         args.is_varlen() or
         not args.has_kv_cache() or
         args.q_len <= 16 or
@@ -2170,9 +2168,6 @@ def varlen_attn_triton(
 ) -> torch.Tensor:
     """Packed varlen self-attention over (total, heads, head_dim) tensors, segments given by
     cu_seqlens (as flash_attn_varlen_func with cu_seqlens_q == cu_seqlens_k)."""
-    if not has_triton:
-        raise RuntimeError("varlen_attn_triton requires Triton, but Triton is not available")
-
     squeeze = q.ndim == 4
     if squeeze:
         q, k, v = q.squeeze(0), k.squeeze(0), v.squeeze(0)
@@ -2214,7 +2209,6 @@ def varlen_attn_triton(
 
 def fn_triton_varlen_attn(args: AttnArgs) -> torch.Tensor | None:
     if (
-        not has_triton or
         not args.is_varlen() or
         args.bsz > 1 or
         args.has_kv_cache() or
@@ -2241,7 +2235,6 @@ def fn_triton_varlen_attn(args: AttnArgs) -> torch.Tensor | None:
 def fn_triton_paged_attn_decode_qc(args: AttnArgs) -> torch.Tensor | None:
     if (
         args.q_cache is None or
-        not has_triton or
         args.q_len > 16 or
         args.dim > 512 or
         args.dim % 32 != 0 or
@@ -2270,7 +2263,6 @@ def fn_triton_paged_attn_decode_qc(args: AttnArgs) -> torch.Tensor | None:
 def fn_triton_paged_attn_prefill_qc(args: AttnArgs) -> torch.Tensor | None:
     if (
         args.q_cache is None or
-        not has_triton or
         (args.q_len <= 16 and not args.non_causal_spans) or
         args.dim > 512 or
         args.dim % 32 != 0 or

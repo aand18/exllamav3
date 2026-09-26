@@ -1,21 +1,29 @@
 import torch
-from ...cache import CacheLayer, Cache, CacheLayer_quant
+from ...cache import CacheLayer, Cache, CacheLayer_quant, CacheLayer_kvarn
 from .common import AttnArgs, AttnFn
 from .bighead_scalar import fn_bighead_scalar_attn
-from .torch import fn_torch_sdpa_fallback_cache, fn_torch_sdpa_fallback_nocache
-from .xformers import fn_xformers_cutlass_fallback_cache, fn_xformers_cutlass_fallback_nocache
-from .triton_paged import (
-    _qc_staging,
-    fn_triton_paged_attn,
-    fn_triton_paged_attn_longq,
-    fn_triton_paged_attn_decode,
-    fn_triton_paged_attn_prefill,
-    fn_triton_varlen_attn,
-    fn_triton_paged_attn_decode_qc,
-    fn_triton_paged_attn_prefill_qc,
-    fn_triton_attn_nocache,
-    has_triton,
+from .torch import (
+    fn_torch_sdpa_fallback_cache,
+    fn_torch_sdpa_fallback_nocache,
+    fn_torch_sdpa_paged_cpu_cache,
 )
+from .xformers import fn_xformers_cutlass_fallback_cache, fn_xformers_cutlass_fallback_nocache
+try:
+    from .triton_paged import (
+        _qc_staging,
+        fn_triton_paged_attn,
+        fn_triton_paged_attn_longq,
+        fn_triton_paged_attn_decode,
+        fn_triton_paged_attn_prefill,
+        fn_triton_varlen_attn,
+        fn_triton_paged_attn_decode_qc,
+        fn_triton_paged_attn_prefill_qc,
+        fn_triton_attn_nocache,
+    )
+    _have_triton_paged = True
+except ImportError:
+    # CPU-only hosts without triton: fall through to the torch/xformers fallbacks
+    _have_triton_paged = False
 
 # Candidate attn functions in order of preference: the Triton decode/prefill/varlen kernels
 # serve every shape they support (any head_dim <= 512, zero-padded to a power of two), then the
@@ -24,7 +32,7 @@ _fns_triton_fast: list[AttnFn] = [
     fn_triton_paged_attn_decode,
     fn_triton_paged_attn_prefill,
     fn_triton_varlen_attn,
-]
+] if _have_triton_paged else []
 
 # Quant-direct calls carry the packed cache in q_cache and leave k_cache/v_cache as None, which makes them
 # indistinguishable from cache-less attention to any backend that only checks has_kv_cache(). Such a backend
@@ -33,23 +41,35 @@ _fns_triton_fast: list[AttnFn] = [
 _fns_qc: list[AttnFn] = [
     fn_triton_paged_attn_decode_qc,
     fn_triton_paged_attn_prefill_qc,
-]
+] if _have_triton_paged else []
 
 # Quantized caches feed the attention kernels directly (online dequant or prefill staging by
 # EXL3_QC_STAGING level, see triton_paged); level 2 restores the dequantize-then-attend path
 # with full-size fp16 temporaries for A/B testing
-_qc_attn = _qc_staging < 2
+_qc_attn = (_qc_staging < 2) if _have_triton_paged else False
 
-attn_fns: list[AttnFn] = _fns_triton_fast + [
+_triton_fallbacks: list[AttnFn] = [
     fn_triton_attn_nocache,
     fn_triton_paged_attn,
     fn_triton_paged_attn_longq,
+] if _have_triton_paged else []
+
+attn_fns: list[AttnFn] = _fns_triton_fast + _triton_fallbacks + [
     fn_bighead_scalar_attn,
     fn_xformers_cutlass_fallback_cache,
     fn_xformers_cutlass_fallback_nocache,
+    fn_torch_sdpa_paged_cpu_cache,
     fn_torch_sdpa_fallback_cache,
     fn_torch_sdpa_fallback_nocache
 ]
+
+# Every Triton entry point is CUDA-only: _check_tensor raises ValueError on
+# CPU tensors instead of declining with None, which breaks the dispatch
+# contract ("candidate functions return None on incompatible arguments").
+# triton-windows is a mandatory Windows dependency, so without this guard
+# every CPU-tensor dispatch on a GPU-less box crashes instead of reaching
+# the torch/xformers fallbacks. GPU behavior is untouched (q is CUDA).
+_fns_triton_all = frozenset(_fns_triton_fast + _triton_fallbacks + _fns_qc)
 
 def _tensor_desc(t: torch.Tensor | None) -> str:
     if t is None:
@@ -118,8 +138,15 @@ def attn_dispatch(
         assert cache_seqlens is not None
         layer = cache if isinstance(cache, CacheLayer) else cache.layers[cache_idx, cache_instance or 0]
         if (
-            _qc_attn and has_triton and
+            _qc_attn and
             isinstance(layer, CacheLayer_quant) and
+            not isinstance(layer, CacheLayer_kvarn) and  # KVarN always takes the
+                                                          # dequant path (q_cache=None):
+                                                          # get_kv serves one merged
+                                                          # image (sealed body +
+                                                          # exact sink/tail overlay)
+                                                          # for single-softmax SDPA;
+                                                          # online kernels are later work
             layer.compand_a == 0.0 and
             q.dtype == torch.float16 and
             dim <= 512 and dim % 32 == 0 and   # packed groups of 32; non-pow2 dims run zero-padded
@@ -159,10 +186,17 @@ def attn_dispatch(
     # and would accept them as cache-less)
     candidates = _fns_qc if q_cache is not None else attn_fns
     hint_key = "fn_qc" if q_cache is not None else "fn"
+    if q.device.type == "cpu":
+        # See _fns_triton_all: Triton entries raise (not decline) on CPU
+        # tensors, so they must be excluded before the scan, and a stale
+        # hint at one of them must not be retried either.
+        candidates = [fn for fn in candidates if fn not in _fns_triton_all]
 
     # Retry the backend that matched last time for this caller before scanning the full list.
     # Candidate functions return None on incompatible arguments, so a stale hint self-corrects
     fn = dispatch_cache.get(hint_key) if dispatch_cache is not None else None
+    if fn is not None and fn not in candidates:
+        fn = None
     o = fn(args) if fn is not None else None
 
     if o is None:
