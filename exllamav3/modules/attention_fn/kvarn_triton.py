@@ -62,9 +62,14 @@ if _have_triton:
     @triton.jit
     def _fwht128_block(row_ptr, cols):
         # 7 in-place FWHT stages + 1/sqrt(128) norm over 128 fp32 values.
-        # Caller seeds row_ptr first; block barrier per stage (128 lanes
-        # = 4 warps). Subtractions use (lower - upper), matching the torch
-        # reference (odd-parity positions carry the minus).
+        # Caller seeds row_ptr first. Single-warp launch ONLY (num_warps=1
+        # at every call site): stages exchange values across lanes, and
+        # tl.debug_barrier does NOT synchronize warps in compiled triton
+        # 3.8 kernels on sm_89 (nondeterministic corruption at 1000+ rows,
+        # 0/6 exact with 4/8 warps vs 6/6 with 1 warp). One warp stays in
+        # lockstep over this branch-free code, so no barrier is needed.
+        # Subtractions use (lower - upper), matching the torch reference
+        # (odd-parity positions carry the minus).
         tl.debug_barrier()
         for _s in tl.static_range(7):
             s = 1 << _s
@@ -166,8 +171,13 @@ def kvarn_triton_dequant_side(payload: torch.Tensor, sc: torch.Tensor,
     assert oth.shape == (NT, 128)
     out = torch.empty((NT, 128, 128), dtype=torch.float32,
                        device=payload.device)
+    # num_warps=1 on the DO_WHT path: it runs _fwht128_block, which is
+    # only exact single-warp (see its comment). The pure-dequant path
+    # keeps the default 4 warps (no cross-lane exchange there). One row
+    # per program either way.
     _kvarn_row_kernel[(NT * 128,)](payload, sc, zp, oth, out,
-                                    PAY, bits, 1 if do_wht else 0)
+                                    PAY, bits, 1 if do_wht else 0,
+                                    num_warps=1 if do_wht else 4)
     return out
 
 
@@ -326,7 +336,10 @@ def kvarn_triton_wht_rows(x, head_dim: int):
     flat = x.float().reshape(-1, head_dim)
     out = torch.empty_like(flat)
     out.copy_(flat)
-    _kvarn_wht_hd_kernel[(flat.shape[0],)](out, head_dim, slices, sscale)
+    # num_warps=1: per-128 FWHT stages exchange values across lanes and
+    # tl.debug_barrier does not sync warps (see _fwht128_block comment).
+    _kvarn_wht_hd_kernel[(flat.shape[0],)](out, head_dim, slices, sscale,
+                                           num_warps=1)
     return out.reshape(*x.shape[:-1], head_dim)
 
 
@@ -458,6 +471,30 @@ def kvarn_triton_overlay(image_k, image_v, layer, seqlens_1, bt_1,
     )
 
 
+def kvarn_triton_wht_slices(x):
+    """
+    Per-128-slice FWHT over the last dim (any head_dim = slices * 128),
+    WITHOUT the cross-slice stage. Triton counterpart of applying
+    ``kvarn_hadamard_128`` per slice: each 128-slice becomes one kernel
+    row (HD=128, single warp -- see _fwht128_block comment). One launch.
+    Loud failure (never silent) when the Triton path cannot run.
+    """
+    if not _have_triton:
+        raise RuntimeError(
+            "KVarN Triton WHT requires triton (import failed on this host).")
+    if not x.is_cuda:
+        raise RuntimeError(
+            "KVarN Triton WHT requires CUDA tensors, got "
+            f"{x.device}.")
+    assert x.shape[-1] % 128 == 0
+    prefix = x.shape[:-1]
+    flat = x.float().reshape(-1, 128).contiguous()
+    out = torch.empty_like(flat)
+    out.copy_(flat)
+    _kvarn_wht_hd_kernel[(flat.shape[0],)](out, 128, 1, 1.0, num_warps=1)
+    return out.reshape(*prefix, x.shape[-1])
+
+
 def kvarn_triton_dequant_groups(records_G, layout,
                                k_bits: int, v_bits: int,
                                num_kv_heads: int, slices: int,
@@ -469,9 +506,16 @@ def kvarn_triton_dequant_groups(records_G, layout,
     Returns (bk, bv) float32 CUDA shaped (Gg, 128, kvh, hd) rotated-domain,
     matching ``CacheLayer_kvarn._dequant_groups_batched`` torch order
     (K transposed to [token, dim]). Bit-exact with the torch path: same
-    fp32 elementwise math, fp32 store. With do_wht=True each 128-row
-    additionally gets the FWHT (+ norm), i.e. the output already passed
+    fp32 elementwise math, fp32 store. With do_wht=True each side gets the
+    per-128 FWHT (+ norm), i.e. the output already passed the per-slice
     ``kvarn_hadamard_128`` and only the cross-slice stage (if any) remains.
+
+    K-axis note: K tiles are stored [dim, token] but served [token, dim],
+    so the in-kernel row-FWHT (over tile columns = tokens) would transform
+    the WRONG axis for K. K is therefore dequantized raw, transposed on
+    assembly, then passed through ``kvarn_triton_wht_slices`` (FWHT over
+    the head dim, one extra launch). V tiles are [token, dim): the
+    in-kernel row-FWHT is already over the head dim.
     """
     if not _have_triton:
         raise RuntimeError(
@@ -485,7 +529,8 @@ def kvarn_triton_dequant_groups(records_G, layout,
     assert records_G.shape[1] == ncols
     rec_f16 = records_G.view(torch.float16)
 
-    def side(payload_off, payload_bytes, sc_off, zp_off, oth_off, bits):
+    def side(payload_off, payload_bytes, sc_off, zp_off, oth_off, bits,
+             wht):
         NT = Gg * ncols
         pay = records_G[:, :, payload_off: payload_off + payload_bytes] \
             .reshape(NT, payload_bytes).contiguous()
@@ -495,14 +540,18 @@ def kvarn_triton_dequant_groups(records_G, layout,
             .reshape(NT, 128).contiguous()
         oth = rec_f16[:, :, oth_off // 2: oth_off // 2 + 128] \
             .reshape(NT, 128).contiguous()
-        return kvarn_triton_dequant_side(pay, sc, zp, oth, bits, do_wht)
+        return kvarn_triton_dequant_side(pay, sc, zp, oth, bits, wht)
 
+    hd = slices * 128
     kt = side(layout.k_payload_off, layout.k_payload_bytes,
               layout.k_s_col_off, layout.k_zp_off, layout.k_s_row_off,
-              k_bits).reshape(Gg, num_kv_heads, slices, 128, 128)
-    bk = kt.permute(0, 4, 1, 2, 3).reshape(Gg, 128, num_kv_heads, slices * 128)
+              k_bits, False).reshape(Gg, num_kv_heads, slices, 128, 128)
+    bk_raw = kt.permute(0, 4, 1, 2, 3).reshape(Gg, 128, num_kv_heads, hd)
+    # K-transpose first, FWHT over the head dim second (see K-axis note
+    # above). do_wht=False above: the in-kernel row-FWHT stays off for K.
+    bk = kvarn_triton_wht_slices(bk_raw) if do_wht else bk_raw
     vt = side(layout.v_payload_off, layout.v_payload_bytes,
               layout.v_s_row_off, layout.v_zp_off, layout.v_s_col_off,
-              v_bits).reshape(Gg, num_kv_heads, slices, 128, 128)
-    bv = vt.permute(0, 3, 1, 2, 4).reshape(Gg, 128, num_kv_heads, slices * 128)
+              v_bits, do_wht).reshape(Gg, num_kv_heads, slices, 128, 128)
+    bv = vt.permute(0, 3, 1, 2, 4).reshape(Gg, 128, num_kv_heads, hd)
     return bk, bv
