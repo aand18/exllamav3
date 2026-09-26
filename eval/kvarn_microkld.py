@@ -72,6 +72,10 @@ def run(model, cache, ids, chunk=2048):
     return logits.float(), p2.get("recurrent_states")
 
 
+def _peak_gb():
+    return torch.cuda.max_memory_allocated() / (1024 ** 3)
+
+
 def bench_decode(model, cache, ids, steps, states, tag):
     # Greedy decode throughput continuing from the populated past left by
     # run() (timing only; generated tokens differ between caches, which is
@@ -81,6 +85,7 @@ def bench_decode(model, cache, ids, steps, states, tag):
     total = _bshape(n + steps)
     tok = ids[:, -1:]
     past = n
+    torch.cuda.reset_peak_memory_stats()
     t0 = time.time()
     for _ in range(steps):
         p = {"cache": cache, "attn_mode": "flash_attn",
@@ -94,7 +99,8 @@ def bench_decode(model, cache, ids, steps, states, tag):
         del logits
     dt = time.time() - t0
     print(f"{tag} decode: {steps / dt:.1f} tok/s "
-          f"({steps} steps from {n} ctx)", flush=True)
+          f"({steps} steps from {n} ctx, peak {_peak_gb():.1f}GB)",
+          flush=True)
 
 
 def main():
@@ -142,17 +148,21 @@ def main():
     ids = tokenizer.encode(SAMPLER_TEXT * reps)[:, :args.ntok]
     print("tokens:", tuple(ids.shape), flush=True)
 
+    torch.cuda.reset_peak_memory_stats()
     t0 = time.time()
     l_fp16, s_fp16 = run(model, c_fp16, ids, args.chunk)
     dt = time.time() - t0
-    print(f"fp16 prefill: {dt:.1f}s ({args.ntok / dt:.0f} tok/s)", flush=True)
+    print(f"fp16 prefill: {dt:.1f}s ({args.ntok / dt:.0f} tok/s, "
+          f"peak {_peak_gb():.1f}GB)", flush=True)
     torch.cuda.empty_cache()
 
+    torch.cuda.reset_peak_memory_stats()
     t0 = time.time()
     l_kvarn, s_kvarn = run(model, c_kvarn, ids, args.chunk)
     dt = time.time() - t0
     print(f"kvarn{k_bits}/kvarn{v_bits} prefill: {dt:.1f}s "
-          f"({args.ntok / dt:.0f} tok/s)", flush=True)
+          f"({args.ntok / dt:.0f} tok/s, peak {_peak_gb():.1f}GB)",
+          flush=True)
 
     p = F.log_softmax(l_kvarn, dim=-1)
     q = F.log_softmax(l_fp16, dim=-1)
