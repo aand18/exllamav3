@@ -914,6 +914,7 @@ class CacheLayer_kvarn(CacheLayer):
         # Incremental image only pays when the allocation is modest; huge
         # contexts keep the memory-slim full rematerialization path.
         self._img_ok = self.num_pages <= 128
+        self._evict_q = -1  # owner high-water quantum of the last evict scan
 
     @override
     def free(self):
@@ -929,6 +930,7 @@ class CacheLayer_kvarn(CacheLayer):
         self._img_k = None
         self._img_v = None
         self._dirty_mask = None
+        self._evict_q = -1
 
     # -- M4 record access (for online-dequant Triton/CUDA kernels) ----------
 
@@ -1192,6 +1194,15 @@ class CacheLayer_kvarn(CacheLayer):
         """
         floor = self.tail_effective + KVAR_N_TAIL_ROLLBACK_TOKENS
         gps = PAGE_SIZE // KVAR_N_GROUP
+        # Cadence gate: eviction only frees memory (served rows always come
+        # from the resident sink/tail window, and copy_page carries exact
+        # data either way), so scanning when the owner high-water crosses a
+        # 128-boundary is numerically invisible and amortizes the scan from
+        # every forward to ~1/128 of forwards.
+        top = int(self.page_owner_n.max())
+        if top // 128 == self._evict_q:
+            return
+        self._evict_q = top // 128
         for gi in list(self.exact_blocks.keys()):
             p = gi // gps
             if bool(self.page_pinned[p]):
