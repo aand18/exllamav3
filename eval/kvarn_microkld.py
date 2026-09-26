@@ -27,6 +27,11 @@ SAMPLER_TEXT = ("The capital of France is Paris. It is known for the Eiffel "
                 "Tower, the Louvre, and its arrondissements along the Seine. ")
 
 
+def _bshape(n):
+    # batch_shape is a capacity: must be a 256-multiple and fit the cache.
+    return ((int(n) + 255) // 256) * 256
+
+
 def populate(model, cache, ids, chunk, stop=None):
     # Chunked prefill to token position ``stop`` (default: full length).
     # Chunking keeps peak VRAM flat: a full-length prefill materializes
@@ -35,10 +40,11 @@ def populate(model, cache, ids, chunk, stop=None):
     n = int(ids.shape[1]) if stop is None else stop
     states = None
     past = 0
+    bs = _bshape(ids.shape[1])
     while past < n:
         c = min(chunk, n - past)
         p = {"cache": cache, "attn_mode": "flash_attn",
-             "batch_shape": (1, ids.shape[1]), "past_len": past}
+             "batch_shape": (1, bs), "past_len": past}
         if states is not None:
             p["recurrent_states"] = states
         out = model.forward(ids[:, past:past + c], p)
@@ -59,7 +65,7 @@ def run(model, cache, ids, chunk=2048):
     split = n - 64
     states, _ = populate(model, cache, ids, chunk, split)
     p2 = {"cache": cache, "attn_mode": "flash_attn",
-          "batch_shape": (1, ids.shape[1]), "past_len": split}
+          "batch_shape": (1, _bshape(ids.shape[1])), "past_len": split}
     if states is not None:
         p2["recurrent_states"] = states
     logits = model.forward(ids[:, split:], p2)
@@ -72,7 +78,7 @@ def bench_decode(model, cache, ids, steps, states, tag):
     # irrelevant here). Exercises per-token store + get_kv + attention on
     # the measured path. No repopulation: the cache already holds ids.
     n = int(ids.shape[1])
-    total = ((n + steps + 255) // 256) * 256
+    total = _bshape(n + steps)
     tok = ids[:, -1:]
     past = n
     t0 = time.time()
