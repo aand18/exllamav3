@@ -929,6 +929,12 @@ class CacheLayer_kvarn(CacheLayer):
         self._img_v = None  # allocated lazily in get_kv; None = not yet built
         self._dirty_mask = torch.zeros((self.num_groups,), dtype=torch.bool,
                                        device=device)
+        # Page -> groups map (num_pages, gps): constant gather replacing
+        # per-call pages[:,None]*gps + arange in get_kv (~3 launches).
+        _gps = PAGE_SIZE // KVAR_N_GROUP
+        self._page_groups = (
+            torch.arange(self.num_pages, device=device)[:, None] * _gps
+            + torch.arange(_gps, device=device)).to(torch.int64)
         # Incremental image only pays when the allocation is modest; huge
         # contexts keep the memory-slim full rematerialization path.
         self._img_ok = self.num_pages <= 128
@@ -951,6 +957,7 @@ class CacheLayer_kvarn(CacheLayer):
         self._img_k = None
         self._img_v = None
         self._dirty_mask = None
+        self._page_groups = None
         self._evict_q = -1
 
     # -- M4 record access (for online-dequant Triton/CUDA kernels) ----------
@@ -1674,8 +1681,17 @@ class CacheLayer_kvarn(CacheLayer):
         kvh, hd = self.num_kv_heads, self.head_dim
         dev = self.device
         gps = PAGE_SIZE // KVAR_N_GROUP
-        pages = torch.unique(block_table.long()).to(dev)
-        pages = pages[(pages >= 0) & (pages < self.num_pages)]
+        bt = block_table.long()
+        if bt.shape[0] == 1:
+            # Steady decode: one row, pages distinct by construction, so
+            # a range mask replaces the sort (same set, same order, no
+            # sync, ~5 launches saved). Multi-row batches keep unique
+            # (rows may alias pages via prompt-cache sharing).
+            row = bt[0]
+            pages = row[(row >= 0) & (row < self.num_pages)].to(dev)
+        else:
+            pages = torch.unique(bt).to(dev)
+            pages = pages[(pages >= 0) & (pages < self.num_pages)]
         if self._img_ok:
             if self._img_k is None:
                 self._img_k = torch.zeros(
@@ -1683,8 +1699,7 @@ class CacheLayer_kvarn(CacheLayer):
                     dtype=torch.half, device=dev)
                 self._img_v = torch.zeros_like(self._img_k)
             if pages.numel():
-                Gs = (pages[:, None] * gps + torch.arange(gps, device=dev)) \
-                    .reshape(-1)
+                Gs = self._page_groups[pages].reshape(-1)
                 Gs = Gs[Gs < self.num_groups]
                 dirty = Gs[self._dirty_mask[Gs]]
                 if dirty.numel():
@@ -1698,8 +1713,7 @@ class CacheLayer_kvarn(CacheLayer):
                             dtype=torch.half, device=dev)
             v = torch.zeros_like(k)
             if pages.numel():
-                Gs = (pages[:, None] * gps + torch.arange(gps, device=dev)) \
-                    .reshape(-1)
+                Gs = self._page_groups[pages].reshape(-1)
                 Gs = Gs[Gs < self.num_groups]
                 if Gs.numel():
                     self._refresh_groups_legacy(Gs, k, v)
