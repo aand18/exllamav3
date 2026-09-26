@@ -114,6 +114,14 @@ if TYPE_CHECKING:
 # --------------------------------------------------------------------------
 
 KVAR_N_GROUP = 128
+# Slot-window sizes for memory-plan storage (Task 2+): live staging and
+# exact groups map 1:1 onto slots; overflow is a loud assert.
+# Staging needs a full prefill chunk transiently (the torch loop stages
+# every group before the end-of-call batched seal): 40 covers chunk 4096
+# + margin. Exact writes are bounded by the sink+tail keep window
+# regardless of chunk size, so 4 suffices there.
+KVAR_N_STAGE_SLOTS = 40
+KVAR_N_EXACT_SLOTS = 4
 KVAR_N_INV_SQRT_128 = 0.08838834764831845
 KVAR_N_SUPPORTED_HEAD_DIMS = (128, 256, 512)
 KVAR_N_SINKHORN_ITERS = 16
@@ -907,8 +915,12 @@ class CacheLayer_kvarn(CacheLayer):
         self.records = torch.zeros(
             (self.num_groups, self.ncols, self.layout.tile_bytes),
             dtype=torch.uint8, device=device)
+        # Windowed staging (memory plan): S_STAGE slots, group ids
+        # resolve through _stage_slot/_stage_rev. present/sealed stay
+        # group-indexed (flag tensors, not the memory hogs).
         self.stage_k = torch.zeros(
-            (self.num_groups, KVAR_N_GROUP, self.num_kv_heads, self.head_dim),
+            (KVAR_N_STAGE_SLOTS, KVAR_N_GROUP, self.num_kv_heads,
+             self.head_dim),
             dtype=torch.half, device=device)
         self.stage_v = torch.zeros_like(self.stage_k)
         self.exact_k = torch.zeros(
@@ -938,12 +950,12 @@ class CacheLayer_kvarn(CacheLayer):
         # live groups map 1:1 onto S_STAGE/S_EXACT slots; group-id
         # indexed tensors shrink to slot-indexed windows in Task 3/4.
         # Until then these tables exist but nothing reads them.
-        self._stage_slots = torch.full((4,), -1, dtype=torch.int64,
-                                       device=device)
+        self._stage_slots = torch.full((KVAR_N_STAGE_SLOTS,), -1,
+                                       dtype=torch.int64, device=device)
         self._stage_rev = torch.full((self.num_groups,), -1,
                                      dtype=torch.int64, device=device)
-        self._exact_slots = torch.full((4,), -1, dtype=torch.int64,
-                                       device=device)
+        self._exact_slots = torch.full((KVAR_N_EXACT_SLOTS,), -1,
+                                       dtype=torch.int64, device=device)
         self._exact_rev = torch.full((self.num_groups,), -1,
                                      dtype=torch.int64, device=device)
         # Page -> groups map (num_pages, gps): constant gather replacing
@@ -995,13 +1007,20 @@ class CacheLayer_kvarn(CacheLayer):
     # -- Slot-remap for windowed staging/exact (memory plan) -----------------
 
     def _stage_slot(self, g: int) -> int:
-        """Slot holding group g's staging rows; assigns a free slot."""
+        """Slot holding group g's staging rows; assigns a free slot.
+
+        A freshly assigned slot is zeroed: slots are recycled across
+        groups, and readers (refresh gathers all 128 rows unmasked)
+        must never see a previous occupant's rows.
+        """
         s = int(self._stage_rev[g])
         if s >= 0:
             return s
         free = (self._stage_slots < 0).nonzero().flatten()
         assert free.numel(), "KVarN: staging slot overflow"
         s = int(free[0])
+        self.stage_k[s].zero_()
+        self.stage_v[s].zero_()
         self._stage_slots[s] = g
         self._stage_rev[g] = s
         return s
@@ -1070,9 +1089,10 @@ class CacheLayer_kvarn(CacheLayer):
         return live.nonzero().flatten().tolist()
 
     def _alloc_stage_block(self, g: int):
-        self.stage_k[g].zero_()
-        self.stage_v[g].zero_()
-        return [self.stage_k[g], self.stage_v[g]]
+        s = self._stage_slot(g)
+        self.stage_k[s].zero_()
+        self.stage_v[s].zero_()
+        return [self.stage_k[s], self.stage_v[s]]
 
     def _live_exact_groups(self):
         """Groups with resident exact rows (equivalent to the old
@@ -1192,17 +1212,20 @@ class CacheLayer_kvarn(CacheLayer):
         if bool(self.sealed[gi]):
             return False  # overwrite of sealed content: general path
         page = gi // gps
+        # Staging lives in the group's slot (assign zeroes a fresh slot;
+        # reuse keeps its slot and zeroes it explicitly here).
+        slot = self._stage_slot(gi)
         if bold != bnew:
             # Fresh group: reset bookkeeping (nothing live to preserve).
             self.sealed[gi] = False
             self.present[gi] = False
-            self.stage_k[gi].zero_()
-            self.stage_v[gi].zero_()
+            self.stage_k[slot].zero_()
+            self.stage_v[slot].zero_()
             self.exact_valid[gi] = False
             self.group_base[gi] = bnew
             self.page_pinned[page] = False
-        self.stage_k[gi, si] = rk[0]
-        self.stage_v[gi, si] = rv[0]
+        self.stage_k[slot, si] = rk[0]
+        self.stage_v[slot, si] = rv[0]
         self.present[gi, si] = True
         if pos0 >= n_new - self.tail_effective - KVAR_N_TAIL_ROLLBACK_TOKENS or \
            (self.has_sink and pos0 < KVAR_N_SINK_TOKENS):
@@ -1276,14 +1299,8 @@ class CacheLayer_kvarn(CacheLayer):
                 self._dirty_mask[gg] = True
                 self._dirty_any = True
                 return
-            if code == 3:
-                # Fresh group reset: the row itself wrote through, but
-                # the reset siblings need a refresh from staging.
-                self._evict_exact_all(1)
-                self._dirty_mask[gg] = True
-                self._dirty_any = True
-                return
-            # code == 1: fall through to the torch paths below.
+            # code == 1: fall through to the torch paths below (fresh,
+            # sealed, or unassigned groups assign/reset host-side).
         # Torch fallbacks need the Python int (single sync, same as the
         # old caller-side int); the fused path above never paid it.
         n_new = int(n_new)
@@ -1334,13 +1351,16 @@ class CacheLayer_kvarn(CacheLayer):
             slots = s[m]
             bnew = int(base[m][0])
             bold = int(self.group_base[gi])
+            # Staging lives in the group's slot (assign zeroes a fresh
+            # slot; the reset branch zeroes a kept slot explicitly).
+            slot = self._stage_slot(gi)
             if bold != bnew:
                 # New content (first write or page reuse): reset the group.
                 # A reused page stops aliasing its prompt-cache sibling.
                 self.sealed[gi] = False
                 self.present[gi] = False
-                self.stage_k[gi].zero_()
-                self.stage_v[gi].zero_()
+                self.stage_k[slot].zero_()
+                self.stage_v[slot].zero_()
                 self.exact_valid[gi] = False
                 self.group_base[gi] = bnew
                 page = gi // (PAGE_SIZE // KVAR_N_GROUP)
@@ -1364,8 +1384,8 @@ class CacheLayer_kvarn(CacheLayer):
                 cur_owner = int(self.page_owner_n[page])
                 if cur_owner >= 0:
                     self.page_owner_n[page] = min(cur_owner, n_new)
-            self.stage_k[gi, slots] = rk[m]
-            self.stage_v[gi, slots] = rv[m]
+            self.stage_k[slot, slots] = rk[m]
+            self.stage_v[slot, slots] = rv[m]
             self.present[gi, slots] = True
             km = m & keep
             if bool(km.any()):
@@ -1442,8 +1462,13 @@ class CacheLayer_kvarn(CacheLayer):
         L = self.layout
         kvh, sl = self.num_kv_heads, self.slices
         C = kvh * sl
-        bk = self.stage_k[gs].float()
-        bv = self.stage_v[gs].float()
+        # Staging is slot-windowed: gather through the rev map (sealed
+        # groups are always assigned — rows only seal after being
+        # stored, and every store path assigns).
+        gl = gs.to(device=self.device, dtype=torch.long)
+        slot_g = self._stage_rev[gl]
+        bk = self.stage_k[slot_g].float()
+        bv = self.stage_v[slot_g].float()
         G = bk.shape[0]
         bkr = bk.reshape(G, KVAR_N_GROUP, kvh, sl, KVAR_N_GROUP)
         bvr = bv.reshape(G, KVAR_N_GROUP, kvh, sl, KVAR_N_GROUP)
@@ -1479,9 +1504,12 @@ class CacheLayer_kvarn(CacheLayer):
         self._dirty_any = True
         # M4: staging is freed on seal; only the single open group (plus
         # the sink) retains fp16 staging. Exact blocks stay for the
-        # overlay over sealed tail groups.
-        self.stage_k[gs].zero_()
-        self.stage_v[gs].zero_()
+        # overlay over sealed tail groups. Release is vectorized and
+        # sync-free (sealed groups are always assigned; guard the mask
+        # for the degenerate empty call).
+        rel = self._stage_rev[gl]
+        self._stage_slots[rel[rel >= 0]] = -1
+        self._stage_rev[gl] = -1
 
     @torch.inference_mode()
     def _seal_group(self, g: int):
@@ -1572,10 +1600,15 @@ class CacheLayer_kvarn(CacheLayer):
             ok.copy_(kvarn_wht_head(kk, self.head_dim).half())
             ov.copy_(kvarn_wht_head(vv, self.head_dim).half())
         else:
-            # Static staging reads zeros for never-written groups, matching
-            # the old dict-miss path.
-            ok.copy_(kvarn_wht_head(self.stage_k[g].float(), self.head_dim).half())
-            ov.copy_(kvarn_wht_head(self.stage_v[g].float(), self.head_dim).half())
+            # Slot-windowed staging; unassigned groups read zeros,
+            # matching the old dict-miss path.
+            s = int(self._stage_rev[g])
+            if s < 0:
+                ok.zero_()
+                ov.zero_()
+            else:
+                ok.copy_(kvarn_wht_head(self.stage_k[s].float(), self.head_dim).half())
+                ov.copy_(kvarn_wht_head(self.stage_v[s].float(), self.head_dim).half())
 
     @torch.inference_mode()
     def _apply_exact_overlay(self, k: torch.Tensor, v: torch.Tensor,
@@ -1759,12 +1792,17 @@ class CacheLayer_kvarn(CacheLayer):
                 # rot-path gather + batched WHT + scatter below. Sealed
                 # members of Gs_o, if any, are skipped in-kernel (the
                 # sealed branch above owns them; sets are disjoint).
-                kvarn_triton_serve_open(k_tgt, v_tgt, self, Gs_o)
+                # Staging gathers by slot, image scatters by group.
+                kvarn_triton_serve_open(
+                    k_tgt, v_tgt, self, Gs_o,
+                    self._stage_rev[Gs_o.to(torch.long)])
             else:
-                # Static staging reads zeros for never-written groups:
-                # no tolist loop, no per-group syncs.
-                rot_k.append(self.stage_k[Gs_o].float())
-                rot_v.append(self.stage_v[Gs_o].float())
+                # Staging is slot-windowed (gather by slot); the image
+                # scatter below stays group-indexed. Unassigned groups
+                # cannot occur here (dirty-open implies stored).
+                slot_o = self._stage_rev[Gs_o.to(torch.long)]
+                rot_k.append(self.stage_k[slot_o].float())
+                rot_v.append(self.stage_v[slot_o].float())
                 rot_gs.append(Gs_o)
         if rot_k:
             mat_k = kvarn_wht_head(torch.cat(rot_k), hd).half()
@@ -2001,8 +2039,7 @@ class CacheLayer_kvarn(CacheLayer):
                 self.group_base[gt] = -1
                 self.present[gt] = False
                 self.sealed[gt] = False
-                self.stage_k[gt].zero_()
-                self.stage_v[gt].zero_()
+                self._stage_release(gt)
                 self.exact_valid[gt] = False
                 continue
             self.group_base[gt] = fb
@@ -2015,8 +2052,7 @@ class CacheLayer_kvarn(CacheLayer):
                 # group on sink layers is never sealed, stays exact).
                 self.records[gt].copy_(source.records[gf], non_blocking=True)
                 self.sealed[gt] = True
-                self.stage_k[gt].zero_()
-                self.stage_v[gt].zero_()
+                self._stage_release(gt)
                 # Exact blocks travel too: the destination sequence's tail
                 # may cover these positions. (Sealed branch is always
                 # full-group, so whole-block copies match the old code.)
@@ -2032,28 +2068,36 @@ class CacheLayer_kvarn(CacheLayer):
                 self.sealed[gt] = False
                 # Staging travels (or is rebuilt from the sealed records
                 # for partial copies out of sealed groups); exact blocks
-                # travel when present.
+                # travel when present. Staging is slot-windowed: the
+                # destination assigns a slot, the source reads through
+                # its rev map (unassigned source reads as zeros).
+                sf = int(source._stage_rev[gf])
                 if not bool(source.sealed[gf]) and \
                         bool(source.present[gf].any()):
-                    self.stage_k[gt, :nrows] \
-                        .copy_(source.stage_k[gf, :nrows], non_blocking=True)
-                    self.stage_v[gt, :nrows] \
-                        .copy_(source.stage_v[gf, :nrows], non_blocking=True)
-                    if nrows < KVAR_N_GROUP:
-                        self.stage_k[gt, nrows:].zero_()
-                        self.stage_v[gt, nrows:].zero_()
+                    st = self._stage_slot(gt)
+                    if sf < 0:
+                        self.stage_k[st].zero_()
+                        self.stage_v[st].zero_()
+                    else:
+                        self.stage_k[st, :nrows] \
+                            .copy_(source.stage_k[sf, :nrows], non_blocking=True)
+                        self.stage_v[st, :nrows] \
+                            .copy_(source.stage_v[sf, :nrows], non_blocking=True)
+                        if nrows < KVAR_N_GROUP:
+                            self.stage_k[st, nrows:].zero_()
+                            self.stage_v[st, nrows:].zero_()
                 elif bool(source.sealed[gf]):
                     rec = self._staging_from_records(gf, source.records)
-                    self.stage_k[gt, :nrows].copy_(rec[0][:nrows],
+                    st = self._stage_slot(gt)
+                    self.stage_k[st, :nrows].copy_(rec[0][:nrows],
                                                    non_blocking=True)
-                    self.stage_v[gt, :nrows].copy_(rec[1][:nrows],
+                    self.stage_v[st, :nrows].copy_(rec[1][:nrows],
                                                    non_blocking=True)
                     if nrows < KVAR_N_GROUP:
-                        self.stage_k[gt, nrows:].zero_()
-                        self.stage_v[gt, nrows:].zero_()
+                        self.stage_k[st, nrows:].zero_()
+                        self.stage_v[st, nrows:].zero_()
                 else:
-                    self.stage_k[gt].zero_()
-                    self.stage_v[gt].zero_()
+                    self._stage_release(gt)
                 if bool(source.exact_valid[gf]):
                     self._alloc_exact_block(gt)
                     self.exact_k[gt, :nrows] \
@@ -2088,7 +2132,9 @@ class CacheLayer_kvarn(CacheLayer):
         # is fully supported and version-checked.
         out = [self.records]
         for g in self._live_stage_groups():
-            out += [self.stage_k[g], self.stage_v[g]]
+            s = int(self._stage_rev[g])
+            assert s >= 0, "KVarN: live staging group without a slot"
+            out += [self.stage_k[s], self.stage_v[s]]
         for g in self._live_exact_groups():
             out += [self.exact_k[g], self.exact_v[g]]
         return out

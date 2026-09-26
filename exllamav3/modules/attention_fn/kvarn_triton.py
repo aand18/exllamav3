@@ -231,7 +231,7 @@ if _have_triton:
     def _kvarn_store_row_kernel(
         rk_ptr, rv_ptr, ek_ptr, ev_ptr,  # (kvh, HD) fp32 WHT'd / tail-dtype rows
         pages_ptr, offs_ptr, pos_ptr,    # (1,) int64: page, offset, position
-        stage_k_ptr, stage_v_ptr,        # (G, 128, kvh, HD) fp16
+        stage_k_ptr, stage_v_ptr,        # (S, 128, kvh, HD) fp16 slots
         exact_k_ptr, exact_v_ptr,        # (G, 128, kvh, HD) tail dtype
         exact_valid_ptr,                 # (G,) bool
         base_ptr,                        # (G,) int64 group base
@@ -239,6 +239,7 @@ if _have_triton:
         present_ptr,                     # (G, 128) bool
         owner_ptr,                       # (P,) int64 page owners
         pinned_ptr,                      # (P,) bool
+        stage_rev_ptr,                   # (G,) int64 group -> staging slot
         img_k_ptr, img_v_ptr,            # (P, 256, kvh, HD) fp16 image (or dummy)
         status_ptr,                      # (2,) int64 out: [code, group]
         KVH: tl.constexpr, HD: tl.constexpr, GPS: tl.constexpr,
@@ -250,9 +251,11 @@ if _have_triton:
         # Grid (2*KVH,) programs x HD lanes. All policy is predicated
         # (no Python branches on tensor values); steady appends need
         # zero CPU syncs to launch, one status read after.
+        # Staging is slot-windowed: the slot comes from the host rev map
+        # (fail-closed: unassigned, fresh, or sealed groups bail with
+        # code 1 into the torch fallback, which assigns/resets host-side).
         # Codes: 0 ok (image current via write-through), 1 slow-path
-        # fallback, 2 seal group status[1], 3 fresh group (image needs
-        # a refresh for the reset siblings; the row itself is current).
+        # fallback, 2 seal group status[1].
         # Write-through keeps the persistent image current for pure
         # appends (the WHT'd row lands in staging AND the image), so the
         # per-step dirty sweep finds an empty mask and skips the open
@@ -274,32 +277,30 @@ if _have_triton:
         bnew = pos - s
         base = tl.load(base_ptr + g)
         is_sealed = tl.load(sealed_ptr + g)
-        slow = ((base != bnew) & (base >= 0)) | is_sealed
-        fresh = (base != bnew) & (~slow)
+        slot = tl.load(stage_rev_ptr + g)
+        # Fail closed: fresh groups (any base change), sealed groups,
+        # and unassigned slots all bail into the torch fallback, which
+        # assigns/resets host-side. The fast path only ever touches an
+        # assigned slot of a known-open group.
+        slow = (base != bnew) | is_sealed | (slot < 0)
         go = ~slow
 
         row_k = tl.load(rk_ptr + h * HD + cols)
         row_v = tl.load(rv_ptr + h * HD + cols)
-        s_off = (g * 128 + s) * KVH * HD + h * HD + cols
+        s_off = (slot * 128 + s) * KVH * HD + h * HD + cols
         tl.store(stage_k_ptr + s_off, row_k.to(tl.float16),
                  mask=is_k & go)
         tl.store(stage_v_ptr + s_off, row_v.to(tl.float16),
                  mask=(~is_k) & go)
         tl.store(present_ptr + g * 128 + s, True, mask=go)
         # Image write-through (pure appends keep the image current, so
-        # the sweep stays empty; fresh groups still need a refresh for
-        # the reset siblings -> code 3 below).
+        # the sweep stays empty).
         if DO_IMG:
             i_off = (page * 256 + offs) * KVH * HD + h * HD + cols
             tl.store(img_k_ptr + i_off, row_k.to(tl.float16),
                      mask=is_k & go)
             tl.store(img_v_ptr + i_off, row_v.to(tl.float16),
                      mask=(~is_k) & go)
-
-        tl.store(sealed_ptr + g, False, mask=fresh)
-        tl.store(exact_valid_ptr + g, False, mask=fresh)
-        tl.store(base_ptr + g, bnew, mask=fresh)
-        tl.store(pinned_ptr + page, False, mask=fresh)
 
         keep = (pos >= n_new - TAIL_KEEP) | (HAS_SINK & (pos < SINK_N))
         e_off = (g * 128 + s) * KVH * HD + h * HD + cols
@@ -331,8 +332,7 @@ if _have_triton:
         full = tl.sum(tl.load(present_ptr + g * 128 + tl.arange(0, 128))
                       .to(tl.int32)) == 128
         sink_skip = HAS_SINK & (bnew == 0)
-        code = tl.where(slow, 1, tl.where(full & (~sink_skip), 2,
-                         tl.where(fresh, 3, 0)))
+        code = tl.where(slow, 1, tl.where(full & (~sink_skip), 2, 0))
         tl.store(status_ptr, code)
         tl.store(status_ptr + 1, g)
 
@@ -383,11 +383,11 @@ def kvarn_triton_store_row(layer, rows_k, rows_v, pages_1, offs_1, pos_1,
 
     Row WHT (1 launch) + fused write kernel (1 launch): stage/exact
     writes, present/base/owner/valid updates, image write-through.
-    Policy events (reuse with live content, sealed overwrite) bail with
-    code 1; a completed group reports code 2 and its id for the torch
-    sealer; a fresh (reset) group reports code 3 (image needs a refresh
-    for the reset siblings). Returns (code: int, group: int) -- one
-    status read, the only CPU sync. Small ints (gps, sink/rollback
+    Staging is slot-windowed (slot from the host rev map; unassigned,
+    fresh, or sealed groups bail with code 1 into the torch fallback,
+    which assigns/resets host-side). A completed group reports code 2
+    and its id for the torch sealer. Returns (code: int, group: int) --
+    one status read, the only CPU sync. Small ints (gps, sink/rollback
     sizes) come from the caller so this module never imports the cache
     package (no cycle, no stub fragility). Loud failure (never silent)
     when unrunnable.
@@ -441,6 +441,7 @@ def kvarn_triton_store_row(layer, rows_k, rows_v, pages_1, offs_1, pos_1,
         layer.exact_k, layer.exact_v, layer.exact_valid,
         layer.group_base, layer.sealed, layer.present,
         layer.page_owner_n, layer.page_pinned,
+        layer._stage_rev,
         img_k, img_v,
         status,
         kvh, hd, gps,
@@ -653,8 +654,8 @@ def kvarn_triton_wht_slices(x):
 if _have_triton:
     @triton.jit
     def _kvarn_serve_gather_kernel(
-        stage_k_ptr, stage_v_ptr,  # (G, 128, kvh, HD) fp16
-        ids_ptr,                   # (D,) int64 group ids
+        stage_k_ptr, stage_v_ptr,  # (S, 128, kvh, HD) fp16 slots
+        slot_ptr,                  # (D,) int64 staging slot ids
         buf_k_ptr, buf_v_ptr,      # (D, 128, kvh, HD) fp32 out
         KVH: tl.constexpr, HD: tl.constexpr,
     ):
@@ -672,8 +673,8 @@ if _have_triton:
         is_k = pid_h2 < KVH
         h = pid_h2 % KVH
         lane = tl.arange(0, HD)
-        gid = tl.load(ids_ptr + pid_d)
-        s_off = (gid * 128 + pid_s) * KVH * HD + h * HD + lane
+        slot = tl.load(slot_ptr + pid_d)
+        s_off = (slot * 128 + pid_s) * KVH * HD + h * HD + lane
         d_off = (pid_d * 128 + pid_s) * KVH * HD + h * HD + lane
         tl.store(buf_k_ptr + d_off,
                  tl.load(stage_k_ptr + s_off, mask=is_k).to(tl.float32),
@@ -714,13 +715,14 @@ if _have_triton:
                  mask=go & (~is_k))
 
 
-def kvarn_triton_serve_open(tgt_k, tgt_v, layer, ids):
+def kvarn_triton_serve_open(tgt_k, tgt_v, layer, ids, slots):
     """Fused open-group refresh: gather staging + full head WHT + scatter.
 
     tgt_k/v: (pages, 256, kvh, hd) fp16 image or legacy temps. ids: (D,)
     int64 open-group ids (sealed members, if any, are skipped at
-    scatter). 4 launches (gather, K WHT, V WHT, scatter), zero CPU
-    syncs. Bit-identical to the torch rot path (same fp32 elementwise
+    scatter); slots: (D,) int64 staging slot ids gathered from.
+    4 launches (gather, K WHT, V WHT, scatter), zero CPU syncs.
+    Bit-identical to the torch rot path (same fp32 elementwise
     math in the same order); the WHT reuses the proven single-warp
     head kernel. Loud failure (never silent) when unrunnable.
     """
@@ -741,7 +743,7 @@ def kvarn_triton_serve_open(tgt_k, tgt_v, layer, ids):
     buf_v = torch.empty_like(buf_k)
     grid = (D, 128, 2 * kvh)
     _kvarn_serve_gather_kernel[grid](
-        layer.stage_k, layer.stage_v, ids, buf_k, buf_v, kvh, hd)
+        layer.stage_k, layer.stage_v, slots, buf_k, buf_v, kvh, hd)
     # bufs are fresh fp32 contiguous temps: transform in place
     # (same values, minus two allocs+copies).
     buf_k = kvarn_triton_wht_rows(buf_k, hd, inplace=True)

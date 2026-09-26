@@ -82,10 +82,20 @@ def test_slot_assign_and_reuse():
 
 def test_slot_overflow_is_loud():
     lay = _layer()
-    for g in range(4):
+    for g in range(kvarn.KVAR_N_STAGE_SLOTS):
         lay._stage_slot(g)
     try:
-        lay._stage_slot(60)
+        lay._stage_slot(63)
     except AssertionError:
         return
     raise SystemExit("expected AssertionError on slot overflow")
+
+
+def test_stage_roundtrip_through_slots():
+    lay = _layer()
+    g, s = 7, lay._stage_slot(7)
+    lay.stage_k[s, 3].fill_(1.5)
+    lay.present[g, 3] = True
+    assert bool((lay.stage_k[lay._stage_slot(g), 3] == 1.5).all())
+    lay._stage_release(g)
+    assert lay._stage_rev[g] == -1
