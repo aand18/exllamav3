@@ -127,12 +127,26 @@ seals + Python syncs per layer. Named next step: fuse the inverse WHT
 into the Triton kernel (XOR-butterfly in-register, no extra traffic).
 CPU suite time also improved with step 2 (8.8s -> 4.4s).
 
-Note on BeeLlama comparison: Bee runs CPU/ggml with a fused
-`flash_attn_ext_kvarn` kernel (online dequant, no fp16 materialization)
-and single-threaded scalar store; there is no shared benchmark harness,
-so timing is not directly comparable. The architectural lessons taken
-are recorded above (fuse dequant into attention; batch, don't
-thread); this table is the timing baseline for our own regressions.
+Note on BeeLlama comparison: measured on this 4090 (beellama.cpp
+main @0ba48c55, sm_89 CUDA build, Qwen3.8-27B Q4_K_XL, llama-bench
+`-p 8192,16384,32768 -n 256 -ngl 99`, 100MB-free VRAM rule enforced):
+
+| ctx | f16 pp | kvarn4 pp | f16 tg256 | kvarn4 tg256 | f16 VRAM | kvarn4 VRAM |
+|-----|--------|-----------|-----------|--------------|----------|-------------|
+| 8192 | 3124 | 2946 | 46.1 | 44.0 | 18.1GB used | n/a |
+| 16384 | 3025 | 2844 | 46.2 | 44.0 | 18.6GB used | 17.6GB used |
+| 32768 | 2837 | 2641 | 46.1 | 44.0 | 19.7GB used | 17.9GB used |
+
+Bee's online-dequant architecture (fused `flash_attn_ext_kvarn`,
+windowed fp16 staging of tail_groups+1 groups, no persistent image)
+pays ~5% decode tax (44.0 vs 46.1, flat across ctx) for real,
+growing VRAM savings (1.1GB @16k -> 1.7GB @32k). Ours pays ~30%
+(59 vs 88 @8k) for none. Absolute tok/s across harnesses is not
+comparable (different weight quants/kernels); the ratios are the
+signal. Porting means (1) windowed staging/exact plus (2) fused
+dequant-attention replacing our serve path; our store side, dequant
+kernels, and methodology transfer. Scoped as a separate branch when
+the speed loop closes.
 
 Protocol: prefill at 8k/16k/32k + 256 greedy decode tokens (tg) at
 each length, 27B dense 1.40bpw, `EXL3_KVARN_TRITON=1` parity-off
