@@ -1122,6 +1122,29 @@ class CacheLayer_kvarn(CacheLayer):
         offs = offs.to(torch.long)
         pos = pos.to(torch.long)
         n_new = int(n_new)
+        # Fused single-row store (decode appends): 2 launches + 1 status
+        # sync instead of ~50 launches + ~10 syncs. Policy events bail
+        # (code 1) into the torch paths below; completed groups come back
+        # for the torch sealer (code 2).
+        if rows_k.shape[0] == 1 and not self.is_swa and _kvarn_use_triton():
+            from ..modules.attention_fn.kvarn_triton import (
+                kvarn_triton_available, kvarn_triton_store_row)
+            assert kvarn_triton_available(), \
+                "EXL3_KVARN_TRITON=1 but the Triton path is unavailable " \
+                "(needs triton + CUDA); unset it for the torch path."
+            code, gg = kvarn_triton_store_row(
+                self, rows_k, rows_v, pages, offs, pos,
+                PAGE_SIZE // KVAR_N_GROUP, KVAR_N_SINK_TOKENS,
+                KVAR_N_TAIL_ROLLBACK_TOKENS)
+            if code == 0:
+                self._evict_exact_all()
+                return
+            if code == 2:
+                self._evict_exact_all()
+                self._seal_group(gg)
+                self._dirty_mask[gg] = True
+                return
+            # code == 1: fall through to the torch paths below.
         # One batched WHT for K+V (was two calls): same per-element
         # math, ~half the launches. Bit-exact (batching preserves order).
         # With EXL3_KVARN_TRITON=1 the fused Triton row-WHT runs instead

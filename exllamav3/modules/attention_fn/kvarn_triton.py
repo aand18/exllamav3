@@ -216,6 +216,96 @@ def kvarn_triton_dequant_group(records_g: torch.Tensor, layout,
     return bk, bv
 
 
+if _have_triton:
+    @triton.jit
+    def _kvarn_store_row_kernel(
+        rk_ptr, rv_ptr, ek_ptr, ev_ptr,  # (kvh, HD) fp32 WHT'd / tail-dtype rows
+        pages_ptr, offs_ptr, pos_ptr,    # (1,) int64: page, offset, position
+        stage_k_ptr, stage_v_ptr,        # (G, 128, kvh, HD) fp16
+        exact_k_ptr, exact_v_ptr,        # (G, 128, kvh, HD) tail dtype
+        exact_valid_ptr,                 # (G,) bool
+        base_ptr,                        # (G,) int64 group base
+        sealed_ptr,                      # (G,) bool
+        present_ptr,                     # (G, 128) bool
+        owner_ptr,                       # (P,) int64 page owners
+        pinned_ptr,                      # (P,) bool
+        dirty_ptr,                       # (G,) bool
+        status_ptr,                      # (2,) int64 out: [code, group]
+        KVH: tl.constexpr, HD: tl.constexpr, GPS: tl.constexpr,
+        TAIL_KEEP: tl.constexpr, SINK_N: tl.constexpr,
+        HAS_SINK: tl.constexpr, TAIL_IS_BF16: tl.constexpr,
+    ):
+        # Fused single-row decode store (bsz 1, length 1, non-SWA).
+        # Grid (2*KVH,) programs x HD lanes. All policy is predicated
+        # (no Python branches on tensor values); steady appends need
+        # zero CPU syncs to launch, one status read after.
+        # Codes: 0 ok, 1 slow-path fallback, 2 seal group status[1].
+        pid = tl.program_id(0)
+        is_k = (pid // KVH) == 0
+        h = pid % KVH
+        cols = tl.arange(0, HD)
+
+        pos = tl.load(pos_ptr)
+        n_new = pos + 1
+        page = tl.load(pages_ptr)
+        offs = tl.load(offs_ptr)
+        g = page * GPS + offs // 128
+        s = offs % 128
+        bnew = pos - s
+        base = tl.load(base_ptr + g)
+        is_sealed = tl.load(sealed_ptr + g)
+        slow = ((base != bnew) & (base >= 0)) | is_sealed
+        fresh = (base != bnew) & (~slow)
+        go = ~slow
+
+        row_k = tl.load(rk_ptr + h * HD + cols)
+        row_v = tl.load(rv_ptr + h * HD + cols)
+        s_off = (g * 128 + s) * KVH * HD + h * HD + cols
+        tl.store(stage_k_ptr + s_off, row_k.to(tl.float16),
+                 mask=is_k & go)
+        tl.store(stage_v_ptr + s_off, row_v.to(tl.float16),
+                 mask=(~is_k) & go)
+        tl.store(present_ptr + g * 128 + s, True, mask=go)
+
+        tl.store(sealed_ptr + g, False, mask=fresh)
+        tl.store(exact_valid_ptr + g, False, mask=fresh)
+        tl.store(base_ptr + g, bnew, mask=fresh)
+        tl.store(pinned_ptr + page, False, mask=fresh)
+
+        keep = (pos >= n_new - TAIL_KEEP) | (HAS_SINK & (pos < SINK_N))
+        e_off = (g * 128 + s) * KVH * HD + h * HD + cols
+        # Exact blocks hold ORIGINAL-domain rows (ek/ev), unlike staging.
+        e_row_k = tl.load(ek_ptr + h * HD + cols)
+        e_row_v = tl.load(ev_ptr + h * HD + cols)
+        if TAIL_IS_BF16:
+            tl.store(exact_k_ptr + e_off, e_row_k.to(tl.bfloat16),
+                     mask=is_k & keep & go)
+            tl.store(exact_v_ptr + e_off, e_row_v.to(tl.bfloat16),
+                     mask=(~is_k) & keep & go)
+        else:
+            tl.store(exact_k_ptr + e_off, e_row_k.to(tl.float16),
+                     mask=is_k & keep & go)
+            tl.store(exact_v_ptr + e_off, e_row_v.to(tl.float16),
+                     mask=(~is_k) & keep & go)
+        tl.store(exact_valid_ptr + g, True, mask=keep & go)
+
+        cur_owner = tl.load(owner_ptr + page)
+        new_owner = tl.where(cur_owner < 0, n_new,
+                             tl.minimum(cur_owner, n_new))
+        new_owner = tl.where(n_new > new_owner, n_new, new_owner)
+        tl.store(owner_ptr + page, new_owner, mask=go)
+        tl.store(dirty_ptr + g, True, mask=go)
+
+        full = tl.sum(tl.load(present_ptr + g * 128 + tl.arange(0, 128))
+                      .to(tl.int32)) == 128
+        sink_skip = HAS_SINK & (bnew == 0)
+        code = tl.where(slow, 1, tl.where(full & (~sink_skip), 2, 0))
+        tl.store(status_ptr, code)
+        tl.store(status_ptr + 1, g)
+
+    # NOTE: kvarn_triton_wht_rows defined below (unchanged position).
+
+
 def kvarn_triton_wht_rows(x, head_dim: int):
     """
     Head-wide forward WHT over (..., HD) fp32 CUDA, HD in {128, 256, 512}.
@@ -238,6 +328,56 @@ def kvarn_triton_wht_rows(x, head_dim: int):
     out.copy_(flat)
     _kvarn_wht_hd_kernel[(flat.shape[0],)](out, head_dim, slices, sscale)
     return out.reshape(*x.shape[:-1], head_dim)
+
+
+def kvarn_triton_store_row(layer, rows_k, rows_v, pages_1, offs_1, pos_1,
+                           gps, sink_tokens, rollback_tokens):
+    """Fused single-row decode store (bsz 1, length 1, non-SWA caller).
+
+    Row WHT (1 launch) + fused write kernel (1 launch): stage/exact
+    writes, present/base/owner/valid/dirty updates. Policy events
+    (reuse with live content, sealed overwrite) bail with code 1;
+    a completed group reports code 2 and its id for the torch sealer.
+    Returns (code: int, group: int) -- one status read, the only CPU
+    sync. Small ints (gps, sink/rollback sizes) come from the caller so
+    this module never imports the cache package (no cycle, no stub
+    fragility). Loud failure (never silent) when unrunnable.
+    """
+    if not _have_triton:
+        raise RuntimeError(
+            "KVarN Triton store requires triton (import failed on this host).")
+    dev = rows_k.device
+    if dev.type != "cuda":
+        raise RuntimeError(
+            "KVarN Triton store requires CUDA tensors, got "
+            f"{rows_k.device}.")
+    kvh, hd = layer.num_kv_heads, layer.head_dim
+    stacked = torch.stack((rows_k.float(), rows_v.float()))
+    rkv = kvarn_triton_wht_rows(stacked, hd)
+    rk = rkv[0].reshape(kvh, hd).contiguous()
+    rv = rkv[1].reshape(kvh, hd).contiguous()
+    tail_keep = int(layer.tail_effective) + rollback_tokens
+    sink_n = sink_tokens if layer.has_sink else 0
+    status = torch.zeros(2, dtype=torch.int64, device=dev)
+    _kvarn_store_row_kernel[(2 * kvh,)](
+        rk, rv,
+        rows_k.reshape(kvh, hd).contiguous().to(
+            layer.tail_dtype),
+        rows_v.reshape(kvh, hd).contiguous().to(
+            layer.tail_dtype),
+        pages_1.to(torch.int64), offs_1.to(torch.int64),
+        pos_1.to(torch.int64),
+        layer.stage_k, layer.stage_v,
+        layer.exact_k, layer.exact_v, layer.exact_valid,
+        layer.group_base, layer.sealed, layer.present,
+        layer.page_owner_n, layer.page_pinned, layer._dirty_mask,
+        status,
+        kvh, hd, gps,
+        tail_keep, sink_n, bool(layer.has_sink),
+        layer.tail_dtype == torch.bfloat16,
+    )
+    code, g = status.tolist()
+    return int(code), int(g)
 
 
 def kvarn_triton_dequant_groups(records_G, layout,
