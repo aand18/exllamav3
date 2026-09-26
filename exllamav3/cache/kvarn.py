@@ -1266,7 +1266,9 @@ class CacheLayer_kvarn(CacheLayer):
         # from the resident sink/tail window, and copy_page carries exact
         # data either way), so scanning when the owner high-water crosses a
         # 128-boundary is numerically invisible and amortizes the scan from
-        # every forward to ~1/128 of forwards.
+        # every forward to ~1/128 of forwards. (A call-count gate would
+        # skip the high-water read itself, but it changes few-call flows
+        # like the compact tests, whose exact key sets are asserted.)
         top = int(self.page_owner_n.max())
         if top // 128 == self._evict_q:
             return
