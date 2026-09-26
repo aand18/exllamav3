@@ -62,9 +62,13 @@ def main():
         .unsqueeze(0).expand(1, -1).contiguous()
     seql = torch.tensor([n], dtype=torch.int32)
     t0 = time.time()
-    for _ in range(args.steps):
-        k, v = lay0.get_kv(seql, bt)
-        del k, v
+    # NOTE: get_kv mutates layer state in place (dirty mask, image
+    # refresh), so direct calls need inference_mode, same as the
+    # model.forward path that always provides it.
+    with torch.inference_mode():
+        for _ in range(args.steps):
+            k, v = lay0.get_kv(seql, bt)
+            del k, v
     torch.cuda.synchronize()
     t_serve = (time.time() - t0) / args.steps * 1000
     print(f"A serve-only get_kv (1 layer): {t_serve:.2f} ms/call", flush=True)
