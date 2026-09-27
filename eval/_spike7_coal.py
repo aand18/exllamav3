@@ -263,13 +263,17 @@ def _serve_s7_kernel(
 
 def serve_online_s7(qw, Qf, records, layout, k_bits, v_bits, exact_k,
                      exact_v_w, exrev, sealed, bt, n_0d, kvh, qpk, sl, hd,
-                     gps, sink_n, tail_eff, scale=0.0625, gc=None):
+                     gps, sink_n, tail_eff, scale=0.0625, gc=None,
+                     rec_f16=None, sync_flag=True):
     """gc: grid chunks served (default: all groups). Chunks fully past n
     contribute exactly nothing (m=-inf partials), so serving
     gc=ceil(n/128) is bit-identical while dropping dead programs AND the
     wave-quantization tail (264 = 2x128+8 blocks -> 3rd wave of 8; with
     gc=64: 256 = exactly 2 waves). Production recompile-per-gc concern
-    is queued; spike measures the ceiling."""
+    is queued; spike measures the ceiling.
+    rec_f16: precomputed records.view(fp16) (hoisted for CUDA-graph
+    capture; views inside capture are fragile). sync_flag=False skips
+    the int(flag) DtoH sync and returns the flag tensor (graph-safe)."""
     dev = qw.device
     qh = kvh * qpk
     gmax = int(records.shape[0])
@@ -288,7 +292,8 @@ def serve_online_s7(qw, Qf, records, layout, k_bits, v_bits, exact_k,
             torch.zeros((1,), dtype=torch.uint8, device=dev))
     m, l, acc, out, flag = _S7BUFS[key]
     flag.zero_()
-    rec_f16 = records.view(torch.float16)
+    if rec_f16 is None:
+        rec_f16 = records.view(torch.float16)
     _serve_s7_kernel[(kvh, gc,)](
         qw, Qf, records, rec_f16, exact_k, exact_v_w, exrev, sealed, bt,
         n_0d, flag, m, l, acc,
@@ -307,7 +312,9 @@ def serve_online_s7(qw, Qf, records, layout, k_bits, v_bits, exact_k,
     _combine_v2[(qh,)](
         m, l, acc, out, kvh, qpk, qpad, gc, nbpad, hd, sl, sscale,
         num_warps=1)
-    return out, int(flag[0])
+    if sync_flag:
+        return out, int(flag[0])
+    return out, flag
 
 
 def transpose_k_payload(records, layout, k_bits):
@@ -519,6 +526,35 @@ def cmd_probe():
           f"serve+combine={t_servecombine * 1e3:.1f} "
           f"combine={t_combine * 1e3:.1f} "
           f"serve~={(t_servecombine - t_combine) * 1e3:.1f}", flush=True)
+    # CUDA-graph capture of the steady path (qwht+serve+combine -> ONE
+    # replayable launch): measures the WDDM launch-tax share with zero
+    # math change. All addresses persistent (buffers, Q, recT_f16).
+    recT_f16 = recT.view(torch.float16)
+
+    def do_graph_body():
+        _s3.qwht_fused(Q, qscratch, qw, sl, 0.7071067811865475)
+        serve_online_s7(qw, Qf, recT, lay0.layout, k_bits,
+                        v_bits, lay0.exact_k, Ew, lay0._exact_rev,
+                        lay0.sealed, bt, n_0d, kvh, qpk, sl, hd, 2,
+                        128, 128, gc=gc_eff, rec_f16=recT_f16,
+                        sync_flag=False)
+    for _ in range(10):
+        do_graph_body()
+    torch.cuda.synchronize()
+    gcap = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(gcap):
+        do_graph_body()
+    gcap.replay()
+    torch.cuda.synchronize()
+    o_g = _S7BUFS[(qh, gc_eff, hd)][3]
+    f_g = int(_S7BUFS[(qh, gc_eff, hd)][4][0])
+    gd = (o_g - o).abs()
+    print(f"graph flag={f_g} maxdiff_vs_eager={float(gd.max()):.3e} "
+          f"(expect 0 -> same kernels, same order)", flush=True)
+    t_graph = hot(lambda: gcap.replay())
+    print(f"graph replay: {t_graph * 1e3:.1f} us "
+          f"(vs eager serve+combine+qwht "
+          f"{(t_qwht + t_servecombine) * 1e3:.1f} us)", flush=True)
     e2 = lay0.exact_k[:2].float()
     t_eref = hot(lambda: kvarn_triton_wht_rows(e2, hd), iters=500)
     print(f"exact-V refresh (2 blocks, pessimistic): {t_eref * 1e3:.1f} us",
