@@ -188,6 +188,14 @@ def main():
             print(f"  kvhead {hh}: num maxdiff={float(dd.max()):.3e} "
                   f"RMSE={float((dd ** 2).mean().sqrt()):.3e}", flush=True)
         rep_rmse("num_b", num_b, num_b_ref)
+        print(f"  num_b sum={float(num_b.sum()):.6e} "
+              f"ref sum={float(num_b_ref.sum()):.6e} "
+              f"den_b sum={float(den_bf.sum()):.6e}", flush=True)
+        print(f"  num_b[0,:4]={num_b[0, :4].tolist()}",
+              flush=True)
+        print(f"  ref  [0,:4]={num_b_ref[0, :4].tolist()}",
+              flush=True)
+        print(f"  out_b[0,:4]={out_b[0, :4].tolist()}", flush=True)
         # ---- Entry-vs-dispatch isolation: production entry DIRECTLY on real
     # records (no dispatch torch code) vs torch ref AND vs arm output.
     # Matches ref => dispatch torch code guilty. Mismatches like arm =>
