@@ -1191,11 +1191,13 @@ class CacheLayer_kvarn(CacheLayer):
         R = int(pos.numel())
         # Exact rows first (valid ⟺ assigned: resolve through the rev map;
         # unassigned slots read zeros, corrected by the mask below).
+        # Gather-then-convert: index the (R,kvh,hd) rows in fp16 FIRST
+        # (0.5MB) instead of gathering full blocks (67MB) and converting
+        # after. Bit-identical (gather commutes with elementwise convert).
         ev = self.exact_valid[g]
         es = self._exact_rev[g.long()].clamp_min(0)
-        rows = torch.arange(R, device=dev)
-        K[:R] = self.exact_k[es].float()[rows, s]
-        V[:R] = self.exact_v[es].float()[rows, s]
+        K[:R] = self.exact_k[es, s].to(torch.float32)
+        V[:R] = self.exact_v[es, s].to(torch.float32)
         # Staging fallback for exact-missing rows (open groups only in
         # practice). Single sync on the empty check; skipped entirely in
         # steady decode where the tail is fully exact.
@@ -1204,14 +1206,14 @@ class CacheLayer_kvarn(CacheLayer):
             nm = int(m.sum())
             slot = self._stage_rev[g[m].long()].clamp_min(0)
             pm = self.present[g[m], s[m]]
-            sk = kvarn_wht_head(self.stage_k[slot].float(), hd)
-            sv = kvarn_wht_head(self.stage_v[slot].float(), hd)
-            kk = sk[torch.arange(nm, device=dev), s[m]]
-            vv = sv[torch.arange(nm, device=dev), s[m]]
-            fill_k = torch.where(pm.view(-1, 1, 1), kk, 0.0)
-            fill_v = torch.where(pm.view(-1, 1, 1), vv, 0.0)
-            K[:R][m] = fill_k
-            V[:R][m] = fill_v
+            # WHT only the needed rows (per-row independent over hd), not
+            # full blocks: identical values, ~128x less work when nm small.
+            sk = kvarn_wht_head(
+                self.stage_k[slot, s[m]].float(), hd)
+            sv = kvarn_wht_head(
+                self.stage_v[slot, s[m]].float(), hd)
+            K[:R][m] = torch.where(pm.view(-1, 1, 1), sk, 0.0)
+            V[:R][m] = torch.where(pm.view(-1, 1, 1), sv, 0.0)
         return K[:R], V[:R]
 
     def _live_stage_groups(self):

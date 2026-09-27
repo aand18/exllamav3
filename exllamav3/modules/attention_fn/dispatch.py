@@ -212,18 +212,15 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         bt0 = block_table[0]
         tg = bt0[tpos // PAGE_SIZE] * gps + (tpos % PAGE_SIZE) // KVAR_N_GROUP
         ok = (layer._exact_rev[tg] >= 0).to(torch.float32)
-        t_ms, t_ns, t_ds = [], [], []
-        for h in range(kvh):
-            qh_ = Q[h * qpk:(h + 1) * qpk].float()
-            st = (qh_ @ Kt[:, h, :].T) * scale
-            tm = st.amax(dim=-1)
-            pe = torch.exp(st - tm.unsqueeze(-1)) * ok
-            t_ms.append(tm)
-            t_ns.append(pe @ Vt[:, h, :])
-            t_ds.append(pe.sum(dim=-1))
-        tail_m = torch.cat(t_ms)
-        tail_num = torch.cat(t_ns)
-        tail_den = torch.cat(t_ds)
+        # Batched over heads (was a per-head python loop): identical
+        # per-element contraction order, ~20 launches -> ~6.
+        Qh = Q.reshape(kvh, qpk, hd).float()  # head-grouped like the loop
+        st = torch.bmm(Qh, Kt.permute(1, 2, 0)) * scale  # (kvh, qpk, R)
+        tail_m = st.amax(dim=-1)  # (kvh, qpk)
+        pe = torch.exp(st - tail_m.unsqueeze(-1)) * ok
+        tail_num = torch.bmm(pe, Vt.permute(1, 0, 2)).reshape(qh, hd)
+        tail_den = pe.sum(dim=-1).reshape(qh)
+        tail_m = tail_m.reshape(qh)
         # Original-domain merge (no final WHT: body already unwrapped).
         m_g = torch.maximum(m_b, tail_m)
         eb = torch.exp(m_b - m_g)
