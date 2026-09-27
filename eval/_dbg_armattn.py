@@ -203,12 +203,20 @@ def main():
             records=lay0.records, layout=lay0.layout, k_bits=4, v_bits=4,
             num_kv_heads=kvh, head_dim=hd, slices=lay0.slices)
         qw_d = _w2(Qf, hd)
+        Ew_d = _w2(lay0.exact_v.float(), hd)
+        n_0d_d = torch.tensor([n2], dtype=torch.int32, device="cuda")
         qw_a = lay0._ov_online_qw
         dq = (qw_a - qw_d).abs()
         print(f"  qw arm-vs-direct: maxdiff={float(dq.max()):.3e} "
               f"RMSE={float((dq ** 2).mean().sqrt()):.3e}", flush=True)
-        Ew_d = _w2(lay0.exact_v.float(), hd)
-        n_0d_d = torch.tensor([n2], dtype=torch.int32, device="cuda")
+        # Remaining unverified-identical dynamic inputs: Ew (recomputed
+        # per call from exact_v) and n_0d (seqlens-derived).
+        Ew_now = _w2(lay0.exact_v.float(), hd)
+        de = (Ew_now - Ew_d).abs()
+        print(f"  Ew now-vs-direct: maxdiff={float(de.max()):.3e} "
+              f"RMSE={float((de ** 2).mean().sqrt()):.3e}", flush=True)
+        print(f"  seqlens={seqlens.tolist()} n_0d_d={n_0d_d.tolist()}",
+              flush=True)
         out_d, flag_d = kvarn_triton_online_serve(
             layns, qw_d, Qf, lay0.exact_k, Ew_d, lay0._exact_rev,
             lay0.sealed, bt[0], n_0d_d, 6, 0.0625, 128, 128, 2,
