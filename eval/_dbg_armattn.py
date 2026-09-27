@@ -235,6 +235,11 @@ def main():
         dd3 = (out_d.float() - out_d2.float()).abs()
         print(f"  direct-vs-direct: maxdiff={float(dd3.max()):.3e} "
               f"RMSE={float((dd3 ** 2).mean().sqrt()):.3e}", flush=True)
+        # THE comparison never made: arm's combine-out vs direct's.
+        ob = lay0._ov_serve_out
+        dd4 = (ob - out_d.float()).abs()
+        print(f"  arm-combine vs direct-combine: maxdiff={float(dd4.max()):.3e} "
+              f"RMSE={float((dd4 ** 2).mean().sqrt()):.3e}", flush=True)
         # WHT-domain rows with kernel-consistent coverage. Online identity
         # (final acc = sum exp(s-m_final)*v) means single-pass torch refs
         # suffice; no iter replication needed. Guilty chunk types isolate
