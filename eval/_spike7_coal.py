@@ -128,7 +128,9 @@ def _serve_s7_kernel(
             nb = vv // 2
             nptr = (kpay_row[:, None] + kc[None, :] * B + nb)
             nbyte = tl.load(nptr).to(tl.int32)
-            qq = ((nbyte >> ((vv % 2) * 4)) & 0xF)
+            # uint8: values are 0-15 (bit-identical through the later
+            # .to(fp32)), 4KB live instead of 16KB -> fewer regs/thread.
+            qq = (((nbyte >> ((vv % 2) * 4)) & 0xF).to(tl.uint8))
         else:
             qq = tl.zeros([16, HD], dtype=tl.int32)
             for i in tl.static_range(8):
@@ -200,7 +202,8 @@ def _serve_s7_kernel(
             nptrv = (vpay_row[:, None]
                      + kc[None, :] * B + nbv)
             nbytev = tl.load(nptrv).to(tl.int32)
-            qqv = ((nbytev >> ((vv2 % 2) * 4)) & 0xF)
+            # uint8 (see K side): 4KB live instead of 16KB.
+            qqv = (((nbytev >> ((vv2 % 2) * 4)) & 0xF).to(tl.uint8))
         else:
             qqv = tl.zeros([16, HD], dtype=tl.int32)
             for i in tl.static_range(8):
