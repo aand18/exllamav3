@@ -288,7 +288,7 @@ def serve_online_s7(qw, Qf, records, layout, k_bits, v_bits, exact_k,
         layout.v_s_col_off // 2, v_bits,
         records.shape[1], records.shape[2], sl, gps,
         kvh, qpk, qpad, hd, gmax, scale, sink_n, tail_eff,
-        num_warps=4)
+        num_warps=8)
     sscale = 1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5)
     from _spike2_online import _combine_kernel as _combine_v2
     nbpad = 1 << (gmax - 1).bit_length()
