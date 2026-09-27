@@ -268,7 +268,104 @@ def cmd_attn():
     print("SPIKE6-MMA PASS", flush=True)
 
 
+def cmd_probe():
+    from exllamav3 import Config, Model, Tokenizer, Cache
+    from exllamav3.modules.attention_fn.kvarn_triton import (
+        kvarn_triton_wht_rows)
+    from exllamav3.cache import CacheLayer_kvarn
+    from exllamav3.cache.kvarn import kvarn_parse_preset
+    from exllamav3.modules.attention_fn.kvarn_triton import (
+        kvarn_triton_wht_rows as _wht2)
+    from exllamav3.modules.attention_fn.triton_paged import (
+        paged_attn_triton_decode)
+    from kvarn_microkld import SAMPLER_TEXT, populate
+    MODEL = ("C:/Users/yoho/Downloads/tabbyAPI/models/"
+             "Qwen3.8-27B-exl3-SC_1.40bpw_H3_V3")
+    NTOK, CHUNK, ITERS = 8192, 4096, 200
+    k_bits, v_bits = kvarn_parse_preset("kvarn4")
+    config = Config.from_directory(MODEL)
+    model = Model.from_config(config)
+    cache = Cache(model, max_num_tokens=NTOK + 512,
+                  layer_type=CacheLayer_kvarn, k_bits=k_bits, v_bits=v_bits)
+    model.load("cuda:0", progressbar=False)
+    tokenizer = Tokenizer.from_config(config)
+    reps = max(16, (NTOK // 24) + 2)
+    ids = tokenizer.encode(SAMPLER_TEXT * reps)[:, :NTOK]
+    n = int(ids.shape[1])
+    states, _ = populate(model, cache, ids, CHUNK, n)
+    del states
+    torch.cuda.synchronize()
+    lay0 = next(iter(cache.layers.values()))
+    kvh, hd, sl = lay0.num_kv_heads, lay0.head_dim, lay0.slices
+    qh, qpk = 24, 6
+    assert kvh * qpk == qh and sl == 2
+    gmax = int(lay0.records.shape[0])
+    torch.manual_seed(9)
+    Q = torch.randn(qh, hd, dtype=torch.float16, device="cuda")
+    Qf = Q.float()
+    qw = torch.empty((qh, hd), dtype=torch.float32, device="cuda")
+    qscratch = torch.empty_like(qw)
+    import _spike3_online as _s3
+    _s3.qwht_fused(Q, qscratch, qw, sl, 0.7071067811865475)
+    Ew = _wht2(lay0.exact_k.float(), hd)
+    bt = torch.arange(33, dtype=torch.int32, device="cuda")
+    n_0d = torch.tensor([n], dtype=torch.int32, device="cuda")
+
+    def hot(fn, iters=ITERS):
+        for _ in range(10):
+            fn()
+        torch.cuda.synchronize()
+        t0 = torch.cuda.Event(enable_timing=True)
+        t1 = torch.cuda.Event(enable_timing=True)
+        t0.record()
+        for _ in range(iters):
+            fn()
+        t1.record()
+        torch.cuda.synchronize()
+        return t0.elapsed_time(t1) / iters
+
+    pages = NTOK // 256 + 1
+    k_cache = torch.randn(pages, 256, kvh, hd, dtype=torch.float16,
+                          device="cuda")
+    v_cache = torch.randn_like(k_cache)
+    btt = torch.arange(pages, dtype=torch.int32, device="cuda").view(1, -1)
+    se = torch.tensor([NTOK], dtype=torch.int32, device="cuda")
+    q1 = torch.randn(1, 1, qh, hd, dtype=torch.float16, device="cuda")
+    k1 = torch.randn(1, 1, kvh, hd, dtype=torch.float16, device="cuda")
+    v1 = torch.randn(1, 1, kvh, hd, dtype=torch.float16, device="cuda")
+    paged_attn_triton_decode(q1, k1, v1, k_cache, v_cache, btt, se,
+                             causal=True, softmax_scale=0.0625,
+                             softcap=0.0, sinks=None)
+    t_fp16 = hot(lambda: paged_attn_triton_decode(
+        q1, k1, v1, k_cache, v_cache, btt, se, causal=True,
+        softmax_scale=0.0625, softcap=0.0, sinks=None))
+
+    def do_spike():
+        _s3.qwht_fused(Q, qscratch, qw, sl, 0.7071067811865475)
+        o, _f = serve_online_mma(qw, Qf, lay0.records, lay0.layout, k_bits,
+                                 v_bits, lay0.exact_k, Ew, lay0._exact_rev,
+                                 lay0.sealed, bt, n_0d, kvh, qpk, sl, hd, 2,
+                                 128, 128)
+        return o
+    o = do_spike()
+    print("spike6 full path ok", flush=True)
+    t_spike = hot(do_spike)
+    e2 = lay0.exact_k[:2].float()
+    t_eref = hot(lambda: kvarn_triton_wht_rows(e2, hd), iters=500)
+    print(f"exact-V refresh (2 blocks, pessimistic): {t_eref * 1e3:.1f} us",
+          flush=True)
+    t_spike += t_eref
+    rows = NTOK
+    per_fp16 = t_fp16 / rows * 1e6
+    per_spike = t_spike / rows * 1e6
+    print(f"fp16 paged attn: {t_fp16:.4f} ms/step over {rows} rows "
+          f"({per_fp16:.2f} ns/row)", flush=True)
+    print(f"spike6 mma:      {t_spike:.4f} ms/step over {rows} rows "
+          f"({per_spike:.2f} ns/row)", flush=True)
+    print(f"per-row ratio spike/fp16: {per_spike / per_fp16:.3f} "
+          f"(gate <= 1.111)", flush=True)
+
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "attn"
-    assert mode == "attn", "probe runs on the Win GPU host (queued)"
-    cmd_attn()
+    {"attn": cmd_attn, "probe": cmd_probe}[mode]()
