@@ -89,13 +89,24 @@ def _serve_mma_kernel(
         kf16_row = rec_f16_ptr + (g * C * B) // 2  # (TOK,)
         # v index: dd[c]*128 + s[r]
         vv = dd_c[None, :] * 128 + s[:, None]  # (16, HD)
-        qq = tl.zeros([16, HD], dtype=tl.int32)
-        for i in tl.static_range(8):
-            if i < K_BITS:
-                b = vv * K_BITS + i
-                ptr = (kpay_row[:, None] + kc[None, :] * B + b // 8)
-                byteval = tl.load(ptr).to(tl.int32)
-                qq += ((byteval >> (b % 8)) & 1) << i
+        if K_BITS == 4:
+            # Nibble fast path: value v occupies stream bits [4v,4v+4),
+            # i.e. low/high nibble of byte v//2. One byte load per
+            # element instead of 4 bit-loop loads. Matches the generic
+            # LSB-first loop bit-for-bit (verified: even v -> low
+            # nibble, odd v -> high nibble).
+            nb = vv // 2
+            nptr = (kpay_row[:, None] + kc[None, :] * B + nb)
+            nbyte = tl.load(nptr).to(tl.int32)
+            qq = ((nbyte >> ((vv % 2) * 4)) & 0xF)
+        else:
+            qq = tl.zeros([16, HD], dtype=tl.int32)
+            for i in tl.static_range(8):
+                if i < K_BITS:
+                    b = vv * K_BITS + i
+                    ptr = (kpay_row[:, None] + kc[None, :] * B + b // 8)
+                    byteval = tl.load(ptr).to(tl.int32)
+                    qq += ((byteval >> (b % 8)) & 1) << i
         sc_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + K_SC2
                   + dd_c[None, :])
         zp_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + K_ZP2
@@ -109,14 +120,22 @@ def _serve_mma_kernel(
         # --- V tile 2D (16, HD) ---
         vpay_row = rec_ptr + g * C * B + V_PAY_OFF  # (TOK,)
         vv2 = s[:, None] * 128 + dd_c[None, :]
-        qqv = tl.zeros([16, HD], dtype=tl.int32)
-        for i in tl.static_range(8):
-            if i < V_BITS:
-                bv = vv2 * V_BITS + i
-                ptrv = (vpay_row[:, None]
-                        + kc[None, :] * B + bv // 8)
-                byteval = tl.load(ptrv).to(tl.int32)
-                qqv += ((byteval >> (bv % 8)) & 1) << i
+        if V_BITS == 4:
+            # Same nibble fast path as K (stream bits [4v,4v+4)).
+            nbv = vv2 // 2
+            nptrv = (vpay_row[:, None]
+                     + kc[None, :] * B + nbv)
+            nbytev = tl.load(nptrv).to(tl.int32)
+            qqv = ((nbytev >> ((vv2 % 2) * 4)) & 0xF)
+        else:
+            qqv = tl.zeros([16, HD], dtype=tl.int32)
+            for i in tl.static_range(8):
+                if i < V_BITS:
+                    bv = vv2 * V_BITS + i
+                    ptrv = (vpay_row[:, None]
+                            + kc[None, :] * B + bv // 8)
+                    byteval = tl.load(ptrv).to(tl.int32)
+                    qqv += ((byteval >> (bv % 8)) & 1) << i
         vsc_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + V_SC2
                    + s[:, None])
         vzp_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + V_ZP2
