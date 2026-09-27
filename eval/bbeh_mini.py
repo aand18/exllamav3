@@ -212,7 +212,11 @@ def main(args):
                     sampled_tokens += result["token_ids"].shape[-1]
                 if result.get("eos"):
                     if "error" in result:
+                        import traceback as _tb
                         print(f" !! Job #{result.get('identifier', result['job'].identifier)} failed: {result['error']!r}")
+                        print("".join(_tb.format_exception(
+                            type(result["error"]), result["error"],
+                            result["error"].__traceback__)))
                         continue
                     # Streaming eos results carry the job object but no
                     # identifier key (generator API); the job does.
