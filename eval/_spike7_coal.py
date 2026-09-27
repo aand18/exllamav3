@@ -159,7 +159,39 @@ def _serve_s7_kernel(
                   + tl.load(zp_ptr).to(tl.float32)) \
                 * tl.load(ot_ptr).to(tl.float32)  # (16, HD)
 
-        # --- V tile 2D (16, HD) ---
+        # --- exact-direct 2D tiles (orig-K / WHT-V) ---
+        # (V payload + ev deferred below the QK dots to halve peak live.)
+        es = tl.load(exrev_ptr + g)  # (TOK,)
+        ok_tail = (es >= 0) & (~body) & r  # (TOK,)
+        ek_ptr = (exact_k_ptr + (es[:, None] * 128 + s[:, None]) * KVH * HD
+                  + pid_h * HD + lane[None, :])
+        ek = tl.load(ek_ptr, mask=ok_tail[:, None], other=0.0)
+        k_tile = tl.where(body[:, None], kk, ek)  # open rows: r-masked below
+
+        bad = body & (tl.load(sealed_ptr + g) == 0)
+        tl.store(flag_ptr, 1, mask=tl.sum(bad.to(tl.int32)) > 0)
+
+        # --- MMA QK: (TOK,HD) @ (HD,QPAD) -> (TOK,QPAD), both domains ---
+        # Tail-domain dot only when the tile actually has non-body rows
+        # (all-body is the common case): saves 1 MMA/iter there.
+        sb = tl.dot(k_tile.to(tl.float16), qwT) * SCALE
+        nbody = tl.sum(body.to(tl.int32))
+        if nbody == 16:
+            sc = tl.where(r[:, None], sb.to(tl.float32), float("-inf"))
+        else:
+            st = tl.dot(k_tile.to(tl.float16), qfT) * SCALE
+            sc = tl.where(body[:, None], sb.to(tl.float32),
+                          st.to(tl.float32))
+            sc = tl.where(r[:, None], sc, float("-inf"))
+
+        smax = tl.max(sc, axis=0)  # (QPAD,)
+        m_new = tl.maximum(m, smax)
+        alpha = tl.exp(m - m_new)
+        e = tl.exp(sc - m_new[None, :])  # (TOK, QPAD)
+        l = l * alpha + tl.sum(e, axis=0)
+        # --- V side deferred here so K-side tiles (qq/kk/ek/k_tile, ~50KB
+        # live) are dead past the QK dots: peak live state roughly halves.
+        # Bit-identical: same addresses, same per-element op order.
         vpay_row = rec_ptr + g * C * B + V_PAY_OFF  # (TOK,)
         vv2 = s[:, None] * 128 + dd_c[None, :]
         if V_BITS == 4:
@@ -203,40 +235,10 @@ def _serve_s7_kernel(
             vv_tile = ((qqv.to(tl.float32) * tl.load(vsc_ptr).to(tl.float32)
                         + tl.load(vzp_ptr).to(tl.float32))
                        * tl.load(vot_ptr).to(tl.float32))
-
-        # --- exact-direct 2D tiles (orig-K / WHT-V) ---
-        es = tl.load(exrev_ptr + g)  # (TOK,)
-        ok_tail = (es >= 0) & (~body) & r  # (TOK,)
-        ek_ptr = (exact_k_ptr + (es[:, None] * 128 + s[:, None]) * KVH * HD
-                  + pid_h * HD + lane[None, :])
-        ev_ptr = (exact_v_ptr + (es[:, None] * 128 + s[:, None]) * KVH * HD
-                  + pid_h * HD + lane[None, :])
-        ek = tl.load(ek_ptr, mask=ok_tail[:, None], other=0.0)
-        ev = tl.load(ev_ptr, mask=ok_tail[:, None], other=0.0)
-        k_tile = tl.where(body[:, None], kk, ek)  # open rows: r-masked below
+        ev = tl.load(exact_v_ptr + (es[:, None] * 128 + s[:, None]) * KVH
+                     * HD + pid_h * HD + lane[None, :],
+                     mask=ok_tail[:, None], other=0.0)
         v_tile = tl.where(body[:, None], vv_tile, ev)
-
-        bad = body & (tl.load(sealed_ptr + g) == 0)
-        tl.store(flag_ptr, 1, mask=tl.sum(bad.to(tl.int32)) > 0)
-
-        # --- MMA QK: (TOK,HD) @ (HD,QPAD) -> (TOK,QPAD), both domains ---
-        # Tail-domain dot only when the tile actually has non-body rows
-        # (all-body is the common case): saves 1 MMA/iter there.
-        sb = tl.dot(k_tile.to(tl.float16), qwT) * SCALE
-        nbody = tl.sum(body.to(tl.int32))
-        if nbody == 16:
-            sc = tl.where(r[:, None], sb.to(tl.float32), float("-inf"))
-        else:
-            st = tl.dot(k_tile.to(tl.float16), qfT) * SCALE
-            sc = tl.where(body[:, None], sb.to(tl.float32),
-                          st.to(tl.float32))
-            sc = tl.where(r[:, None], sc, float("-inf"))
-
-        smax = tl.max(sc, axis=0)  # (QPAD,)
-        m_new = tl.maximum(m, smax)
-        alpha = tl.exp(m - m_new)
-        e = tl.exp(sc - m_new[None, :])  # (TOK, QPAD)
-        l = l * alpha + tl.sum(e, axis=0)
         # --- MMA EV via transposed form: (HD,TOK) @ (TOK,QPAD) = (HD,QPAD)
         # M=256,N=8,K=16 hits m16n8k16; the old (QPAD,TOK) form had M=8
         # (SIMT fallback suspect). Trans back and accumulate.
