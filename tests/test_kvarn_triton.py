@@ -350,3 +350,42 @@ def test_default_path_is_torch():
     if "EXL3_KVARN_TRITON" in os.environ:
         del os.environ["EXL3_KVARN_TRITON"]
     assert kvarn._kvarn_use_triton() is False
+
+
+@pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
+def test_promoted_serve_matches_eval_spike():
+    # Promoted _kvarn_online_serve_kernel is a verbatim copy of eval
+    # spike7: identical inputs must give bit-identical outputs
+    # (torch.equal, not RMSE). Guards promotion drift.
+    sys.path.insert(0, str(ROOT / "eval"))
+    import _spike7_coal as s7
+    from _spike2_online import _make_records
+    torch.manual_seed(5)
+    kvh, sl, hd, qpk, Gg = 4, 2, 256, 6, 4
+    bits = (4, 4)
+    layout = kvarn.kvarn_make_layout(128, 128, bits[0], bits[1])
+    records = _make_records(Gg, kvh, sl, layout, bits[0], bits[1])
+    qh = kvh * qpk
+    Q = torch.randn(qh, hd, dtype=torch.float16, device="cuda")
+    qw = kt.kvarn_triton_wht_rows(Q.float(), hd)
+    n = 400
+    exact_k = torch.randn(Gg, 128, kvh, hd, dtype=torch.float16,
+                          device="cuda")
+    exact_v = torch.randn_like(exact_k)
+    exrev = torch.arange(Gg, dtype=torch.int64, device="cuda")
+    sealed = torch.tensor([False, True, True, True], device="cuda")
+    bt = torch.arange(2, dtype=torch.int32, device="cuda")
+    n_0d = torch.tensor([n], dtype=torch.int32, device="cuda")
+    Qf = Q.float()
+    exact_v_w = kt.kvarn_triton_wht_rows(exact_v.float(), hd)
+    out_e, flag_e = s7.serve_online_s7(
+        qw, Qf, records, layout, bits[0], bits[1], exact_k, exact_v_w,
+        exrev, sealed, bt, n_0d, kvh, qpk, sl, hd, 2, 128, 128)
+    lay = types.SimpleNamespace(
+        records=records, layout=layout, k_bits=bits[0], v_bits=bits[1],
+        num_kv_heads=kvh, head_dim=hd, slices=sl)
+    out_p, flag_p = kt.kvarn_triton_online_serve(
+        lay, qw, Qf, exact_k, exact_v_w, exrev, sealed, bt, n_0d, qpk,
+        0.0625, 128, 128, 2)
+    assert flag_e == flag_p == 0
+    assert torch.equal(out_e, out_p)
