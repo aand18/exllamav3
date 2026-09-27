@@ -45,6 +45,19 @@ def account(cache, tag):
           flush=True)
     for k in sorted(by_name, key=by_name.get, reverse=True)[:14]:
         print(f"   {k}: {by_name[k] / 1e6:.1f}MB", flush=True)
+    # Live residency (assigned slots) for windowed stores: steady-state
+    # floor. Peak transient = floor + groups per evict interval (2).
+    for lay in cache.layers.values():
+        for attr, rev in (("stage", "_stage_rev"), ("exact", "_exact_rev")):
+            tbl = getattr(lay, rev, None)
+            if tbl is None:
+                continue
+            live = int((tbl >= 0).sum())
+            key = f"{type(lay).__name__}.{attr}_live_slots"
+            by_name[key] = max(by_name.get(key, 0), live)
+    for k in sorted(by_name):
+        if k.endswith("_live_slots"):
+            print(f"   {k}: max {by_name[k]} live", flush=True)
 
 
 def main():
