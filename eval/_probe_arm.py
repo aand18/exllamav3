@@ -167,7 +167,7 @@ def main():
     t_merge = hot(do_merge, iters=500)
 
     from exllamav3.modules.attention_fn.kvarn_triton import (
-        kvarn_triton_online_merge)
+        kvarn_triton_online_merge, kvarn_triton_online_tail_reduce)
     ref_mr = do_merge()
 
     def do_fmerge():
@@ -180,6 +180,30 @@ def main():
           f"RMSE={float((md ** 2).mean().sqrt()):.3e}", flush=True)
     t_fmerge = hot(do_fmerge, iters=500)
 
+    # Fused tail reduce vs the torch block above. Rebuild the same
+    # inputs here (do_tail's are function-local).
+    from exllamav3.cache.kvarn import KVAR_N_SINK_TOKENS as _SN
+    _Kt, _Vt, _tg = lay0.kvarn_online_tail(n, bt[0])
+    _sn = min(_SN, n)
+    _t0 = max(0, n - tail_eff)
+    _tpos = torch.cat([torch.arange(_sn, device=dev),
+                       torch.arange(_t0, n, device=dev)]).long()
+    _tg2 = bt[0][_tpos // PAGE_SIZE] * gps + (_tpos % PAGE_SIZE) // KVAR_N_GROUP
+    _okk = (lay0._exact_rev[_tg2] < 0).to(torch.float32)
+    _Qh = Q1.reshape(kvh, qpk, hd).float()
+    _st = torch.bmm(_Qh, _Kt.permute(1, 2, 0)) * scale
+
+    def do_ftail():
+        fm, fd, fn = kvarn_triton_online_tail_reduce(_st, _Vt, _okk)
+        return fm.reshape(qh), fd.reshape(qh), fn.reshape(qh, hd)
+    ftm, ftd, ftn = do_ftail()
+    for name, got, ref in (("m", ftm, tail_m), ("den", ftd, tail_den),
+                           ("num", ftn, tail_num)):
+        d = (got.float() - ref.float()).abs()
+        print(f"ftail {name} vs torch: maxdiff={float(d.max()):.3e} "
+              f"RMSE={float((d ** 2).mean().sqrt()):.3e}", flush=True)
+    t_ftail = hot(do_ftail, iters=200)
+
     def do_full():
         return D._try_kvarn_online_decode(
             q, K1, V1, lay0, 0, 0, bt, seqlens, 1, scale, True, None,
@@ -190,7 +214,7 @@ def main():
     parts = [("store", t_store), ("qwht", t_qwht), ("eref", t_eref),
              ("serve", t_serve), ("stats", t_stats), ("mask", t_mask),
              ("tail", t_tail), ("merge", t_merge),
-             ("fmerge", t_fmerge)]
+             ("fmerge", t_fmerge), ("ftail", t_ftail)]
     for name, t in parts:
         print(f"{name:6s} per layer: {t * 1e3:7.1f} us", flush=True)
     print(f"sum   per layer: {sum(t for _, t in parts) * 1e3:7.1f} us",
