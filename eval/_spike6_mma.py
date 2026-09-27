@@ -87,8 +87,8 @@ def _serve_mma_kernel(
         # per-row payload/f16 bases broadcast to 2D via pointer tensors
         kpay_row = rec_ptr + g * C * B + K_PAY_OFF  # (TOK,)
         kf16_row = rec_f16_ptr + (g * C * B) // 2  # (TOK,)
-        # v index: dd[c]*128 + s[r]
-        vv = dd_c[None, :] * 128 + s[:, None]  # (16, HD)
+        # v index: s[r]*128 + dd[c] (v6 [token, dim] store)
+        vv = s[:, None] * 128 + dd_c[None, :]  # (16, HD)
         if K_BITS == 4:
             # Nibble fast path: value v occupies stream bits [4v,4v+4),
             # i.e. low/high nibble of byte v//2. One byte load per

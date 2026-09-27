@@ -114,6 +114,9 @@ if _have_triton:
         PAY: tl.constexpr,   # payload bytes per tile (drop-in bound, unused)
         BITS: tl.constexpr,  # 2, 3, 4, 5, 6 or 8
         DO_WHT: tl.constexpr = 0,  # 1: fold the 128-point FWHT (+ norm) in
+        K_TPOSE: tl.constexpr = 0,  # 1: K payload stored [token, dim] (v6):
+            # sc/zp index columns (dims), other indexes rows (tokens).
+            # V and pre-v6 K keep 0 (sc/zp on rows, other on columns).
     ):
         # One program = one row of one 128x128 tile.
         # pid = tile * 128 + row.
@@ -132,9 +135,14 @@ if _have_triton:
             byteval = tl.load(pay_ptr + tile * PAY + byte)
             q += ((byteval.to(tl.int32) >> bit) & 1) << i
 
-        sc = tl.load(sc_ptr + tile * 128 + row).to(tl.float32)
-        zp = tl.load(zp_ptr + tile * 128 + row).to(tl.float32)
-        oth = tl.load(oth_ptr + tile * 128 + cols).to(tl.float32)
+        if K_TPOSE == 0:
+            sc = tl.load(sc_ptr + tile * 128 + row).to(tl.float32)
+            zp = tl.load(zp_ptr + tile * 128 + row).to(tl.float32)
+            oth = tl.load(oth_ptr + tile * 128 + cols).to(tl.float32)
+        else:
+            sc = tl.load(sc_ptr + tile * 128 + cols).to(tl.float32)
+            zp = tl.load(zp_ptr + tile * 128 + cols).to(tl.float32)
+            oth = tl.load(oth_ptr + tile * 128 + row).to(tl.float32)
         tile_out = (q.to(tl.float32) * sc + zp) * oth
         row_ptr = out_ptr + (tile * 128 + row) * 128
         if DO_WHT == 0:
@@ -149,7 +157,8 @@ if _have_triton:
 
 def kvarn_triton_dequant_side(payload: torch.Tensor, sc: torch.Tensor,
                                zp: torch.Tensor, oth: torch.Tensor,
-                               bits: int, do_wht: bool = False) -> torch.Tensor:
+                               bits: int, do_wht: bool = False,
+                               k_tpose: bool = False) -> torch.Tensor:
     """
     Dequantize NT tiles of one side (K or V).
 
@@ -157,7 +166,10 @@ def kvarn_triton_dequant_side(payload: torch.Tensor, sc: torch.Tensor,
     oth: (NT, 128) fp16 CUDA (per col). Returns (NT, 128, 128) fp32 CUDA.
     With do_wht=True each tile additionally gets the 128-point FWHT (+
     norm), matching kvarn_hadamard_128 bit-exact.
-    Loud failure (never silent) when the Triton path cannot run.
+    k_tpose=True: K payload stored [token, dim] (v6) -- sc/zp index tile
+    columns (dims), other indexes rows (tokens). V and pre-v6 K keep the
+    row/column convention. Loud failure (never silent) when the Triton
+    path cannot run.
     """
     if not _have_triton:
         raise RuntimeError(
@@ -177,6 +189,7 @@ def kvarn_triton_dequant_side(payload: torch.Tensor, sc: torch.Tensor,
     # per program either way.
     _kvarn_row_kernel[(NT * 128,)](payload, sc, zp, oth, out,
                                     PAY, bits, 1 if do_wht else 0,
+                                    1 if k_tpose else 0,
                                     num_warps=1 if do_wht else 4)
     return out
 
@@ -189,26 +202,27 @@ def kvarn_triton_dequant_group(records_g: torch.Tensor, layout,
 
     records_g: (ncols, tile_bytes) uint8 CUDA, ncols = kv_heads * slices.
     Returns (bk, bv) float32 CUDA shaped (128, kvh, hd), matching the torch
-    loop in CacheLayer_kvarn (K tiles [dim, token] transposed on assembly,
-    V tiles [token, dim] as-is). Scale gather is plain torch slicing
+    loop in CacheLayer_kvarn (K tiles stored [token, dim], V tiles
+    [token, dim] as-is). Scale gather is plain torch slicing
     (device ops); only unpack+dequant is fused Triton.
     """
     ncols = num_kv_heads * slices
     assert records_g.shape[0] == ncols
     rec_f16 = records_g.view(torch.float16)
 
-    def side(payload_off, payload_bytes, sc_off, zp_off, oth_off, bits):
+    def side(payload_off, payload_bytes, sc_off, zp_off, oth_off, bits,
+             k_tpose=False):
         pay = records_g[:, payload_off: payload_off + payload_bytes]
         sc = rec_f16[:, sc_off // 2: sc_off // 2 + 128]
         zp = rec_f16[:, zp_off // 2: zp_off // 2 + 128]
         oth = rec_f16[:, oth_off // 2: oth_off // 2 + 128]
         return kvarn_triton_dequant_side(pay.contiguous(), sc.contiguous(),
                                          zp.contiguous(), oth.contiguous(),
-                                         bits).float()
+                                         bits, False, k_tpose).float()
 
     k_tiles = side(layout.k_payload_off, layout.k_payload_bytes,
                    layout.k_s_col_off, layout.k_zp_off, layout.k_s_row_off,
-                   k_bits)   # (ncols, 128, 128) [dim, token]
+                   k_bits, True)   # (ncols, 128, 128) [token, dim]
     v_tiles = side(layout.v_payload_off, layout.v_payload_bytes,
                    layout.v_s_row_off, layout.v_zp_off, layout.v_s_col_off,
                    v_bits)   # (ncols, 128, 128) [token, dim]
@@ -221,7 +235,7 @@ def kvarn_triton_dequant_group(records_g: torch.Tensor, layout,
         for sl in range(slices):
             c = h * slices + sl
             d0, d1 = sl * 128, (sl + 1) * 128
-            bk[:, h, d0:d1] = k_tiles[c].T
+            bk[:, h, d0:d1] = k_tiles[c]
             bv[:, h, d0:d1] = v_tiles[c]
     return bk, bv
 
@@ -796,12 +810,13 @@ def kvarn_triton_dequant_groups(records_G, layout,
     per-128 FWHT (+ norm), i.e. the output already passed the per-slice
     ``kvarn_hadamard_128`` and only the cross-slice stage (if any) remains.
 
-    K-axis note: K tiles are stored [dim, token] but served [token, dim],
-    so the in-kernel row-FWHT (over tile columns = tokens) would transform
-    the WRONG axis for K. K is therefore dequantized raw, transposed on
-    assembly, then passed through ``kvarn_triton_wht_slices`` (FWHT over
-    the head dim, one extra launch). V tiles are [token, dim): the
-    in-kernel row-FWHT is already over the head dim.
+    K-axis note: K tiles are stored [token, dim] (slot-major, same as V)
+    and served [token, dim], so no transpose on assembly (pre-v6 records
+    stored [dim, token] and needed one). do_wht stays False for K with
+    the separate ``kvarn_triton_wht_slices`` launch (unchanged path);
+    folding it in is queued (columns are now dims, so the row-FWHT would
+    hit the right axis). V tiles are [token, dim): the in-kernel
+    row-FWHT is already over the head dim.
     """
     if not _have_triton:
         raise RuntimeError(
@@ -816,7 +831,7 @@ def kvarn_triton_dequant_groups(records_G, layout,
     rec_f16 = records_G.view(torch.float16)
 
     def side(payload_off, payload_bytes, sc_off, zp_off, oth_off, bits,
-             wht):
+             wht, k_tpose=False):
         NT = Gg * ncols
         pay = records_G[:, :, payload_off: payload_off + payload_bytes] \
             .reshape(NT, payload_bytes).contiguous()
@@ -826,13 +841,15 @@ def kvarn_triton_dequant_groups(records_G, layout,
             .reshape(NT, 128).contiguous()
         oth = rec_f16[:, :, oth_off // 2: oth_off // 2 + 128] \
             .reshape(NT, 128).contiguous()
-        return kvarn_triton_dequant_side(pay, sc, zp, oth, bits, wht)
+        return kvarn_triton_dequant_side(pay, sc, zp, oth, bits, wht,
+                                         k_tpose)
 
-    hd = slices * 128
     kt = side(layout.k_payload_off, layout.k_payload_bytes,
               layout.k_s_col_off, layout.k_zp_off, layout.k_s_row_off,
-              k_bits, False).reshape(Gg, num_kv_heads, slices, 128, 128)
-    bk_raw = kt.permute(0, 4, 1, 2, 3).reshape(Gg, 128, num_kv_heads, hd)
+              k_bits, False, True).reshape(Gg, num_kv_heads, slices, 128, 128)
+    # Stored [token, dim]: serve rows map straight (was: stored
+    # [dim, token], permute (0,4,1,2,3) transposed on assembly).
+    bk_raw = kt.permute(0, 3, 1, 2, 4).reshape(Gg, 128, num_kv_heads, hd)
     # K-transpose first, FWHT over the head dim second (see K-axis note
     # above). do_wht=False above: the in-kernel row-FWHT stays off for K.
     bk = kvarn_triton_wht_slices(bk_raw) if do_wht else bk_raw
@@ -848,11 +865,13 @@ if _have_triton:
     def _kvarn_online_kcol(gbase_u8, gbase_f16, C: tl.constexpr, B: tl.constexpr,
               PAY_OFF, SC2, ZP2, OT2, BITS: tl.constexpr,
               pid_h, SL: tl.constexpr, t, lane):
+        # K payload is stored [token, dim] (slot-major rows; same as V),
+        # so value (t, dd) sits at stream offset t*128+dd.
         sl = lane // 128
         dd = lane % 128
         c = pid_h * SL + sl
         pay = gbase_u8 + c * B + PAY_OFF
-        v = dd * 128 + t
+        v = t * 128 + dd
         q = tl.zeros_like(lane)
         for i in tl.static_range(8):
             if i < BITS:

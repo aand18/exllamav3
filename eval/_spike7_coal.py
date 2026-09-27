@@ -24,14 +24,10 @@ Precision note: dot operands fp16 / accum fp32 (tensor-core path). Spike
 RMSE gate relaxed to 5e-4 (fp16-MMA rounding); the REAL gate is KLD
 same-top vs fp16-cache (fp16-image asymmetry alone is 1.4e-04).
 
-Spike7 delta (coalesced K): the K payload is dim-major (v = dd*128+s),
-so a row-tile read strides 64B per dim (~64x L2-sector amplification;
-microbench _dbg_coal.py: strided 41.4us vs coalesced 10.8us = 3.84x on
-payload reads alone). V payload is already slot-major (coalesced).
-Spike7 stores/serves K slot-major (v = s*128+dd): each row = 64
-contiguous bytes. Host helper transpose_k_payload() permutes real
-records for the probe (production store change is queued behind this
-measurement). 4-bit only; other widths keep the legacy index.
+Spike7 delta (coalesced K): production K payload is slot-major since
+v6 (v = s*128+dd; V was always slot-major), so row-tiles read 64
+contiguous bytes per row (vs 64B-strided dim-major before; microbench
+_dbg_coal.py measured 3.84x on payload reads for the pattern change).
 
 Usage: python eval/_spike7_coal.py [attn|probe]
 """
@@ -115,10 +111,9 @@ def _serve_s7_kernel(
             k_sc0 = tl.zeros([HD], dtype=tl.float32)
             k_zp0 = tl.zeros([HD], dtype=tl.float32)
             v_ot0 = tl.zeros([HD], dtype=tl.float32)
-        # K value index: slot-major (transposed store) for 4-bit, legacy
-        # dim-major otherwise. Slot-major row s = 64 contiguous bytes.
+        # K value index: slot-major v6 store for all widths (v = s*128+dd;
+        # rows read coalesced). nibble path below for 4-bit, bit loop else.
         vv = s[:, None] * 128 + dd_c[None, :]  # (16, HD) transposed
-        vv_legacy = dd_c[None, :] * 128 + s[:, None]
         if K_BITS == 4:
             # Nibble fast path: value v occupies stream bits [4v,4v+4),
             # i.e. low/high nibble of byte v//2. One byte load per
@@ -135,7 +130,7 @@ def _serve_s7_kernel(
             qq = tl.zeros([16, HD], dtype=tl.int32)
             for i in tl.static_range(8):
                 if i < K_BITS:
-                    b = vv_legacy * K_BITS + i
+                    b = vv * K_BITS + i
                     ptr = (kpay_row[:, None] + kc[None, :] * B + b // 8)
                     byteval = tl.load(ptr).to(tl.int32)
                     qq += ((byteval >> (b % 8)) & 1) << i
@@ -317,32 +312,6 @@ def serve_online_s7(qw, Qf, records, layout, k_bits, v_bits, exact_k,
     return out, flag
 
 
-def transpose_k_payload(records, layout, k_bits):
-    """Return a clone with each (group, channel) K payload permuted from
-    dim-major (value v = dd*128+t) to slot-major (w = t*128+dd).
-    Metadata regions are untouched. 4-bit only (probe uses kvarn4);
-    the s7 kernel reads slot-major only when K_BITS == 4, so the
-    transpose and the reader stay in lockstep by construction."""
-    assert k_bits == 4, "spike7 transpose is 4-bit only"
-    assert layout.head_dim == 128 and layout.group == 128
-    R = records.clone()
-    G, C, B = R.shape
-    kp = layout.k_payload_bytes  # 8192 for 4-bit
-    off = layout.k_payload_off
-    u8 = R.view(torch.uint8) if R.dtype != torch.uint8 else R
-    pay = u8[:, :, off:off + kp].reshape(G * C, kp)
-    lo = (pay & 0xF).to(torch.int32)
-    hi = ((pay >> 4) & 0xF).to(torch.int32)
-    nib = torch.empty((G * C, 2 * kp), dtype=torch.int32, device=R.device)
-    nib[:, 0::2] = lo
-    nib[:, 1::2] = hi
-    # nib[w], w = dd*128+t -> (dd, t) -> permute -> (t, dd)
-    nib = nib.reshape(G * C, 128, 128).permute(0, 2, 1).reshape(G * C, -1)
-    repacked = (nib[:, 0::2] | (nib[:, 1::2] << 4)).to(torch.uint8)
-    u8[:, :, off:off + kp] = repacked.reshape(G, C, kp)
-    return R
-
-
 def cmd_attn():
     from exllamav3.cache.kvarn import kvarn_make_layout, kvarn_wht_head
     from exllamav3.modules.attention_fn.kvarn_triton import (
@@ -353,7 +322,6 @@ def cmd_attn():
     layout = kvarn_make_layout(128, 128, bits[0], bits[1])
     import _spike2_online as S2
     records = S2._make_records(Gg, kvh, sl, layout, bits[0], bits[1])
-    recordsT = transpose_k_payload(records, layout, bits[0])
     qh = kvh * qpk
     Q = torch.randn(qh, hd, dtype=torch.float16, device="cuda")
     qw = kvarn_triton_wht_rows(Q.float(), hd)
@@ -369,12 +337,12 @@ def cmd_attn():
         kvarn_triton_wht_rows as _wht2)
     Qf = Q.float()
     exact_v_w = _wht2(exact_v.float(), hd)
-    out, flag = serve_online_s7(qw, Qf, recordsT, layout, bits[0], bits[1],
+    out, flag = serve_online_s7(qw, Qf, records, layout, bits[0], bits[1],
                                  exact_k, exact_v_w, exrev, sealed, bt, n_0d,
                                  kvh, qpk, sl, hd, 2, 128, 128)
     print("flag (expect 0):", flag, flush=True)
-    # Reference dequants the ORIGINAL (dim-major) records: same values,
-    # so the reference is unchanged; only the kernel's read pattern moved.
+    # Reference dequants production records (v6 slot-major store): same
+    # values the kernel reads; reader/store in lockstep by construction.
     bk, bv = kvarn_triton_dequant_groups(
         records, layout, bits[0], bits[1], kvh, sl, do_wht=False)
     Kb = kvarn_wht_head(bk, hd)
@@ -478,22 +446,14 @@ def cmd_probe():
 
     def do_spike():
         _s3.qwht_fused(Q, qscratch, qw, sl, 0.7071067811865475)
-        o, _f = serve_online_s7(qw, Qf, recT, lay0.layout, k_bits,
+        o, _f = serve_online_s7(qw, Qf, lay0.records, lay0.layout, k_bits,
                                 v_bits, lay0.exact_k, Ew, lay0._exact_rev,
                                 lay0.sealed, bt, n_0d, kvh, qpk, sl, hd, 2,
                                 128, 128, gc=gc_eff)
         return o
-    # Host-side K transpose of the populated records (one-off; production
-    # store change queued behind this measurement). Timed below.
+    # Production store is slot-major since v6: lay0.records reads
+    # straight into the s7 kernel (the host-transpose days are over).
     torch.cuda.synchronize()
-    tT0 = torch.cuda.Event(enable_timing=True)
-    tT1 = torch.cuda.Event(enable_timing=True)
-    tT0.record()
-    recT = transpose_k_payload(lay0.records, lay0.layout, k_bits)
-    tT1.record()
-    torch.cuda.synchronize()
-    print(f"host K-transpose (one-off): {tT0.elapsed_time(tT1):.2f} ms",
-          flush=True)
     # Grid trim: chunks fully past n contribute exactly nothing; serving
     # gc_eff=ceil(n/128) keeps math identical while dropping dead programs
     # and the wave tail (66*4=264 -> 64*4=256 = exactly 2 waves of 128).
@@ -506,7 +466,7 @@ def cmd_probe():
     # only), combine alone over the live buffers. serve~ = (serve+combine)
     # - combine. One GPU round-trip, no extra model load.
     def do_servecombine():
-        o, _f = serve_online_s7(qw, Qf, recT, lay0.layout, k_bits,
+        o, _f = serve_online_s7(qw, Qf, lay0.records, lay0.layout, k_bits,
                                 v_bits, lay0.exact_k, Ew, lay0._exact_rev,
                                 lay0.sealed, bt, n_0d, kvh, qpk, sl, hd, 2,
                                 128, 128, gc=gc_eff)
@@ -529,14 +489,14 @@ def cmd_probe():
     # CUDA-graph capture of the steady path (qwht+serve+combine -> ONE
     # replayable launch): measures the WDDM launch-tax share with zero
     # math change. All addresses persistent (buffers, Q, recT_f16).
-    recT_f16 = recT.view(torch.float16)
+    rec_f16 = lay0.records.view(torch.float16)
 
     def do_graph_body():
         _s3.qwht_fused(Q, qscratch, qw, sl, 0.7071067811865475)
-        serve_online_s7(qw, Qf, recT, lay0.layout, k_bits,
+        serve_online_s7(qw, Qf, lay0.records, lay0.layout, k_bits,
                         v_bits, lay0.exact_k, Ew, lay0._exact_rev,
                         lay0.sealed, bt, n_0d, kvh, qpk, sl, hd, 2,
-                        128, 128, gc=gc_eff, rec_f16=recT_f16,
+                        128, 128, gc=gc_eff, rec_f16=rec_f16,
                         sync_flag=False)
     for _ in range(10):
         do_graph_body()

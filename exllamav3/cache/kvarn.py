@@ -213,7 +213,9 @@ def kvarn_parse_preset(spec) -> tuple:
 # tp_export carries this tag; the constructor rejects stale versions
 # (fail-closed: rebuild the cache / re-export instead of silently
 # misreading another preset's records).
-KVAR_N_STATE_VERSION = 5
+# v6: K payload stored [token, dim] (was [dim, token]); values/scales
+# identical, positions moved -> old records misread.
+KVAR_N_STATE_VERSION = 6
 
 
 def kvarn_parse_bits(spec) -> int:
@@ -689,11 +691,17 @@ def _rec_f16(record: torch.Tensor) -> torch.Tensor:
 
 def kvarn_quantize_k_tile(tile: torch.Tensor, sinkhorn_iters: int, bits: int,
                           layout: KvarnTileLayout, record: torch.Tensor):
-    """tile: (128,128) [dim, token]. Writes K region of combined record."""
+    """tile: (128,128) [dim, token]. Writes K region of combined record.
+
+    Stored payload is [token, dim] (transposed vs the tile: row s of the
+    stored stream holds one token's dims contiguously, so serve-side
+    row reads are coalesced; V side was always stored this way). The
+    values, scales and Sinkhorn trajectory are untouched -- only payload
+    positions move, so sealed records keep bit-exact values."""
     q, sc, zp, other = kvarn_quantize_tile(tile, bits, sinkhorn_iters)
     assert q.numel() == KVAR_N_GROUP * KVAR_N_GROUP
     record[layout.k_payload_off: layout.k_payload_off + layout.k_payload_bytes] \
-        .copy_(kvarn_pack_bits(q, bits))
+        .copy_(kvarn_pack_bits(q.transpose(0, 1).contiguous(), bits))
     f16 = _rec_f16(record)
     o = layout.k_s_col_off // 2
     f16[o: o + 128].copy_(sc.half())
@@ -721,10 +729,16 @@ def kvarn_quantize_v_tile(tile: torch.Tensor, sinkhorn_iters: int, bits: int,
 
 def kvarn_dequantize_k_tile(record: torch.Tensor, bits: int,
                             layout: KvarnTileLayout) -> torch.Tensor:
-    """Returns (128,128) float32 tile in [dim, token] orientation."""
+    """Returns (128,128) float32 tile in [dim, token] orientation.
+
+    Stored payload is [token, dim] (see quantize); transpose back so the
+    return contract (and all downstream math) is unchanged. The
+    .contiguous() keeps values+strides identical to the old path, so
+    downstream reductions stay bit-identical."""
     q = kvarn_unpack_bits(
         record[layout.k_payload_off: layout.k_payload_off + layout.k_payload_bytes],
-        KVAR_N_GROUP * KVAR_N_GROUP, bits).float().reshape(128, 128)
+        KVAR_N_GROUP * KVAR_N_GROUP, bits).float().reshape(128, 128).T \
+        .contiguous()
     f16 = _rec_f16(record).float()
     sc = f16[layout.k_s_col_off // 2: layout.k_s_col_off // 2 + 128]
     zp = f16[layout.k_zp_off // 2: layout.k_zp_off // 2 + 128]
@@ -1637,8 +1651,11 @@ class CacheLayer_kvarn(CacheLayer):
         qv, scv, zpv, otv = kvarn_quantize_tile(
             v_tiles, self.v_bits, self.sinkhorn_iters)
         recs = self.records[gs]  # (G, C, B) copy; written back below
+        # K payload stored [token, dim] (transposed tile: coalesced serve
+        # reads; values/scales identical, only positions move).
         recs[:, :, L.k_payload_off:L.k_payload_off + L.k_payload_bytes] = \
-            kvarn_pack_bits(qk.reshape(-1), self.k_bits) \
+            kvarn_pack_bits(qk.transpose(1, 2).contiguous().reshape(-1),
+                            self.k_bits) \
             .reshape(G, C, L.k_payload_bytes)
         recs[:, :, L.v_payload_off:L.v_payload_off + L.v_payload_bytes] = \
             kvarn_pack_bits(qv.reshape(-1), self.v_bits) \
@@ -1878,18 +1895,24 @@ class CacheLayer_kvarn(CacheLayer):
         N = Gg * C * KVAR_N_GROUP * KVAR_N_GROUP
         f16 = _rec_f16(recs).float()  # (Gg, C, B//2)
 
-        def deq_tiles(payload_off, payload_bytes, bits, sc_o, zp_o, ot_o, transpose):
+        def deq_tiles(payload_off, payload_bytes, bits, sc_o, zp_o, ot_o, k_side):
             pay = recs[:, :, payload_off:payload_off + payload_bytes].reshape(-1)
             q = kvarn_unpack_bits(pay, N, bits).float() \
                 .reshape(Gg, kvh, sl, KVAR_N_GROUP, KVAR_N_GROUP)
+            if k_side:
+                # K stored [token, dim] (v6); the shared elementwise math
+                # indexes sc/zp on the first axis and other on the second
+                # ([dim, token] convention), so transpose back first --
+                # exactly like kvarn_dequantize_k_tile does.
+                q = q.transpose(-2, -1)
             sc = f16[:, :, sc_o // 2: sc_o // 2 + 128].reshape(Gg * C, 128)
             zp = f16[:, :, zp_o // 2: zp_o // 2 + 128].reshape(Gg * C, 128)
             ot = f16[:, :, ot_o // 2: ot_o // 2 + 128].reshape(Gg * C, 128)
             t = kvarn_dequantize_tile(q.reshape(Gg * C, 128, 128), sc, zp, ot) \
                 .reshape(Gg, kvh, sl, 128, 128)
-            if transpose:  # K records are [dim, token]; V are [token, dim]
+            if k_side:  # [dim, token] -> serve [token, dim]
                 t = t.permute(0, 4, 1, 2, 3)
-            else:
+            else:  # V stored [token, dim]: rows map straight
                 t = t.permute(0, 3, 1, 2, 4)
             return t.reshape(Gg, KVAR_N_GROUP, kvh, self.head_dim)
 

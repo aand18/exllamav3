@@ -29,11 +29,12 @@ from exllamav3.modules.attention_fn.kvarn_triton import (
 def _kcol(gbase_u8, gbase_f16, C: tl.constexpr, B: tl.constexpr,
           PAY_OFF, SC2, ZP2, OT2, BITS: tl.constexpr,
           pid_h, SL: tl.constexpr, t, lane):
+    # K payload stored [token, dim] (v6 records): value (t, dd).
     sl = lane // 128
     dd = lane % 128
     c = pid_h * SL + sl
     pay = gbase_u8 + c * B + PAY_OFF
-    v = dd * 128 + t
+    v = t * 128 + dd
     q = tl.zeros_like(lane)
     for i in tl.static_range(8):
         if i < BITS:
