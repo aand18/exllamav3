@@ -38,10 +38,10 @@ def _serve_kernel(
     HD: tl.constexpr, GMAX: tl.constexpr, SCALE: tl.constexpr,
     SINK_N: tl.constexpr, TAIL_EFF: tl.constexpr,
 ):
-    """Grid (KVH, GMAX): GQA-shared record reads (once per kv-head, not
-    per q-head). QPAD q-heads inside. Per-row body/tail select, exact
-    direct, sticky flag. Partials (KVH, QPAD, GMAX) feed the QPAD-aware
-    combine (v2 pattern)."""
+    """Grid (KVH, GMAX): GQA-shared record reads. 32 outer iters x 4
+    tokens (v2 unroll depth) with joint block softmax update. Per-row
+    body(record)/tail(exact) select; open-body rows trip the sticky
+    flag. Partials (KVH, QPAD, GMAX) feed the QPAD-aware combine."""
     pid_h = tl.program_id(0)
     pid_c = tl.program_id(1)
     lane = tl.arange(0, HD)
@@ -56,44 +56,128 @@ def _serve_kernel(
     m = tl.full([QPAD], -1e30, dtype=tl.float32)
     l = tl.zeros([QPAD], dtype=tl.float32)
     acc = tl.zeros([QPAD, HD], dtype=tl.float32)
-    for t in tl.range(128):
-        pos = pid_c * 128 + t
-        in_range = pos < n
-        in_body = (pos >= SINK_N) & (pos < tail_start) & in_range
-        in_tail = (~in_body) & in_range
-        pos_a = tl.where(in_range, pos, 0)
-        page = tl.load(bt_ptr + pos_a // 256)
-        offs = pos_a % 256
-        g = page * GPS + offs // 128
-        s = offs % 128
-        gbase_u8 = rec_ptr + g * C * B
-        gbase_f16 = rec_f16_ptr + (g * C * B) // 2
-        kval = _kcol_v2(gbase_u8, gbase_f16, C, B,
-                        K_PAY_OFF, K_SC2, K_ZP2, K_OT2, K_BITS,
-                        pid_h, SL, s, lane)
-        vval = _vrow_v2(gbase_u8, gbase_f16, C, B,
-                        V_PAY_OFF, V_SC2, V_ZP2, V_OT2, V_BITS,
-                        pid_h, SL, s, lane)
-        es = tl.load(exrev_ptr + g)
-        ok = (es >= 0) & in_tail
-        e_off = (es * 128 + s) * KVH * HD + pid_h * HD + lane
-        ek = tl.load(exact_k_ptr + e_off,
-                     mask=ok, other=0.0).to(tl.float32)
-        ev = tl.load(exact_v_ptr + e_off,
-                     mask=ok, other=0.0).to(tl.float32)
-        bad = in_body & (~tl.load(sealed_ptr + g))
-        tl.store(flag_ptr, 1, mask=bad)
-        krow = tl.where(in_body, kval, ek)
-        vrow = tl.where(in_body, vval, ev)
-        s_hq = tl.sum(qw * krow[None, :], axis=1) * SCALE
-        s_o = tl.sum(qf * krow[None, :], axis=1) * SCALE
-        sc = tl.where(in_range, tl.where(in_body, s_hq, s_o),
-                      float("-inf"))
-        m_new = tl.maximum(m, sc)
+    for t0 in tl.range(32):
+        t = t0 * 4
+        # 4 tokens x (body dequant | tail exact-direct). where-masks
+        # (both sides computed; uniform chunks dominate so the waste is
+        # small; dynamic per-row branches are illegal in Triton).
+        p0 = pid_c * 128 + t
+        p1 = pid_c * 128 + t + 1
+        p2 = pid_c * 128 + t + 2
+        p3 = pid_c * 128 + t + 3
+        r0 = p0 < n
+        r1 = p1 < n
+        r2 = p2 < n
+        r3 = p3 < n
+        b0 = (p0 >= SINK_N) & (p0 < tail_start) & r0
+        b1 = (p1 >= SINK_N) & (p1 < tail_start) & r1
+        b2 = (p2 >= SINK_N) & (p2 < tail_start) & r2
+        b3 = (p3 >= SINK_N) & (p3 < tail_start) & r3
+        pa0 = tl.where(r0, p0, 0)
+        page0 = tl.load(bt_ptr + pa0 // 256)
+        offs0 = pa0 % 256
+        g0 = page0 * GPS + offs0 // 128
+        s0 = offs0 % 128
+        gb_u0 = rec_ptr + g0 * C * B
+        gb_f0 = rec_f16_ptr + (g0 * C * B) // 2
+        kk0 = _kcol_v2(gb_u0, gb_f0, C, B,
+                        K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
+                        K_BITS, pid_h, SL, s0, lane)
+        vv0 = _vrow_v2(gb_u0, gb_f0, C, B,
+                        V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
+                        V_BITS, pid_h, SL, s0, lane)
+        es0 = tl.load(exrev_ptr + g0)
+        ok0 = (es0 >= 0) & (~b0) & r0
+        ek0 = tl.load(exact_k_ptr + (es0 * 128 + s0) * KVH * HD + pid_h * HD + lane,
+                     mask=ok0, other=0.0).to(tl.float32)
+        ev0 = tl.load(exact_v_ptr + (es0 * 128 + s0) * KVH * HD + pid_h * HD + lane,
+                     mask=ok0, other=0.0).to(tl.float32)
+        bad0 = b0 & (~tl.load(sealed_ptr + g0))
+        tl.store(flag_ptr, 1, mask=bad0)
+        s0 = tl.where(r0, tl.where(b0, tl.sum(qw * kk0[None, :], axis=1),
+                      tl.sum(qf * ek0[None, :], axis=1)) * SCALE, float("-inf"))
+        v0 = tl.where(r0, tl.where(b0, vv0, ev0), 0.0)
+        pa1 = tl.where(r1, p1, 0)
+        page1 = tl.load(bt_ptr + pa1 // 256)
+        offs1 = pa1 % 256
+        g1 = page1 * GPS + offs1 // 128
+        s1 = offs1 % 128
+        gb_u1 = rec_ptr + g1 * C * B
+        gb_f1 = rec_f16_ptr + (g1 * C * B) // 2
+        kk1 = _kcol_v2(gb_u1, gb_f1, C, B,
+                        K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
+                        K_BITS, pid_h, SL, s1, lane)
+        vv1 = _vrow_v2(gb_u1, gb_f1, C, B,
+                        V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
+                        V_BITS, pid_h, SL, s1, lane)
+        es1 = tl.load(exrev_ptr + g1)
+        ok1 = (es1 >= 0) & (~b1) & r1
+        ek1 = tl.load(exact_k_ptr + (es1 * 128 + s1) * KVH * HD + pid_h * HD + lane,
+                     mask=ok1, other=0.0).to(tl.float32)
+        ev1 = tl.load(exact_v_ptr + (es1 * 128 + s1) * KVH * HD + pid_h * HD + lane,
+                     mask=ok1, other=0.0).to(tl.float32)
+        bad1 = b1 & (~tl.load(sealed_ptr + g1))
+        tl.store(flag_ptr, 1, mask=bad1)
+        s1 = tl.where(r1, tl.where(b1, tl.sum(qw * kk1[None, :], axis=1),
+                      tl.sum(qf * ek1[None, :], axis=1)) * SCALE, float("-inf"))
+        v1 = tl.where(r1, tl.where(b1, vv1, ev1), 0.0)
+        pa2 = tl.where(r2, p2, 0)
+        page2 = tl.load(bt_ptr + pa2 // 256)
+        offs2 = pa2 % 256
+        g2 = page2 * GPS + offs2 // 128
+        s2 = offs2 % 128
+        gb_u2 = rec_ptr + g2 * C * B
+        gb_f2 = rec_f16_ptr + (g2 * C * B) // 2
+        kk2 = _kcol_v2(gb_u2, gb_f2, C, B,
+                        K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
+                        K_BITS, pid_h, SL, s2, lane)
+        vv2 = _vrow_v2(gb_u2, gb_f2, C, B,
+                        V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
+                        V_BITS, pid_h, SL, s2, lane)
+        es2 = tl.load(exrev_ptr + g2)
+        ok2 = (es2 >= 0) & (~b2) & r2
+        ek2 = tl.load(exact_k_ptr + (es2 * 128 + s2) * KVH * HD + pid_h * HD + lane,
+                     mask=ok2, other=0.0).to(tl.float32)
+        ev2 = tl.load(exact_v_ptr + (es2 * 128 + s2) * KVH * HD + pid_h * HD + lane,
+                     mask=ok2, other=0.0).to(tl.float32)
+        bad2 = b2 & (~tl.load(sealed_ptr + g2))
+        tl.store(flag_ptr, 1, mask=bad2)
+        s2 = tl.where(r2, tl.where(b2, tl.sum(qw * kk2[None, :], axis=1),
+                      tl.sum(qf * ek2[None, :], axis=1)) * SCALE, float("-inf"))
+        v2 = tl.where(r2, tl.where(b2, vv2, ev2), 0.0)
+        pa3 = tl.where(r3, p3, 0)
+        page3 = tl.load(bt_ptr + pa3 // 256)
+        offs3 = pa3 % 256
+        g3 = page3 * GPS + offs3 // 128
+        s3 = offs3 % 128
+        gb_u3 = rec_ptr + g3 * C * B
+        gb_f3 = rec_f16_ptr + (g3 * C * B) // 2
+        kk3 = _kcol_v2(gb_u3, gb_f3, C, B,
+                        K_PAY_OFF, K_SC2, K_ZP2, K_OT2,
+                        K_BITS, pid_h, SL, s3, lane)
+        vv3 = _vrow_v2(gb_u3, gb_f3, C, B,
+                        V_PAY_OFF, V_SC2, V_ZP2, V_OT2,
+                        V_BITS, pid_h, SL, s3, lane)
+        es3 = tl.load(exrev_ptr + g3)
+        ok3 = (es3 >= 0) & (~b3) & r3
+        ek3 = tl.load(exact_k_ptr + (es3 * 128 + s3) * KVH * HD + pid_h * HD + lane,
+                     mask=ok3, other=0.0).to(tl.float32)
+        ev3 = tl.load(exact_v_ptr + (es3 * 128 + s3) * KVH * HD + pid_h * HD + lane,
+                     mask=ok3, other=0.0).to(tl.float32)
+        bad3 = b3 & (~tl.load(sealed_ptr + g3))
+        tl.store(flag_ptr, 1, mask=bad3)
+        s3 = tl.where(r3, tl.where(b3, tl.sum(qw * kk3[None, :], axis=1),
+                      tl.sum(qf * ek3[None, :], axis=1)) * SCALE, float("-inf"))
+        v3 = tl.where(r3, tl.where(b3, vv3, ev3), 0.0)
+        smax = tl.maximum(tl.maximum(s0, s1), tl.maximum(s2, s3))
+        m_new = tl.maximum(m, smax)
         alpha = tl.exp(m - m_new)
-        e = tl.exp(sc - m_new)
-        l = l * alpha + e
-        acc = acc * alpha[:, None] + e[:, None] * vrow[None, :]
+        e0 = tl.exp(s0 - m_new)
+        e1 = tl.exp(s1 - m_new)
+        e2 = tl.exp(s2 - m_new)
+        e3 = tl.exp(s3 - m_new)
+        l = l * alpha + e0 + e1 + e2 + e3
+        acc = acc * alpha[:, None] + e0[:, None] * v0 + e1[:, None] * v1 + e2[:, None] * v2 + e3[:, None] * v3
         m = m_new
     qoff2 = tl.arange(0, QPAD)
     qmask2 = qoff2 < QPK
