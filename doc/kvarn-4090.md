@@ -179,18 +179,29 @@ measured components, direct flag-on run queued):
 | kvarn4 exact+stash / Bee exact | 84 | 25 | 84 | 25 |
 | kvarn4 served total | 839 | 180 | 1523 | 327 |
 | kvarn4 imageless (no image) | ~286 | — | ~433 | — |
+| kvarn4,kvarn2 served total | ~803calc | — | 1460 | — |
+| kvarn4,kvarn2 imageless (no image) | ~249calc | — | ~364calc | — |
 
 Bee 8k components: payload K 73.4 + V 73.4, staging 25.2, exact
 tail/history/overlay ~8.4 each (categories overlap; resident 180.4 is
 the headline). Ours 16k components: image 1091, records 298.2,
 staging 50.4, exact 67.2, stash 16.8.
-
 Two-point slopes are IDENTICAL on both implementations: fp16 16.0,
-q8 8.5, kvarn4 body 4.37 bits/element. The whole gap is the intercept:
-Bee ~34MB fixed vs ours ~155MB (staging 50 + exact 67 + stash 17 +
-misc) plus our image on the default path. Fixed-fraction shrinks with
-length (18% @8k -> 10% @16k -> ~5% @32k), which is why 16k is now the
-dev reference length for VRAM (a 16k probe costs ~22s wall).
+q8 8.5, kvarn4 body 4.37 bits/element (kvarn4,kvarn2 body ~3.4bpE,
+"effectively 3-bit" per the paper author, vLLM #46613). The whole gap
+is the intercept: Bee ~34MB fixed vs ours ~155MB (staging 50 + exact
+67 + stash 17 + misc) plus our image on the default path.
+Fixed-fraction shrinks with length (18% @8k -> 10% @16k -> ~5% @32k),
+which is why 16k is now the dev reference length for VRAM (a 16k probe
+costs ~22s wall).
+
+Gospel presets (paper author, vLLM #46613): K4V4 is the safe baseline,
+K4V2 the pick ("appears lossless", author's personal choice), K2V2 for
+limits only. KLD alone is NOT proof — reasoning benchmarks decide, so
+KLD same-top is necessary but not sufficient. Ours K4V2 KLD-8k:
+same-top 100% but ~20x the divergence of K4V4 (median 2.7e-4 vs 1e-6,
+max 7.7e-3 vs 6.2e-4) — smoke PASS, reasoning bench queued as the real
+gate. K4V4 stays the default; K2V2 deprioritized (INT2 support poor).
 
 History: the quantized records (151MB vs 554MB @8k) were buried under
 fp16 duplicates (image 554 + staging 336 + exact 554 = 1.59GB). Tasks
