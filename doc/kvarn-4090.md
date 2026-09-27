@@ -133,7 +133,7 @@ main @0ba48c55, sm_89 CUDA build, Qwen3.8-27B Q4_K_XL, llama-bench
 
 | ctx | f16 pp | kvarn4 pp | f16 tg256 | kvarn4 tg256 | f16 VRAM | kvarn4 VRAM |
 |-----|--------|-----------|-----------|--------------|----------|-------------|
-| 8192 | 3124 | 2946 | 46.1 | 44.0 | 18.1GB used | n/a |
+| 8192 | 3124 | 2946 | 46.1 | 44.0 | 18.1GB used | 180MB KV resident |
 | 16384 | 3025 | 2844 | 46.2 | 44.0 | 18.6GB used | 17.6GB used |
 | 32768 | 2837 | 2641 | 46.1 | 44.0 | 19.7GB used | 17.9GB used |
 
@@ -163,27 +163,43 @@ fp32 scoring logits, decode peaks are the honest cache comparison).
 PARITY=1 same code: 58.0/58.4/56.3 tok/s decode; KLD digits identical
 at all lengths. End-to-end allocator peaks are equal within 0.1GB --
 but that is shared weights/temps dominating, NOT cache parity.
-Cache-only accounting at 8k (per-tensor bytes, 16 layers):
 
-| store | fp16 | kvarn (Task 3) | kvarn (Task 4) |
-|-------|------|-------|-------|
-| pages (fp16 full ctx) | 554MB | — | — |
-| image `_img_k/_v` (fp16 full ctx) | — | 554MB | 554MB |
-| staging `stage_k/_v` (fp16, 40 slots) | — | 336MB | 336MB |
-| exact `exact_k/_v` (tail dtype, 8 slots) | — | 554MB | 67MB |
-| records (quantized) | — | 151MB | 151MB |
-| overlay stash + masks | — | ~17MB | ~17MB |
-| total | 0.55GB | 1.59GB | 1.11GB |
+Cache-only accounting (MB; 16 cached layers; ours via
+`eval/_probe_vram.py` per-tensor bytes, Bee via `llama-bench
+--kv-memory` `kv_resident_bytes` + component fields; `~` = summed from
+measured components, direct flag-on run queued):
 
-The quantized records (the actual win: 151MB vs 554MB) were buried
-under three full-context fp16 duplicates. Tasks 3+4 windowed staging
-(40 slots, 336MB: a full prefill chunk transiently) and exact (8 slots,
-67MB: sink + two chunk-boundary tails; SWA layers size up from their
-visible window, still context-independent), cutting cache-only 1.83GB
-to 1.11GB with KLD-identical digits (8k same-top 100%). What remains is
-the persistent image (the speed play) at exactly one fp16 cache by
-construction: reclaiming it needs imageless serve (online dequant,
-Bee-style fused attention) -- decided below (Task 5: NO-GO).
+| store | ours 8k | Bee 8k | ours 16k | Bee 16k |
+|-------|--------:|-------:|---------:|--------:|
+| fp16 K+V | 554 | 537 | 1091 | 1074 |
+| q8 payload+scales | 294 | 285 | 579 | 570 |
+| kvarn4 image (fp16 full ctx) | 554 | 0 (native online) | 1091 | 0 (native online) |
+| kvarn4 records / Bee payload | 151 | 147 | 298 | 294 |
+| kvarn4 staging / Bee staging | 50 | 25 | 50 | 25 |
+| kvarn4 exact+stash / Bee exact | 84 | 25 | 84 | 25 |
+| kvarn4 served total | 839 | 180 | 1523 | 327 |
+| kvarn4 imageless (no image) | ~286 | — | ~433 | — |
+
+Bee 8k components: payload K 73.4 + V 73.4, staging 25.2, exact
+tail/history/overlay ~8.4 each (categories overlap; resident 180.4 is
+the headline). Ours 16k components: image 1091, records 298.2,
+staging 50.4, exact 67.2, stash 16.8.
+
+Two-point slopes are IDENTICAL on both implementations: fp16 16.0,
+q8 8.5, kvarn4 body 4.37 bits/element. The whole gap is the intercept:
+Bee ~34MB fixed vs ours ~155MB (staging 50 + exact 67 + stash 17 +
+misc) plus our image on the default path. Fixed-fraction shrinks with
+length (18% @8k -> 10% @16k -> ~5% @32k), which is why 16k is now the
+dev reference length for VRAM (a 16k probe costs ~22s wall).
+
+History: the quantized records (151MB vs 554MB @8k) were buried under
+fp16 duplicates (image 554 + staging 336 + exact 554 = 1.59GB). Tasks
+3+4 windowed staging/exact; incremental seal cut staging 40 slots to 8
+(`dceb314`) and residency data cut staging+exact to 6 slots
+(`affa0cf`, exact still SWA-sized at 8 via the window formula). What
+remains is the persistent image (the speed play) at exactly one fp16
+cache by construction: reclaiming it needs imageless serve (online
+dequant, Bee-style fused attention) -- decided below (Task 5: NO-GO).
 
 ### Task 5 decision: NO-GO on imageless online serve (stop Phase 2)
 
