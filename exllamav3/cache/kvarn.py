@@ -1204,9 +1204,12 @@ class CacheLayer_kvarn(CacheLayer):
             # Crash-path diagnostics only (zero steady-state cost): who
             # holds the slots at overflow (all alloc paths funnel here).
             live = self.exact_valid.nonzero().flatten().tolist()
+            _gps = PAGE_SIZE // KVAR_N_GROUP
             print(f"KVarN exact pressure: need g={g} "
                   f"live={live} "
-                  f"bases={[int(self.group_base[x]) for x in live]}",
+                  f"bases={[int(self.group_base[x]) for x in live]} "
+                  f"sealed={[bool(self.sealed[x]) for x in live]} "
+                  f"owners={[int(self.page_owner_n[x // _gps]) for x in live]}",
                   flush=True)
         assert free.numel(), "KVarN: exact slot overflow"
         s = int(free[0])
