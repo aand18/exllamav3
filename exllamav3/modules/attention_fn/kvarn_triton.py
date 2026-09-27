@@ -1019,7 +1019,11 @@ if _have_triton:
         e = tl.exp(m - m_all)
         den = tl.sum(l * e)
         num = tl.zeros([HD], dtype=tl.float32)
-        for b in tl.range(NBPAD):
+        # Tight bound NB (not NBPAD): iters b>=NB contribute exactly +0.0
+        # (e is 0 there via -inf padding, ab masked to 0.0; den is computed
+        # above the loop), so skipping them is bit-identical while cutting
+        # e.g. 128->64 iters at 8k/GMAX=64.
+        for b in tl.range(NB):
             active = b < NB
             eb = tl.sum(tl.where(nboff == b, e, 0.0))
             ab = tl.load(acc_ptr + ((ph * QPAD + pq) * NB + b) * HD + lane,
@@ -1255,3 +1259,305 @@ def kvarn_triton_online_decode(layer, qw, ids, qpk, scale, n_new,
         1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5),
         num_warps=1)
     return out
+
+
+# --------------------------------------------------------------------------
+# Promoted single-kernel serve (spike7 -> production, inert until wired).
+# Body-verbatim copy of eval/_spike7_coal._serve_s7_kernel (modulo indent
+# + name; verified IDENTICAL by construction script): grid (KVH, chunks),
+# per-row body(record)/tail(exact) select, sticky flag, online softmax
+# partials feeding _kvarn_online_combine_kernel. Keep in lockstep with
+# the eval original until dispatch owns this path; then delete the eval
+# copy. Promotion delta vs v1 partials: no ids array, no tail temps.
+# --------------------------------------------------------------------------
+if _have_triton:
+    @triton.jit
+    def _kvarn_online_serve_kernel(
+        qw_ptr, qf_ptr, rec_ptr, rec_f16_ptr,
+        exact_k_ptr, exact_v_ptr, exrev_ptr, sealed_ptr,
+        bt_ptr, n_ptr, flag_ptr,
+        m_ptr, l_ptr, out_ptr,
+        K_PAY_OFF, K_SC2, K_ZP2, K_OT2, K_BITS: tl.constexpr,
+        V_PAY_OFF, V_SC2, V_ZP2, V_OT2, V_BITS: tl.constexpr,
+        C: tl.constexpr, B: tl.constexpr, SL: tl.constexpr, GPS: tl.constexpr,
+        KVH: tl.constexpr, QPK: tl.constexpr, QPAD: tl.constexpr,
+        HD: tl.constexpr, GMAX: tl.constexpr, SCALE: tl.constexpr,
+        SINK_N: tl.constexpr, TAIL_EFF: tl.constexpr,
+    ):
+        pid_h = tl.program_id(0)
+        pid_c = tl.program_id(1)
+        lane = tl.arange(0, HD)  # (HD,)
+        sl_c = lane // 128
+        dd_c = lane % 128
+        qoff = tl.arange(0, QPAD)  # (QPAD,)
+        qmask = qoff < QPK
+        qw = tl.load(qw_ptr + (pid_h * QPK) * HD + qoff[:, None] * HD
+                     + lane[None, :], mask=qmask[:, None], other=0.0)
+        qf = tl.load(qf_ptr + (pid_h * QPK) * HD + qoff[:, None] * HD
+                     + lane[None, :], mask=qmask[:, None], other=0.0)
+        qwT = tl.trans(qw.to(tl.float16))  # (HD, QPAD)
+        qfT = tl.trans(qf.to(tl.float16))
+        n = tl.load(n_ptr)
+        tail_start = n - TAIL_EFF
+        m = tl.full([QPAD], -1e30, dtype=tl.float32)
+        l = tl.zeros([QPAD], dtype=tl.float32)
+        acc = tl.zeros([QPAD, HD], dtype=tl.float32)
+    
+        tok = tl.arange(0, 16)  # TOK=16 rows/iter; 8 iters cover 128
+        for t0 in tl.range(8):
+            t = t0 * 16
+            p = pid_c * 128 + t + tok  # (TOK,)
+            r = p < n
+            body = (p >= SINK_N) & (p < tail_start) & r
+            pa = tl.where(r, p, 0)
+            page = tl.load(bt_ptr + pa // 256)
+            offs = pa % 256
+            g = page * GPS + offs // 128  # (TOK,)
+            s = offs % 128  # (TOK,)
+    
+            # --- K tile 2D (TOK, HD), row-dependent gbase ---
+            kc = pid_h * SL + sl_c  # (HD,) col channel
+            # per-row payload/f16 bases broadcast to 2D via pointer tensors
+            kpay_row = rec_ptr + g * C * B + K_PAY_OFF  # (TOK,)
+            kf16_row = rec_f16_ptr + (g * C * B) // 2  # (TOK,)
+            # Group-uniformity: K sc/zp and V oth are per-dim values shared by
+            # all rows of a group. Interior tiles (the common case) touch one
+            # group -> load them once as (256,) vectors + broadcast instead of
+            # (16,256) 2D tiles (16x fewer metadata loads). Boundary tiles
+            # take the slow path. Bit-identical (same addresses).
+            g0 = tl.sum(tl.where(tok == 0, g, 0))
+            uniform = tl.sum(tl.where(g == g0, 1, 0).to(tl.int32)) == 16
+            kf16_g0 = rec_f16_ptr + (g0 * C * B) // 2
+            if uniform:
+                k_sc0 = tl.load(kf16_g0 + (kc * B) // 2 + K_SC2
+                                + dd_c).to(tl.float32)  # (256,)
+                k_zp0 = tl.load(kf16_g0 + (kc * B) // 2 + K_ZP2
+                                + dd_c).to(tl.float32)
+                v_ot0 = tl.load(kf16_g0 + (kc * B) // 2 + V_OT2
+                                + dd_c).to(tl.float32)
+            else:
+                k_sc0 = tl.zeros([HD], dtype=tl.float32)
+                k_zp0 = tl.zeros([HD], dtype=tl.float32)
+                v_ot0 = tl.zeros([HD], dtype=tl.float32)
+            # K value index: slot-major v6 store for all widths (v = s*128+dd;
+            # rows read coalesced). nibble path below for 4-bit, bit loop else.
+            vv = s[:, None] * 128 + dd_c[None, :]  # (16, HD) transposed
+            if K_BITS == 4:
+                # Nibble fast path: value v occupies stream bits [4v,4v+4),
+                # i.e. low/high nibble of byte v//2. One byte load per
+                # element instead of 4 bit-loop loads. Matches the generic
+                # LSB-first loop bit-for-bit (verified: even v -> low
+                # nibble, odd v -> high nibble).
+                nb = vv // 2
+                nptr = (kpay_row[:, None] + kc[None, :] * B + nb)
+                nbyte = tl.load(nptr).to(tl.int32)
+                # uint8: values are 0-15 (bit-identical through the later
+                # .to(fp32)), 4KB live instead of 16KB -> fewer regs/thread.
+                qq = (((nbyte >> ((vv % 2) * 4)) & 0xF).to(tl.uint8))
+            else:
+                qq = tl.zeros([16, HD], dtype=tl.int32)
+                for i in tl.static_range(8):
+                    if i < K_BITS:
+                        b = vv * K_BITS + i
+                        ptr = (kpay_row[:, None] + kc[None, :] * B + b // 8)
+                        byteval = tl.load(ptr).to(tl.int32)
+                        qq += ((byteval >> (b % 8)) & 1) << i
+            sc_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + K_SC2
+                      + dd_c[None, :])
+            zp_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + K_ZP2
+                      + dd_c[None, :])
+            ot_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + K_OT2
+                      + s[:, None])
+            if uniform:
+                # Per-slot K oth: 2 values/row (one per slice) -> where-expand
+                # over sl_c. Bit-identical (same addresses, same op order).
+                k_ot = tl.zeros([16, HD], dtype=tl.float32)
+                for _sl in tl.static_range(4):
+                    if _sl < SL:
+                        _v = tl.load(kf16_g0 + ((pid_h * SL + _sl) * B) // 2
+                                     + K_OT2 + s).to(tl.float32)  # (16,)
+                        k_ot = tl.where(sl_c[None, :] == _sl, _v[:, None], k_ot)
+                kk = (qq.to(tl.float32) * k_sc0[None, :]
+                      + k_zp0[None, :]) * k_ot  # (16, HD)
+            else:
+                kk = (qq.to(tl.float32) * tl.load(sc_ptr).to(tl.float32)
+                      + tl.load(zp_ptr).to(tl.float32)) \
+                    * tl.load(ot_ptr).to(tl.float32)  # (16, HD)
+    
+            # --- exact-direct 2D tiles (orig-K / WHT-V) ---
+            # (V payload + ev deferred below the QK dots to halve peak live.)
+            es = tl.load(exrev_ptr + g)  # (TOK,)
+            ok_tail = (es >= 0) & (~body) & r  # (TOK,)
+            ek_ptr = (exact_k_ptr + (es[:, None] * 128 + s[:, None]) * KVH * HD
+                      + pid_h * HD + lane[None, :])
+            ek = tl.load(ek_ptr, mask=ok_tail[:, None], other=0.0)
+            k_tile = tl.where(body[:, None], kk, ek)  # open rows: r-masked below
+    
+            bad = body & (tl.load(sealed_ptr + g) == 0)
+            tl.store(flag_ptr, 1, mask=tl.sum(bad.to(tl.int32)) > 0)
+    
+            # --- MMA QK: (TOK,HD) @ (HD,QPAD) -> (TOK,QPAD), both domains ---
+            # Tail-domain dot only when the tile actually has non-body rows
+            # (all-body is the common case): saves 1 MMA/iter there.
+            sb = tl.dot(k_tile.to(tl.float16), qwT) * SCALE
+            nbody = tl.sum(body.to(tl.int32))
+            if nbody == 16:
+                sc = tl.where(r[:, None], sb.to(tl.float32), float("-inf"))
+            else:
+                st = tl.dot(k_tile.to(tl.float16), qfT) * SCALE
+                sc = tl.where(body[:, None], sb.to(tl.float32),
+                              st.to(tl.float32))
+                sc = tl.where(r[:, None], sc, float("-inf"))
+    
+            smax = tl.max(sc, axis=0)  # (QPAD,)
+            m_new = tl.maximum(m, smax)
+            alpha = tl.exp(m - m_new)
+            e = tl.exp(sc - m_new[None, :])  # (TOK, QPAD)
+            l = l * alpha + tl.sum(e, axis=0)
+            # --- V side deferred here so K-side tiles (qq/kk/ek/k_tile, ~50KB
+            # live) are dead past the QK dots: peak live state roughly halves.
+            # Bit-identical: same addresses, same per-element op order.
+            vpay_row = rec_ptr + g * C * B + V_PAY_OFF  # (TOK,)
+            vv2 = s[:, None] * 128 + dd_c[None, :]
+            if V_BITS == 4:
+                # Same nibble fast path as K (stream bits [4v,4v+4)).
+                nbv = vv2 // 2
+                nptrv = (vpay_row[:, None]
+                         + kc[None, :] * B + nbv)
+                nbytev = tl.load(nptrv).to(tl.int32)
+                # uint8 (see K side): 4KB live instead of 16KB.
+                qqv = (((nbytev >> ((vv2 % 2) * 4)) & 0xF).to(tl.uint8))
+            else:
+                qqv = tl.zeros([16, HD], dtype=tl.int32)
+                for i in tl.static_range(8):
+                    if i < V_BITS:
+                        bv = vv2 * V_BITS + i
+                        ptrv = (vpay_row[:, None]
+                                + kc[None, :] * B + bv // 8)
+                        byteval = tl.load(ptrv).to(tl.int32)
+                        qqv += ((byteval >> (bv % 8)) & 1) << i
+            vsc_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + V_SC2
+                       + s[:, None])
+            vzp_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + V_ZP2
+                       + s[:, None])
+            vot_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + V_OT2
+                       + dd_c[None, :])
+            if uniform:
+                # Per-slot V sc/zp: (16,SL) loads + where-expand. Bit-identical.
+                v_sc = tl.zeros([16, HD], dtype=tl.float32)
+                v_zp = tl.zeros([16, HD], dtype=tl.float32)
+                for _sl in tl.static_range(4):
+                    if _sl < SL:
+                        _s = tl.load(kf16_g0 + ((pid_h * SL + _sl) * B) // 2
+                                     + V_SC2 + s).to(tl.float32)  # (16,)
+                        _z = tl.load(kf16_g0 + ((pid_h * SL + _sl) * B) // 2
+                                     + V_ZP2 + s).to(tl.float32)
+                        _m = sl_c[None, :] == _sl
+                        v_sc = tl.where(_m, _s[:, None], v_sc)
+                        v_zp = tl.where(_m, _z[:, None], v_zp)
+                vv_tile = ((qqv.to(tl.float32) * v_sc + v_zp)
+                           * v_ot0[None, :])
+            else:
+                vv_tile = ((qqv.to(tl.float32) * tl.load(vsc_ptr).to(tl.float32)
+                            + tl.load(vzp_ptr).to(tl.float32))
+                           * tl.load(vot_ptr).to(tl.float32))
+            ev = tl.load(exact_v_ptr + (es[:, None] * 128 + s[:, None]) * KVH
+                         * HD + pid_h * HD + lane[None, :],
+                         mask=ok_tail[:, None], other=0.0)
+            v_tile = tl.where(body[:, None], vv_tile, ev)
+            # --- MMA EV via transposed form: (HD,TOK) @ (TOK,QPAD) = (HD,QPAD)
+            # M=256,N=8,K=16 hits m16n8k16; the old (QPAD,TOK) form had M=8
+            # (SIMT fallback suspect). Trans back and accumulate.
+            d = tl.dot(tl.trans(v_tile.to(tl.float16)),
+                       e.to(tl.float16))  # (HD, QPAD)
+            acc = acc * alpha[:, None] + tl.trans(d)
+            m = m_new
+    
+        qoff2 = tl.arange(0, QPAD)
+        qmask2 = qoff2 < QPK
+        tl.store(m_ptr + (pid_h * QPAD * GMAX) + qoff2 * GMAX + pid_c, m,
+                 mask=qmask2)
+        tl.store(l_ptr + (pid_h * QPAD * GMAX) + qoff2 * GMAX + pid_c, l,
+                 mask=qmask2)
+        tl.store(out_ptr + ((pid_h * QPAD * GMAX) + qoff2[:, None] * GMAX
+                            + pid_c) * HD + lane[None, :], acc,
+                 mask=qmask2[:, None])
+
+
+def kvarn_triton_online_serve(layer, qw, Qf, exact_k, exact_v_w, exrev,
+                              sealed, bt, n_0d, qpk, scale, sink_n,
+                              tail_eff, gps, gc=None, rec_f16=None,
+                              sync_flag=True):
+    """Promoted spike7 single-kernel body serve (imageless path).
+
+    INERT until dispatch wires it (no callers yet): same math as eval
+    serve_online_s7 (grid-trimmed gc, MMA dots, coalesced slot-major K
+    reads, sticky flag, online partials into _kvarn_online_combine).
+    Buffers persist on the layer (_ov_serve_*, mirroring _ov_online_*),
+    keyed by (qh, gc, hd); realloc on shape change. exact_v_w is exact
+    blocks pre-WHT'd caller-side (production eref owns the incremental
+    refresh; spikes pass a full refresh). rec_f16 hoisting + sync_flag
+    mirror the eval entry (CUDA-graph safe). Loud failure when
+    unrunnable.
+    """
+    if not _have_triton:
+        raise RuntimeError(
+            "KVarN Triton online serve requires triton (import failed).")
+    dev = qw.device
+    if dev.type != "cuda":
+        raise RuntimeError(
+            "KVarN Triton online serve requires CUDA tensors, got "
+            f"{qw.device}.")
+    kvh = int(layer.num_kv_heads)
+    hd = int(layer.head_dim)
+    sl = int(layer.slices)
+    records, layout = layer.records, layer.layout
+    k_bits, v_bits = int(layer.k_bits), int(layer.v_bits)
+    qh = kvh * qpk
+    gmax = int(records.shape[0])
+    if gc is None:
+        gc = gmax
+    assert gc <= gmax
+    qpad = 1 << (qpk - 1).bit_length()
+    need = (qh, qpad, gc, hd)
+    if getattr(layer, "_ov_serve_shape", None) != need or \
+            getattr(layer, "_ov_serve_m", None) is None:
+        layer._ov_serve_m = torch.empty((kvh, qpad, gc),
+                                        dtype=torch.float32, device=dev)
+        layer._ov_serve_l = torch.empty((kvh, qpad, gc),
+                                        dtype=torch.float32, device=dev)
+        layer._ov_serve_acc = torch.empty((kvh, qpad, gc, hd),
+                                          dtype=torch.float32, device=dev)
+        layer._ov_serve_out = torch.empty((qh, hd), dtype=torch.float32,
+                                          device=dev)
+        layer._ov_serve_flag = torch.zeros((1,), dtype=torch.uint8,
+                                           device=dev)
+        layer._ov_serve_shape = need
+    m = layer._ov_serve_m
+    l = layer._ov_serve_l
+    acc = layer._ov_serve_acc
+    out = layer._ov_serve_out
+    flag = layer._ov_serve_flag
+    flag.zero_()
+    if rec_f16 is None:
+        rec_f16 = records.view(torch.float16)
+    _kvarn_online_serve_kernel[(kvh, gc,)](
+        qw, Qf, records, rec_f16, exact_k, exact_v_w, exrev, sealed, bt,
+        n_0d, flag, m, l, acc,
+        layout.k_payload_off,
+        layout.k_s_col_off // 2, layout.k_zp_off // 2,
+        layout.k_s_row_off // 2, k_bits,
+        layout.v_payload_off,
+        layout.v_s_row_off // 2, layout.v_zp_off // 2,
+        layout.v_s_col_off // 2, v_bits,
+        records.shape[1], records.shape[2], sl, gps,
+        kvh, qpk, qpad, hd, gc, scale, sink_n, tail_eff,
+        num_warps=4, num_stages=1)
+    sscale = 1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5)
+    nbpad = 1 << (gc - 1).bit_length()
+    _kvarn_online_combine_kernel[(qh,)](
+        m, l, acc, out, kvh, qpk, qpad, gc, nbpad, hd, sl, sscale,
+        num_warps=1)
+    if sync_flag:
+        return out, int(flag[0])
+    return out, flag
