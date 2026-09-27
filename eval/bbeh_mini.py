@@ -211,6 +211,9 @@ def main(args):
                 if "token_ids" in result:
                     sampled_tokens += result["token_ids"].shape[-1]
                 if result.get("eos"):
+                    if "error" in result:
+                        print(f" !! Job #{result.get('identifier', result['job'].identifier)} failed: {result['error']!r}")
+                        continue
                     # Streaming eos results carry the job object but no
                     # identifier key (generator API); the job does.
                     idx = result.get("identifier", result["job"].identifier)
