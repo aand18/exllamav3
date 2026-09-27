@@ -1199,6 +1199,82 @@ def kvarn_triton_online_tail_reduce(st, vt, ok):
 
 if _have_triton:
     @triton.jit
+    def _kvarn_online_tail_gather_kernel(
+        tpos_ptr,                # (R,) int64 tail positions
+        bt_ptr,                  # (P,) int32 block table row
+        exact_k_ptr, exact_v_ptr,  # (E, 128, KVH, HD) tail-dtype exact rows
+        exrev_ptr,               # (G,) int64 group -> exact slot
+        valid_ptr,               # (G,) bool exact residency
+        k_out_ptr, v_out_ptr,    # (MAXW, KVH, HD) fp32 persistent temps
+        ev_out_ptr,              # (R,) bool per-row exact hit
+        g_out_ptr,               # (R,) int64 per-row group
+        s_out_ptr,               # (R,) int64 per-row slot-in-group
+        GPS: tl.constexpr, KVH: tl.constexpr, HD: tl.constexpr,
+    ):
+        """One program = one (row, kv-head): tail positions to exact rows.
+        Replaces ~10 torch dispatches (pos/pages/offs/g/s index math, two
+        indexed gathers, two fp16->fp32 converts) with one launch, writing
+        straight into the layer's persistent temps. Position/group math is
+        identical to kvarn_online_tail (page * gps + offs // 128,
+        offs % 128); unassigned slots read zeros via the validity mask
+        (valid ⟺ assigned: the mask matches the old clamp_min(0) +
+        exact_valid-gated read). ev/g/s ride out for the cert check, the
+        staging fallback, and the caller's assignment mask. num_warps=4."""
+        r = tl.program_id(0)
+        h = tl.program_id(1)
+        lane = tl.arange(0, HD)
+        pos = tl.load(tpos_ptr + r).to(tl.int64)
+        page = tl.load(bt_ptr + pos // 256).to(tl.int64)
+        offs = pos % 256
+        g = page * GPS + offs // 128
+        s = offs % 128
+        ev = tl.load(valid_ptr + g)
+        es = tl.load(exrev_ptr + g)
+        es_c = tl.where(es >= 0, es, 0)
+        e_off = ((es_c * 128 + s) * KVH + h) * HD + lane
+        k = tl.load(exact_k_ptr + e_off, mask=ev, other=0.0).to(tl.float32)
+        v = tl.load(exact_v_ptr + e_off, mask=ev, other=0.0).to(tl.float32)
+        o_off = (r * KVH + h) * HD + lane
+        tl.store(k_out_ptr + o_off, k)
+        tl.store(v_out_ptr + o_off, v)
+        if h == 0:
+            tl.store(ev_out_ptr + r, ev)
+            tl.store(g_out_ptr + r, g)
+            tl.store(s_out_ptr + r, s)
+
+
+def kvarn_triton_online_tail_gather(layer, tpos, bt_row, K, V, gps):
+    """Fused tail exact-gather for the imageless arm.
+
+    tpos: (R,) int64 positions (built once by the caller, shared with the
+    assignment mask); bt_row: block-table row; K/V: (MAXW, kvh, hd) fp32
+    persistent temps (rows [0, R) written). Returns (K[:R], V[:R], ev, g,
+    s): gathered rows plus per-row exact-hit, group, and slot-in-group
+    for the cert check, staging fallback, and mask. Loud failure when
+    unrunnable.
+    """
+    if not _have_triton:
+        raise RuntimeError(
+            "KVarN Triton online tail gather requires triton.")
+    dev = tpos.device
+    if dev.type != "cuda":
+        raise RuntimeError(
+            "KVarN Triton online tail gather requires CUDA tensors, got "
+            f"{tpos.device}.")
+    kvh = int(layer.num_kv_heads)
+    hd = int(layer.head_dim)
+    R = int(tpos.numel())
+    ev = torch.empty((R,), dtype=torch.bool, device=dev)
+    g = torch.empty((R,), dtype=torch.int64, device=dev)
+    s = torch.empty((R,), dtype=torch.int64, device=dev)
+    _kvarn_online_tail_gather_kernel[(R, kvh)](
+        tpos, bt_row, layer.exact_k, layer.exact_v, layer._exact_rev,
+        layer.exact_valid, K, V, ev, g, s, gps, kvh, hd, num_warps=4)
+    return K[:R], V[:R], ev, g, s
+
+
+if _have_triton:
+    @triton.jit
     def _kvarn_online_qwht_kernel(
         q_ptr,               # (QH, HD) fp16 query rows
         scratch_ptr,         # (QH, HD) fp32 persistent scratch (per-row region)

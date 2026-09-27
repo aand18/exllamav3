@@ -156,6 +156,35 @@ def main():
     tail_m, tail_num, tail_den = do_tail()
     t_tail = hot(do_tail, iters=200)
 
+    # Fused exact-gather vs torch reference (same positions).
+    from exllamav3.modules.attention_fn.kvarn_triton import (
+        kvarn_triton_online_tail_gather)
+    _sn = min(KVAR_N_SINK_TOKENS, n) if lay0.has_sink else 0
+    _pos = torch.cat([torch.arange(_sn, device=dev),
+                      torch.arange(max(0, n - tail_eff), n,
+                                   device=dev)]).long()
+    _pages = bt[0][_pos // PAGE_SIZE]
+    _offs = _pos % PAGE_SIZE
+    _g = _pages * gps + _offs // KVAR_N_GROUP
+    _s = _offs % KVAR_N_GROUP
+    _es = lay0._exact_rev[_g.long()].clamp_min(0)
+    _Kr = lay0.exact_k[_es, _s].to(torch.float32)
+    _Vr = lay0.exact_v[_es, _s].to(torch.float32)
+    _Kt2, _Vt2, _tg2 = lay0.kvarn_online_tail(n, bt[0], pos=_pos)
+    for name, got, ref in (("K", _Kt2, _Kr), ("V", _Vt2, _Vr),
+                           ("g", _tg2, _g)):
+        d = (got.float() - ref.float()).abs() if got.is_floating_point() \
+            else (got != ref)
+        print(f"fgat {name} vs torch: maxdiff={float(d.max()):.3e}",
+              flush=True)
+
+    def do_fgat():
+        return kvarn_triton_online_tail_gather(
+            lay0, _pos, bt[0], lay0._ov_online_tail_k,
+            lay0._ov_online_tail_v, gps)
+    do_fgat()
+    t_fgat = hot(do_fgat, iters=200)
+
     def do_merge():
         m_g = torch.maximum(m_b, tail_m)
         eb = torch.exp(m_b - m_g)
@@ -214,7 +243,8 @@ def main():
     parts = [("store", t_store), ("qwht", t_qwht), ("eref", t_eref),
              ("serve", t_serve), ("stats", t_stats), ("mask", t_mask),
              ("tail", t_tail), ("merge", t_merge),
-             ("fmerge", t_fmerge), ("ftail", t_ftail)]
+             ("fmerge", t_fmerge), ("ftail", t_ftail),
+             ("fgat", t_fgat)]
     for name, t in parts:
         print(f"{name:6s} per layer: {t * 1e3:7.1f} us", flush=True)
     print(f"sum   per layer: {sum(t for _, t in parts) * 1e3:7.1f} us",

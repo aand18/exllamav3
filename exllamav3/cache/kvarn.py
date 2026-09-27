@@ -1201,20 +1201,30 @@ class CacheLayer_kvarn(CacheLayer):
         if pos is None:
             pos = torch.cat([torch.arange(sink_n, device=dev),
                              torch.arange(t0, n, device=dev)]).long()
-        pages = bt_row[pos // PAGE_SIZE]
-        offs = pos % PAGE_SIZE
-        g = pages * gps + offs // KVAR_N_GROUP
-        s = offs % KVAR_N_GROUP
         R = int(pos.numel())
         # Exact rows first (valid ⟺ assigned: resolve through the rev map;
         # unassigned slots read zeros, corrected by the mask below).
-        # Gather-then-convert: index the (R,kvh,hd) rows in fp16 FIRST
-        # (0.5MB) instead of gathering full blocks (67MB) and converting
-        # after. Bit-identical (gather commutes with elementwise convert).
-        ev = self.exact_valid[g]
-        es = self._exact_rev[g.long()].clamp_min(0)
-        K[:R] = self.exact_k[es, s].to(torch.float32)
-        V[:R] = self.exact_v[es, s].to(torch.float32)
+        # Fused gather (1 launch, was ~10 dispatches): position/group math
+        # + indexed fp16 gathers + fp32 converts in-kernel, straight into
+        # the persistent temps. Bit-identical (gather commutes with
+        # elementwise convert; same page * gps + offs // GROUP math).
+        # Torch path kept for non-CUDA/test flows.
+        from ..modules.attention_fn.kvarn_triton import (
+            kvarn_triton_available)
+        if kvarn_triton_available() and torch.device(dev).type == "cuda":
+            from ..modules.attention_fn.kvarn_triton import (
+                kvarn_triton_online_tail_gather)
+            Kt, Vt, ev, g, s = kvarn_triton_online_tail_gather(
+                self, pos.long(), bt_row, K, V, gps)
+        else:
+            pages = bt_row[pos // PAGE_SIZE]
+            offs = pos % PAGE_SIZE
+            g = pages * gps + offs // KVAR_N_GROUP
+            s = offs % KVAR_N_GROUP
+            ev = self.exact_valid[g]
+            es = self._exact_rev[g.long()].clamp_min(0)
+            K[:R] = self.exact_k[es, s].to(torch.float32)
+            V[:R] = self.exact_v[es, s].to(torch.float32)
         # Staging fallback for exact-missing rows (open groups only in
         # practice). Host-certified fast path: every exact invalidation
         # (torch store paths, copy_page) clears _tail_exact_certain, so a
