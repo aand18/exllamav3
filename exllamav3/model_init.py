@@ -431,6 +431,25 @@ def init(
             verbose = args.load_verbose,
         )
 
+    # KVarN: model.load runs a 4096-token dummy forward (and warmup runs
+    # another short one) that persist into the fresh cache. The dummy rows
+    # are positionally harmless but their exact/staging slots stay pinned
+    # (their page owner never advances, so eviction can never release
+    # them) and the first real sequence can overflow the slot windows.
+    # Reset KVarN layers to a clean slate now that load + warmup are done
+    # and nothing is attached to the cache yet. Cheap: the image is still
+    # lazy and slots are small. fp16/quant caches are untouched (their
+    # dummy rows are position-gated and harmless there).
+    for _c in (cache, draft_cache):
+        if _c is None:
+            continue
+        for _layer in list(_c.layers.values()):
+            if isinstance(_layer, CacheLayer_kvarn) and \
+                    getattr(_layer, "device", None) is not None:
+                _dev = _layer.device
+                _layer.free()
+                _layer.alloc(_dev)
+
     # Load tokenizer
     if load_tokenizer:
         printp(not quiet, f" -- Loading tokenizer...")

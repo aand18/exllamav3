@@ -1059,6 +1059,11 @@ class CacheLayer_kvarn(CacheLayer):
         self._dirty_mask = None
         self._dirty_any = False
         self._tail_exact_certain = False
+        # Ad-hoc overlay flag: a free must never leave a stale "pending"
+        # behind (post-reset update paths would unoverlay into freed
+        # images). Shape-keyed _ov_* scratch buffers are intentionally
+        # kept (revalidated on use, avoids realloc churn).
+        self._ov_pending = False
         self._stage_slots = None
         self._stage_rev = None
         self._exact_slots = None
