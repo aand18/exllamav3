@@ -844,6 +844,7 @@ def kvarn_triton_dequant_groups(records_G, layout,
         return kvarn_triton_dequant_side(pay, sc, zp, oth, bits, wht,
                                          k_tpose)
 
+    hd = slices * 128
     kt = side(layout.k_payload_off, layout.k_payload_bytes,
               layout.k_s_col_off, layout.k_zp_off, layout.k_s_row_off,
               k_bits, False, True).reshape(Gg, num_kv_heads, slices, 128, 128)
