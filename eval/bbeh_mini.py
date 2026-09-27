@@ -1,6 +1,10 @@
 from __future__ import annotations
 import os, sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+except Exception:
+    pass
 from exllamav3.util.file import disk_lru_cache, disk_lru_cache_clear
 from exllamav3 import model_init, Generator, Job, ComboSampler
 from exllamav3.util.progress import ProgressBar
