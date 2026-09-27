@@ -369,6 +369,30 @@ def cmd_probe():
     o = do_spike()
     print("spike6 full path ok", flush=True)
     t_spike = hot(do_spike)
+    # Piece split: qwht alone, serve+combine (qw precomputed once, timing
+    # only), combine alone over the live buffers. serve~ = (serve+combine)
+    # - combine. One GPU round-trip, no extra model load.
+    def do_servecombine():
+        o, _f = serve_online_mma(qw, Qf, lay0.records, lay0.layout, k_bits,
+                                 v_bits, lay0.exact_k, Ew, lay0._exact_rev,
+                                 lay0.sealed, bt, n_0d, kvh, qpk, sl, hd, 2,
+                                 128, 128)
+        return o
+    t_qwht = hot(lambda: _s3.qwht_fused(Q, qscratch, qw, sl,
+                                       0.7071067811865475), iters=500)
+    t_servecombine = hot(do_servecombine)
+    from _spike2_online import _combine_kernel as _combine_v2
+    qpad = 1 << (qpk - 1).bit_length()
+    nbpad = 1 << (gmax - 1).bit_length()
+    sscale = 0.7071067811865475
+    m, l, acc, out = _S6BUFS[(qh, gmax, hd)][:4]
+    t_combine = hot(lambda: _combine_v2[(qh,)](
+        m, l, acc, out, kvh, qpk, qpad, gmax, nbpad, hd, sl, sscale),
+        iters=500)
+    print(f"pieces us: qwht={t_qwht * 1e3:.1f} "
+          f"serve+combine={t_servecombine * 1e3:.1f} "
+          f"combine={t_combine * 1e3:.1f} "
+          f"serve~={(t_servecombine - t_combine) * 1e3:.1f}", flush=True)
     e2 = lay0.exact_k[:2].float()
     t_eref = hot(lambda: kvarn_triton_wht_rows(e2, hd), iters=500)
     print(f"exact-V refresh (2 blocks, pessimistic): {t_eref * 1e3:.1f} us",
