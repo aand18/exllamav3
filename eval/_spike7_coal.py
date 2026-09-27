@@ -96,6 +96,25 @@ def _serve_s7_kernel(
         # per-row payload/f16 bases broadcast to 2D via pointer tensors
         kpay_row = rec_ptr + g * C * B + K_PAY_OFF  # (TOK,)
         kf16_row = rec_f16_ptr + (g * C * B) // 2  # (TOK,)
+        # Group-uniformity: K sc/zp and V oth are per-dim values shared by
+        # all rows of a group. Interior tiles (the common case) touch one
+        # group -> load them once as (256,) vectors + broadcast instead of
+        # (16,256) 2D tiles (16x fewer metadata loads). Boundary tiles
+        # take the slow path. Bit-identical (same addresses).
+        g0 = tl.sum(tl.where(tok == 0, g, 0))
+        uniform = tl.sum(tl.where(g == g0, 1, 0).to(tl.int32)) == 16
+        kf16_g0 = rec_f16_ptr + (g0 * C * B) // 2
+        if uniform:
+            k_sc0 = tl.load(kf16_g0 + (kc * B) // 2 + K_SC2
+                            + dd_c).to(tl.float32)  # (256,)
+            k_zp0 = tl.load(kf16_g0 + (kc * B) // 2 + K_ZP2
+                            + dd_c).to(tl.float32)
+            v_ot0 = tl.load(kf16_g0 + (kc * B) // 2 + V_OT2
+                            + dd_c).to(tl.float32)
+        else:
+            k_sc0 = tl.zeros([HD], dtype=tl.float32)
+            k_zp0 = tl.zeros([HD], dtype=tl.float32)
+            v_ot0 = tl.zeros([HD], dtype=tl.float32)
         # K value index: slot-major (transposed store) for 4-bit, legacy
         # dim-major otherwise. Slot-major row s = 64 contiguous bytes.
         vv = s[:, None] * 128 + dd_c[None, :]  # (16, HD) transposed
@@ -124,8 +143,13 @@ def _serve_s7_kernel(
                   + dd_c[None, :])
         ot_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + K_OT2
                   + s[:, None])
-        kk = (qq.to(tl.float32) * tl.load(sc_ptr).to(tl.float32)
-              + tl.load(zp_ptr).to(tl.float32)) \
+        if uniform:
+            k_sc = k_sc0[None, :]
+            k_zp = k_zp0[None, :]
+        else:
+            k_sc = tl.load(sc_ptr).to(tl.float32)
+            k_zp = tl.load(zp_ptr).to(tl.float32)
+        kk = (qq.to(tl.float32) * k_sc + k_zp) \
             * tl.load(ot_ptr).to(tl.float32)  # (16, HD)
 
         # --- V tile 2D (16, HD) ---
@@ -153,9 +177,13 @@ def _serve_s7_kernel(
                    + s[:, None])
         vot_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + V_OT2
                    + dd_c[None, :])
+        if uniform:
+            v_ot = v_ot0[None, :]
+        else:
+            v_ot = tl.load(vot_ptr).to(tl.float32)
         vv_tile = ((qqv.to(tl.float32) * tl.load(vsc_ptr).to(tl.float32)
                     + tl.load(vzp_ptr).to(tl.float32))
-                   * tl.load(vot_ptr).to(tl.float32))
+                   * v_ot)
 
         # --- exact-direct 2D tiles (orig-K / WHT-V) ---
         es = tl.load(exrev_ptr + g)  # (TOK,)
