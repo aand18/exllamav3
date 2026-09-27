@@ -1094,6 +1094,12 @@ class CacheLayer_kvarn(CacheLayer):
         if not free.numel():
             self._seal_full_groups(None)
             free = (self._stage_slots < 0).nonzero().flatten()
+        if not free.numel():
+            # Staging pressure (dead partial tails across sequential
+            # sequences: unsealed groups never release). Seal the oldest
+            # below-window open group; genuine overflow stays loud below.
+            self._reclaim_stage_slot(g)
+            free = (self._stage_slots < 0).nonzero().flatten()
         assert free.numel(), "KVarN: staging slot overflow"
         s = int(free[0])
         self.stage_k[s].zero_()
@@ -1109,12 +1115,91 @@ class CacheLayer_kvarn(CacheLayer):
             self._stage_slots[s] = -1
             self._stage_rev[g] = -1
 
+    def _below_all_windows(self, b: torch.Tensor) -> torch.Tensor:
+        """(C,) bool: group bases b below live(o) for EVERY present page
+        owner o, where live(o) = [o - floor, o) with floor = tail +
+        rollback. Sink rows are NOT covered here (callers exclude base 0
+        on sink layers). Untouched pages (owner -1 → 0) contribute the
+        empty window. Fully sync-free (broadcast compare + all-reduce).
+
+        Windows slide only forward, so a group below every live window
+        can never be served again: the only reader that could want it is
+        its own sequence resuming, and resumption advances n forward from
+        the present owner. Owner understatement (page-reuse min) is safe:
+        groups touched by the current call are unsealed (excluded from
+        exact victims; staging victims get sealed, and overwrite unseals),
+        and untouched groups are never read.
+        """
+        floor = int(self.tail_effective) + KVAR_N_TAIL_ROLLBACK_TOKENS
+        o = self.page_owner_n.clamp_min(0)
+        return ((b.unsqueeze(1) + KVAR_N_GROUP <= (o - floor).unsqueeze(0)) |
+                (b.unsqueeze(1) >= o.unsqueeze(0))).all(dim=1)
+
+    def _reclaim_exact_slot(self, g: int) -> torch.Tensor:
+        """Free one exact slot under pressure (sync-free; empty if none).
+
+        Victim ⟺ slotted + sealed + not the allocating group + (sink:
+        not base 0) + below every live window. The release keeps the
+        valid⟺assigned invariant (kernel/torch tails skip exrev<0 rows),
+        and the sealed records keep serving the victim through the
+        designed exact-missing fallbacks -- but victims are unreadable
+        anyway (window rule), so this is purely slot recycling.
+        """
+        cand = (self._exact_rev >= 0) & self.sealed
+        cand[g] = False
+        if self.has_sink:
+            cand = cand & (self.group_base != 0)
+        idx = cand.nonzero().flatten()
+        if idx.numel() == 0:
+            return idx
+        ok = idx[self._below_all_windows(self.group_base[idx])]
+        if ok.numel() == 0:
+            return ok
+        victim = ok[torch.argmin(self.group_base[ok])]
+        slot = self._exact_rev[victim]
+        self._exact_slots[slot] = -1
+        self._exact_rev[victim] = -1
+        self.exact_valid[victim] = False
+        return slot.reshape(1)
+
+    def _reclaim_stage_slot(self, g: int) -> None:
+        """Free one staging slot under pressure by sealing the oldest
+        below-window open group (sync-free select; one sync for the id;
+        seal cost on the rare pressure path only).
+
+        Sealing is lossless (records preserve the rows; present-gated
+        reads; page reuse resets, same-base overwrite unseals), so unlike
+        exact release this is safe even if the window audit ever misses:
+        worst case is seal/unseal churn, never wrong rows. Victim ⟺
+        staged + unsealed + has rows + not the allocating group + (sink:
+        not base 0) + below every live window. The current call's filling
+        groups are in-window by construction, so they are never victims.
+        """
+        cand = (self._stage_rev >= 0) & ~self.sealed & \
+            self.present.any(dim=1)
+        cand[g] = False
+        if self.has_sink:
+            cand = cand & (self.group_base != 0)
+        idx = cand.nonzero().flatten()
+        if idx.numel() == 0:
+            return
+        ok = idx[self._below_all_windows(self.group_base[idx])]
+        if ok.numel() == 0:
+            return
+        victim = int(ok[torch.argmin(self.group_base[ok])])
+        self._seal_group(victim)
+
     def _exact_slot(self, g: int) -> int:
         """Slot holding group g's exact rows; assigns a free slot."""
         s = int(self._exact_rev[g])
         if s >= 0:
             return s
         free = (self._exact_slots < 0).nonzero().flatten()
+        if not free.numel():
+            # Slot pressure (dead tails across sequential sequences pin
+            # slots: their owners never advance). Reclaim first; genuine
+            # overflow (nothing reclaimable) stays a loud assert below.
+            free = self._reclaim_exact_slot(g)
         if not free.numel():
             # Crash-path diagnostics only (zero steady-state cost): who
             # holds the slots at overflow (all alloc paths funnel here).

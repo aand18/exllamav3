@@ -110,3 +110,76 @@ def test_exact_roundtrip_through_slots():
     assert bool((lay.exact_k[lay._exact_slot(g), 9] == 2.5).all())
     lay._exact_release(g)
     assert lay._exact_rev[g] == -1
+
+
+def _occupy_exact_sealed(lay, groups):
+    for g in groups:
+        lay._exact_slot(g)
+        lay.sealed[g] = True
+        lay.group_base[g] = g * kvarn.KVAR_N_GROUP
+        lay.exact_valid[g] = True
+
+
+def test_exact_reclaim_frees_oldest_below_window():
+    lay = _layer()
+    assert lay.has_sink
+    # All 6 slots: sink group 0 + sealed groups 1..5, every page owned
+    # by a long-advanced sequence (windows far above).
+    _occupy_exact_sealed(lay, range(6))
+    lay.page_owner_n.fill_(5000)
+    s = lay._exact_slot(60)
+    # Sink (base 0) is never a victim; oldest reclaimable is group 1.
+    assert int(lay._exact_rev[0]) >= 0
+    assert int(lay._exact_rev[1]) == -1
+    assert not bool(lay.exact_valid[1])
+    assert int(lay._exact_rev[60]) == s
+    # valid ⟺ assigned invariant holds everywhere.
+    assert bool(((lay.exact_valid) == (lay._exact_rev >= 0)).all())
+
+
+def test_exact_reclaim_refuses_live_window():
+    lay = _layer()
+    _occupy_exact_sealed(lay, range(6))
+    # Owner 700: live window [444, 700): groups 3..5 (bases 384..640)
+    # intersect it, groups 1..2 are below it.
+    lay.page_owner_n.fill_(700)
+    s = lay._exact_slot(60)
+    assert int(lay._exact_rev[1]) == -1  # oldest dead goes first
+    assert int(lay._exact_rev[60]) == s
+    # Everything still live keeps its slot.
+    for g in (0, 3, 4, 5):
+        assert int(lay._exact_rev[g]) >= 0
+
+
+def test_exact_reclaim_empty_means_loud():
+    lay = _layer()
+    _occupy_exact_sealed(lay, range(6))
+    # Owner 700 protects groups 3..5; groups 1..2 are unsealed... make
+    # every below-window group unsealed so nothing is reclaimable: fill
+    # slots with groups 0..5 but unseal 1..2 and protect the rest.
+    lay.sealed[1] = False
+    lay.sealed[2] = False
+    lay.page_owner_n.fill_(700)
+    try:
+        lay._exact_slot(60)
+    except AssertionError:
+        return
+    raise SystemExit("expected AssertionError on unreclaimable overflow")
+
+
+def test_stage_reclaim_seals_dead_partial():
+    lay = _layer()
+    assert lay.has_sink
+    # All 4 staging slots: open groups 1..4 with rows, far below the
+    # owners' windows (dead partial tails of finished sequences).
+    for g in range(1, 5):
+        lay._stage_slot(g)
+        lay.group_base[g] = g * kvarn.KVAR_N_GROUP
+        lay.present[g, :10] = True
+    lay.page_owner_n.fill_(5000)
+    s = lay._stage_slot(60)
+    # Oldest dead partial (group 1) sealed; its slot recycled.
+    assert bool(lay.sealed[1])
+    assert int(lay._stage_rev[60]) == s
+    # Sealed partial keeps its rows readable (present-gated).
+    assert bool(lay.present[1, :10].all())
