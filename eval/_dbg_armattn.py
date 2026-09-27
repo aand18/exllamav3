@@ -196,9 +196,11 @@ def main():
         import types as _t
         from exllamav3.modules.attention_fn.kvarn_triton import (
             kvarn_triton_online_serve, kvarn_triton_wht_rows as _w2)
-        # LAST UNVERIFIED INPUT: dispatch's qw (production QWHT) vs the
-        # direct call's qw_d (wht_rows). Every other input is provably
-        # identical (same objects/constants). Compare first.
+        # Layer policy + tail-group assignment (partition ground truth).
+        print(f"  has_sink={lay0.has_sink} "
+              f"tail_effective={int(lay0.tail_effective)} "
+              f"sealed[60:]={lay0.sealed[60:68].tolist()} "
+              f"exrev[60:]={lay0._exact_rev[60:68].tolist()}", flush=True)
         layns = _t.SimpleNamespace(
             records=lay0.records, layout=lay0.layout, k_bits=4, v_bits=4,
             num_kv_heads=kvh, head_dim=hd, slices=lay0.slices)
