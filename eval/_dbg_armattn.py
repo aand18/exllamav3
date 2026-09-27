@@ -179,7 +179,31 @@ def main():
             print(f"  kvhead {hh}: num maxdiff={float(dd.max()):.3e} "
                   f"RMSE={float((dd ** 2).mean().sqrt()):.3e}", flush=True)
         rep_rmse("num_b", num_b, num_b_ref)
-        # ---- Per-chunk acc bisection: kernel acc_c vs torch over TRUE
+        # ---- Entry-vs-dispatch isolation: production entry DIRECTLY on real
+    # records (no dispatch torch code) vs torch ref AND vs arm output.
+    # Matches ref => dispatch torch code guilty. Mismatches like arm =>
+    # entry/kernel guilty on real-data mappings.
+    with torch.inference_mode():
+        import types as _t
+        from exllamav3.modules.attention_fn.kvarn_triton import (
+            kvarn_triton_online_serve, kvarn_triton_wht_rows as _w2)
+        layns = _t.SimpleNamespace(
+            records=lay0.records, layout=lay0.layout, k_bits=4, v_bits=4,
+            num_kv_heads=kvh, head_dim=hd, slices=lay0.slices)
+        qw_d = _w2(Qf, hd)
+        Ew_d = _w2(lay0.exact_v.float(), hd)
+        n_0d_d = torch.tensor([n2], dtype=torch.int32, device="cuda")
+        out_d, flag_d = kvarn_triton_online_serve(
+            layns, qw_d, Qf, lay0.exact_k, Ew_d, lay0._exact_rev,
+            lay0.sealed, bt[0], n_0d_d, 6, 0.0625, 128, 128, 2,
+            gc=65)
+        dd = (out_d.float() - ref).abs()
+        print(f"  direct-entry vs ref: maxdiff={float(dd.max()):.3e} "
+              f"RMSE={float((dd ** 2).mean().sqrt()):.3e} flag={flag_d}",
+              flush=True)
+        dd2 = (out_d.float() - got).abs()
+        print(f"  direct-entry vs arm: maxdiff={float(dd2.max()):.3e} "
+              f"RMSE={float((dd2 ** 2).mean().sqrt()):.3e}", flush=True)
         # WHT-domain rows with kernel-consistent coverage. Online identity
         # (final acc = sum exp(s-m_final)*v) means single-pass torch refs
         # suffice; no iter replication needed. Guilty chunk types isolate
