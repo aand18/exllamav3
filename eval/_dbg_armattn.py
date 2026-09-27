@@ -80,6 +80,7 @@ def main():
     # ---- Stage decomposition: which stage diverges? ----
     # True-row refs over partitions; arm internals recomputed like dispatch.
     from exllamav3.cache.kvarn import KVAR_N_SINK_TOKENS
+    from exllamav3.cache.kvarn import kvarn_wht_head
     from exllamav3.constants import PAGE_SIZE
     from exllamav3.modules.attention_fn.kvarn_triton import (
         kvarn_triton_wht_rows)
@@ -135,7 +136,15 @@ def main():
         print(f"  out_b: isnan={int(torch.isnan(out_b).sum())} "
               f"isinf={int(torch.isinf(out_b).sum())} "
               f"maxabs={float(out_b.abs().max()):.3e}", flush=True)
-        num_b = kvarn_triton_wht_rows(out_b, hd) * den_bf.reshape(qh, 1)
+        # PRIME SUSPECT CHECK: triton WHT vs torch head-WHT (must be
+        # bit-exact per its docstring; a broken WHT explains correct
+        # out_b + wrong num_b with near-right den_b).
+        w_ref = kvarn_wht_head(out_b.double(), hd).float()
+        w_got = kvarn_triton_wht_rows(out_b, hd)
+        wd = (w_got - w_ref).abs()
+        print(f"  wht_rows: maxdiff={float(wd.max()):.3e} "
+              f"RMSE={float((wd ** 2).mean().sqrt()):.3e}", flush=True)
+        num_b = w_got * den_bf.reshape(qh, 1)
         rep_rmse("m_b", m_bf, m_b_ref)
         rep_rmse("den_b", den_bf, den_b_ref)
         rep_rmse("num_b", num_b, num_b_ref)
