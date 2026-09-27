@@ -10,6 +10,7 @@ import torch
 
 from exllamav3 import Config, Model, Tokenizer, Cache
 from exllamav3.cache import CacheLayer_fp16, CacheLayer_kvarn
+from exllamav3.cache.quant import CacheLayer_quant
 from exllamav3.cache.kvarn import kvarn_parse_preset
 from kvarn_microkld import SAMPLER_TEXT, populate
 
@@ -52,6 +53,8 @@ def main():
     model = Model.from_config(config)
     c_fp16 = Cache(model, max_num_tokens=NTOK + 256,
                    layer_type=CacheLayer_fp16)
+    c_q8 = Cache(model, max_num_tokens=NTOK + 256,
+                 layer_type=CacheLayer_quant, k_bits=8, v_bits=8)
     c_kvarn = Cache(model, max_num_tokens=NTOK + 256,
                     layer_type=CacheLayer_kvarn,
                     k_bits=k_bits, v_bits=v_bits)
@@ -62,6 +65,7 @@ def main():
     n = int(ids.shape[1])
     with torch.inference_mode():
         populate(model, c_fp16, ids, CHUNK, n)
+        populate(model, c_q8, ids, CHUNK, n)
         populate(model, c_kvarn, ids, CHUNK, n)
     # Serve once so lazy temps (kvarn image) exist.
     se = torch.tensor([n], dtype=torch.int32, device="cuda:0")
@@ -71,11 +75,15 @@ def main():
         for lay in c_fp16.layers.values():
             k, v = lay.get_kv(se, bt)
             del k, v
+        for lay in c_q8.layers.values():
+            k, v = lay.get_kv(se, bt)
+            del k, v
         for lay in c_kvarn.layers.values():
             k, v = lay.get_kv(se, bt)
             del k, v
     torch.cuda.synchronize()
     account(c_fp16, "fp16 cache-only")
+    account(c_q8, "q8 cache-only")
     account(c_kvarn, "kvarn cache-only")
 
 
