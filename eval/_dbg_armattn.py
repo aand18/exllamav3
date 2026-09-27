@@ -147,8 +147,6 @@ def main():
         num_b_ref, den_b_ref, m_b_ref = part_stats(
             K[is_body | (is_st & okpos)], V[is_body | (is_st & okpos)],
             "ref_body+atail")
-        num_u_ref, den_u_ref, m_u_ref = part_stats(
-            K[is_st & ~okpos], V[is_st & ~okpos], "ref_utail")
         num_bo_ref, den_bo_ref, m_bo_ref = part_stats(
             K[is_body], V[is_body], "ref_bodyonly")
         # Arm internals, recomputed exactly like dispatch.
@@ -184,22 +182,53 @@ def main():
                   f"RMSE={float((dd ** 2).mean().sqrt()):.3e}", flush=True)
         rep_rmse("num_b", num_b, num_b_ref)
         rep_rmse("num_b-vs-bodyonly", num_b, num_bo_ref)
-        # Arm torch-tail recomputed like dispatch (bmm + exrev mask).
-        Kt, Vt = lay0.kvarn_online_tail(n2, bt[0])
-        tp = torch.cat([torch.arange(sn, device="cuda"),
-                        torch.arange(max(0, n2 - teff), n2,
-                                     device="cuda")]).long()
-        tg = bt[0][tp // PAGE_SIZE] * gps + (tp % PAGE_SIZE) // 128
-        ok = (lay0._exact_rev[tg] < 0).to(torch.float32)
-        Qh = Qf.reshape(kvh, 6, hd)
-        st = torch.bmm(Qh, Kt.permute(1, 2, 0)) * 0.0625
-        tm = st.amax(dim=-1)
-        pe = torch.exp(st - tm.unsqueeze(-1)) * ok
-        rep_rmse("tail_m", tm.reshape(qh), m_u_ref)
-        rep_rmse("tail_den", pe.sum(dim=-1).reshape(qh), den_u_ref)
-        rep_rmse("tail_num",
-                 torch.bmm(pe, Vt.permute(1, 0, 2)).reshape(qh, hd),
-                 num_u_ref)
+        # ---- Per-chunk acc bisection: kernel acc_c vs torch over TRUE
+        # WHT-domain rows with kernel-consistent coverage. Online identity
+        # (final acc = sum exp(s-m_final)*v) means single-pass torch refs
+        # suffice; no iter replication needed. Guilty chunk types isolate
+        # the path. Tolerance ~1e-2 (quant+fp assoc); bug is ~228 scale.
+        Vw = kvarn_wht_head(V.double(), hd).float()
+        mbuf = lay0._ov_serve_m[:, :6, :]
+        lbuf = lay0._ov_serve_l[:, :6, :]
+        abuf = lay0._ov_serve_acc[:, :6, :, :] \
+            if hasattr(lay0, "_ov_serve_acc") else None
+        nbad_m = nbad_l = nbad_a = 0
+        shown = 0
+        for c in range(65):
+            rows = pos_all[c * 128:min((c + 1) * 128, n2)]
+            cov = is_body[rows] | (is_st[rows] & okpos[rows])
+            if not bool(cov.any()):
+                continue
+            Kb = K[rows][cov]
+            Vb = Vw[rows][cov]
+            for h in range(kvh):
+                q = Qf[h * 6:(h + 1) * 6]
+                s = (q @ Kb[:, h, :].T) * 0.0625
+                m = s.amax(dim=-1)
+                e = torch.exp(s - m.unsqueeze(-1))
+                l = e.sum(dim=-1)
+                a = e @ Vb[:, h, :]
+                mk = mbuf[h, :, c]
+                lk = lbuf[h, :, c]
+                dm = float((mk - m).abs().max())
+                dl = float(((lk - l).abs() / l.clamp_min(1e-6)).max())
+                badm = dm > 5e-2
+                badl = dl > 5e-2
+                nbad_m += badm
+                nbad_l += badl
+                if abuf is not None:
+                    ak = abuf[h, :, c, :]
+                    da = float(((ak - a).abs() / a.abs().clamp_min(1e-3)).max())
+                    bada = da > 5e-2
+                    nbad_a += bada
+                else:
+                    da, bada = -1.0, False
+                if (badm or badl or bada) and shown < 8:
+                    print(f"  chunk {c} head {h}: dm={dm:.2e} "
+                          f"dl_rel={dl:.2e} da_rel={da:.2e}", flush=True)
+                    shown += 1
+        print(f"  per-chunk: bad_m={nbad_m} bad_l={nbad_l} bad_a={nbad_a} "
+              f"(of {65 * kvh} head-chunks)", flush=True)
     assert float((d ** 2).mean().sqrt()) < 5e-4
     print("ARMATTN PASS", flush=True)
 
