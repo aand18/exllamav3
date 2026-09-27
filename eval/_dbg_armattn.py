@@ -147,8 +147,6 @@ def main():
         num_b_ref, den_b_ref, m_b_ref = part_stats(
             K[is_body | (is_st & okpos)], V[is_body | (is_st & okpos)],
             "ref_body+atail")
-        num_bo_ref, den_bo_ref, m_bo_ref = part_stats(
-            K[is_body], V[is_body], "ref_bodyonly")
         # Arm internals, recomputed exactly like dispatch.
         mb = lay0._ov_serve_m[:, :6, :]
         lb = lay0._ov_serve_l[:, :6, :]
@@ -181,7 +179,6 @@ def main():
             print(f"  kvhead {hh}: num maxdiff={float(dd.max()):.3e} "
                   f"RMSE={float((dd ** 2).mean().sqrt()):.3e}", flush=True)
         rep_rmse("num_b", num_b, num_b_ref)
-        rep_rmse("num_b-vs-bodyonly", num_b, num_bo_ref)
         # ---- Per-chunk acc bisection: kernel acc_c vs torch over TRUE
         # WHT-domain rows with kernel-consistent coverage. Online identity
         # (final acc = sum exp(s-m_final)*v) means single-pass torch refs
