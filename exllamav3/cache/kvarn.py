@@ -1002,7 +1002,7 @@ class CacheLayer_kvarn(CacheLayer):
         # Host-side mirror of "tail window is fully exact": every exact
         # invalidation (torch store paths, copy_page) clears this, a clean
         # fallback check sets it. Lets steady decode skip the (~ev).any()
-        # sync in kvarn_online_tail (~255 of 256 steps). Evict scans never
+        # sync in kvarn_online_tail (~127 of 128 steps). Evict scans never
         # clear it: dropped groups end before owner - floor, outside the
         # keep window by construction (sink pinned too). Seals and pure
         # fused appends only ADD exact content. Parity mode always checks
@@ -1335,10 +1335,10 @@ class CacheLayer_kvarn(CacheLayer):
         # between evict scans. So this path runs fully only on the
         # evict tick (same counter the scan gates on: owners are current
         # whenever the scan runs). Multi-row appends always run fully.
-        # The out-of-range validation still fires within <=256 steps for
+        # The out-of-range validation still fires within <=128 steps for
         # systematic table bugs (plus the gather bounds-check backstop
         # on every step); prefill/multi-row always validate.
-        if bsz == 1 and length == 1 and (self._evict_tick & 255):
+        if bsz == 1 and length == 1 and (self._evict_tick & 127):
             return
         if bsz == 1:
             # Steady single-sequence path (decode appends and batch-1
@@ -1622,18 +1622,23 @@ class CacheLayer_kvarn(CacheLayer):
         sink+tail overlay window, so WHEN eviction runs is numerically
         invisible -- no high-water read needed. Prefill-scale calls
         (n_rows >= 128, a shape-only int) scan immediately, covering
-        multi-quantum jumps; decode-scale calls scan every 256th call.
+        multi-quantum jumps; decode-scale calls scan every 128th call.
         The old int(max()) quantum gate cost a DtoH sync per layer per
         call (16/step, Kineto top-5); the per-group int() reads are gone
         too (one vectorized mask over the resident set).
         Row-budgeted (match-bee): the tick counts ROWS, not calls, so
-        chunked writes of <128 rows/call still scan every ~256 rows.
+        chunked writes of <128 rows/call still scan every ~128 rows.
         (Call-counted ticks let 64-row chunks accumulate 16k rows per
         scan and overflow the 8 exact slots; the harness caught it.)
         Steady single-row decode keeps the exact old cadence.
+        The 128 (not 256) period is load-bearing for the 6-slot budget:
+        a group stays live ~128 (fill) + 256 (window) + one scan wait, so
+        256-wait peaks at 5 groups + sink = 6 = the whole budget (any
+        phase jitter overflows: long reasoning generations caught it).
+        128-wait peaks at 5 live with one spare.
         """
         self._evict_tick += n_rows
-        if n_rows < KVAR_N_GROUP and self._evict_tick < 256:
+        if n_rows < KVAR_N_GROUP and self._evict_tick < 128:
             return
         self._evict_tick = 0
         floor = self.tail_effective + KVAR_N_TAIL_ROLLBACK_TOKENS
