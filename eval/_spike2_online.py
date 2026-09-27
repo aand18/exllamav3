@@ -177,7 +177,10 @@ def _combine_kernel(
     e = tl.exp(m - m_all)
     den = tl.sum(l * e)
     num = tl.zeros([HD], dtype=tl.float32)
-    for b in tl.range(NBPAD):
+    # Tight bound NB (not NBPAD): iters b>=NB contribute exactly +0.0
+    # (e is 0 there via -inf padding, ab masked to 0), so skipping them
+    # is bit-identical while cutting e.g. 128->66 iters at 8k/GMAX=66.
+    for b in tl.range(NB):
         active = b < NB
         eb = tl.sum(tl.where(nboff == b, e, 0.0))
         ab = tl.load(acc_ptr + ((ph * QPAD + pq) * NB + b) * HD + lane,
