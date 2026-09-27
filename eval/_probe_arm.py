@@ -166,6 +166,20 @@ def main():
     do_merge()
     t_merge = hot(do_merge, iters=500)
 
+    from exllamav3.modules.attention_fn.kvarn_triton import (
+        kvarn_triton_online_merge)
+    ref_mr = do_merge()
+
+    def do_fmerge():
+        return kvarn_triton_online_merge(
+            lay0._ov_serve_m, lay0._ov_serve_l, o_b,
+            tail_m, tail_den, tail_num, qpk, gc_eff)
+    fmr = do_fmerge()
+    md = (fmr.float() - ref_mr.float()).abs()
+    print(f"fmerge parity vs torch: maxdiff={float(md.max()):.3e} "
+          f"RMSE={float((md ** 2).mean().sqrt()):.3e}", flush=True)
+    t_fmerge = hot(do_fmerge, iters=500)
+
     def do_full():
         return D._try_kvarn_online_decode(
             q, K1, V1, lay0, 0, 0, bt, seqlens, 1, scale, True, None,
@@ -175,7 +189,8 @@ def main():
     t_full = hot(do_full, iters=50)
     parts = [("store", t_store), ("qwht", t_qwht), ("eref", t_eref),
              ("serve", t_serve), ("stats", t_stats), ("mask", t_mask),
-             ("tail", t_tail), ("merge", t_merge)]
+             ("tail", t_tail), ("merge", t_merge),
+             ("fmerge", t_fmerge)]
     for name, t in parts:
         print(f"{name:6s} per layer: {t * 1e3:7.1f} us", flush=True)
     print(f"sum   per layer: {sum(t for _, t in parts) * 1e3:7.1f} us",

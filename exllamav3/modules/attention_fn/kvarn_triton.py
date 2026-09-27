@@ -1054,6 +1054,70 @@ if _have_triton:
         tl.store(base + lane, tl.load(base + lane) * SSCALE)
 
 
+if _have_triton:
+    @triton.jit
+    def _kvarn_online_merge_kernel(
+        m_ptr, l_ptr,             # (KVH, QPAD, GC) fp32 serve partials
+        out_b_ptr,               # (QH, HD) fp32 body out (original domain)
+        tail_m_ptr, tail_den_ptr,  # (QH,) fp32 tail stats
+        tail_num_ptr,            # (QH, HD) fp32 tail block
+        out_ptr,                 # (QH, HD) fp16 merged output
+        KVH: tl.constexpr, QPK: tl.constexpr, QPAD: tl.constexpr,
+        GC: tl.constexpr, HD: tl.constexpr,
+    ):
+        """One program = one q-head: body (m, den) stats + original-domain
+        merge with the torch tail block. Replaces ~13 torch dispatches
+        (stats amax/exp/sum + merge maximum/exp/mul/add/div/half) with one
+        launch. Same per-element math as the torch merge (gc-contiguous
+        accumulation; elementwise exp), so results agree to fp32 assoc
+        noise (~1e-7 relative, far inside the 5e-4 arm gate). The den==0
+        NaN-proof mirrors the combine kernel (fully masked short prefix:
+        the tail owns the output). num_warps=4."""
+        pid = tl.program_id(0)
+        ph = pid // QPK
+        pq = pid % QPK
+        coff = tl.arange(0, GC)
+        m = tl.load(m_ptr + (ph * QPAD + pq) * GC + coff)
+        l = tl.load(l_ptr + (ph * QPAD + pq) * GC + coff)
+        m_b = tl.max(m)
+        den_b = tl.sum(l * tl.exp(m - m_b))
+        lane = tl.arange(0, HD)
+        tm = tl.load(tail_m_ptr + pid)
+        td = tl.load(tail_den_ptr + pid)
+        m_g = tl.maximum(m_b, tm)
+        eb = tl.exp(m_b - m_g)
+        et = tl.exp(tm - m_g)
+        den = den_b * eb + td * et
+        nb = tl.load(out_b_ptr + pid * HD + lane) * den_b
+        tn = tl.load(tail_num_ptr + pid * HD + lane)
+        row = tl.where(den > 0, (nb * eb + tn * et) / den, 0.0)
+        tl.store(out_ptr + pid * HD + lane, row.to(tl.float16))
+
+
+def kvarn_triton_online_merge(m, l, out_b, tail_m, tail_den, tail_num,
+                              qpk, gc):
+    """Fused body-stats + original-domain merge for the imageless arm.
+
+    m/l: (kvh, qpad, gc) fp32 serve partials; out_b: (qh, hd) fp32 body
+    output (combine already folded the out-WHT: original domain, so it
+    un-normalizes by den with NO extra WHT -- see the cacd7af fix);
+    tail_m/tail_den (qh,) + tail_num (qh, hd) fp32 torch tail block.
+    Returns (qh, hd) fp16. Loud failure when unrunnable.
+    """
+    if not _have_triton:
+        raise RuntimeError(
+            "KVarN Triton online merge requires triton (import failed).")
+    dev = out_b.device
+    if dev.type != "cuda":
+        raise RuntimeError(
+            "KVarN Triton online merge requires CUDA tensors, got "
+            f"{out_b.device}.")
+    qh, hd = out_b.shape
+    out = torch.empty((qh, hd), dtype=torch.float16, device=dev)
+    _kvarn_online_merge_kernel[(qh,)](
+        m, l, out_b, tail_m, tail_den, tail_num, out,
+        m.shape[0], qpk, m.shape[1], gc, hd, num_warps=4)
+    return out
 
 
 if _have_triton:

@@ -1153,7 +1153,8 @@ class CacheLayer_kvarn(CacheLayer):
         return int(KVAR_N_SINK_TOKENS) + int(self.tail_effective) + \
             2 * KVAR_N_GROUP
 
-    def kvarn_online_tail(self, n: int, bt_row: torch.Tensor):
+    def kvarn_online_tail(self, n: int, bt_row: torch.Tensor,
+                            pos: torch.Tensor | None = None):
         """Materialize non-body rows for imageless serve (original domain
         fp32): sink + tail-window rows from exact blocks, open rows from
         staging (+ inverse WHT), mirroring _apply_exact_overlay priority
@@ -1179,11 +1180,15 @@ class CacheLayer_kvarn(CacheLayer):
             K = self._ov_online_tail_k
         V = self._ov_online_tail_v
         # Tail positions: sink [0, min(128, n)) + [max(0, n - tail), n).
+        # The imageless dispatch arm passes its own tpos (built once for
+        # the assignment mask too); otherwise build it here. Same values
+        # either way (asserted in debug builds).
         n = int(n)
         sink_n = min(KVAR_N_SINK_TOKENS, n) if self.has_sink else 0
         t0 = max(0, n - int(self.tail_effective))
-        pos = torch.cat([torch.arange(sink_n, device=dev),
-                         torch.arange(t0, n, device=dev)]).long()
+        if pos is None:
+            pos = torch.cat([torch.arange(sink_n, device=dev),
+                             torch.arange(t0, n, device=dev)]).long()
         pages = bt_row[pos // PAGE_SIZE]
         offs = pos % PAGE_SIZE
         g = pages * gps + offs // KVAR_N_GROUP

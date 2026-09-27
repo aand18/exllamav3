@@ -152,7 +152,8 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
     from .kvarn_triton import (
         kvarn_triton_available, kvarn_triton_qwht,
         kvarn_triton_online_partials, kvarn_triton_wht_rows,
-        kvarn_triton_online_serve, _kvarn_online_buffers)
+        kvarn_triton_online_serve, kvarn_triton_online_merge,
+        _kvarn_online_buffers)
     from ...cache.kvarn import KVAR_N_SINK_TOKENS, KVAR_N_GROUP
     from ...constants import PAGE_SIZE
     if not kvarn_triton_available():
@@ -192,30 +193,20 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         # kernel (argued impossible for dense); the get_kv path serves.
         return None
     with torch.inference_mode():
-        # Per-head body stats for the original-domain merge.
-        mb = layer._ov_serve_m[:, :qpk, :]
-        lb = layer._ov_serve_l[:, :qpk, :]
-        m_b = mb.amax(dim=2)
-        den_b = (lb * torch.exp(mb - m_b.unsqueeze(-1))).sum(dim=2)
-        # out_b is ALREADY original-domain normalized body attention
-        # (combine folds the out-WHT): un-normalize by den_b ONLY. (An
-        # earlier revision wrongly WHT'd it again here -- WHT is an
-        # involution, so that re-wrapped it and mixed domains with the
-        # original-domain tail. Caught by direct arm validation.)
-        num_b = out_b * den_b.reshape(qh, 1)
-        m_b = m_b.reshape(qh)
-        den_b = den_b.reshape(qh)
+        # Tail positions first: the same tpos feeds the tail gather
+        # (passed in so kvarn_online_tail skips rebuilding it) and the
+        # assignment mask below -- one cat, consistent by construction.
+        sn_ = min(KVAR_N_SINK_TOKENS, n) if layer.has_sink else 0
+        t0_ = max(0, n - tail_eff)
+        tpos = torch.cat([torch.arange(sn_, device=dev),
+                          torch.arange(t0_, n, device=dev)]).long()
         # Tail block (exact-first + staging fallback, original domain),
         # UNASSIGNED rows only: assigned tail rows are already inside
         # out_b (exact-direct); counting them again would corrupt the
         # merge. Mask by the SAME array the kernel reads (exrev) so the
         # partition is airtight even if the valid⟺assigned invariant
         # wobbles: kernel covers exrev>=0, torch covers exrev<0.
-        Kt, Vt = layer.kvarn_online_tail(n, block_table[0])
-        sn_ = min(KVAR_N_SINK_TOKENS, n) if layer.has_sink else 0
-        t0_ = max(0, n - tail_eff)
-        tpos = torch.cat([torch.arange(sn_, device=dev),
-                          torch.arange(t0_, n, device=dev)]).long()
+        Kt, Vt = layer.kvarn_online_tail(n, block_table[0], pos=tpos)
         bt0 = block_table[0]
         tg = bt0[tpos // PAGE_SIZE] * gps + (tpos % PAGE_SIZE) // KVAR_N_GROUP
         ok = (layer._exact_rev[tg] < 0).to(torch.float32)
@@ -228,13 +219,13 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         tail_num = torch.bmm(pe, Vt.permute(1, 0, 2)).reshape(qh, hd)
         tail_den = pe.sum(dim=-1).reshape(qh)
         tail_m = tail_m.reshape(qh)
-        # Original-domain merge (no final WHT: body already unwrapped).
-        m_g = torch.maximum(m_b, tail_m)
-        eb = torch.exp(m_b - m_g)
-        et = torch.exp(tail_m - m_g)
-        den = den_b * eb + tail_den * et
-        num = num_b * eb.unsqueeze(-1) + tail_num * et.unsqueeze(-1)
-        out = (num / den.unsqueeze(-1)).half()
+        # Fused body-stats + original-domain merge (one launch, was
+        # ~13 torch dispatches): out_b is already original-domain
+        # normalized body attention (combine folds the out-WHT), so it
+        # un-normalizes by den with NO extra WHT (cacd7af).
+        out = kvarn_triton_online_merge(
+            layer._ov_serve_m, layer._ov_serve_l, out_b,
+            tail_m, tail_den, tail_num, qpk, gc_eff)
     return out.reshape(bsz, q_len, qh, hd)
 
 
