@@ -79,9 +79,9 @@ def _serve_s7_kernel(
     l = tl.zeros([QPAD], dtype=tl.float32)
     acc = tl.zeros([QPAD, HD], dtype=tl.float32)
 
-    tok = tl.arange(0, 32)  # TOK=32 rows/iter; 4 iters cover 128
-    for t0 in tl.range(4):
-        t = t0 * 32
+    tok = tl.arange(0, 16)  # TOK=16 rows/iter; 8 iters cover 128
+    for t0 in tl.range(8):
+        t = t0 * 16
         p = pid_c * 128 + t + tok  # (TOK,)
         r = p < n
         body = (p >= SINK_N) & (p < tail_start) & r
@@ -102,7 +102,7 @@ def _serve_s7_kernel(
         # (16,256) 2D tiles (16x fewer metadata loads). Boundary tiles
         # take the slow path. Bit-identical (same addresses).
         g0 = tl.sum(tl.where(tok == 0, g, 0))
-        uniform = tl.sum(tl.where(g == g0, 1, 0).to(tl.int32)) == 32
+        uniform = tl.sum(tl.where(g == g0, 1, 0).to(tl.int32)) == 16
         kf16_g0 = rec_f16_ptr + (g0 * C * B) // 2
         if uniform:
             k_sc0 = tl.load(kf16_g0 + (kc * B) // 2 + K_SC2
@@ -130,7 +130,7 @@ def _serve_s7_kernel(
             nbyte = tl.load(nptr).to(tl.int32)
             qq = ((nbyte >> ((vv % 2) * 4)) & 0xF)
         else:
-            qq = tl.zeros([32, HD], dtype=tl.int32)
+            qq = tl.zeros([16, HD], dtype=tl.int32)
             for i in tl.static_range(8):
                 if i < K_BITS:
                     b = vv_legacy * K_BITS + i
@@ -146,7 +146,7 @@ def _serve_s7_kernel(
         if uniform:
             # Per-slot K oth: 2 values/row (one per slice) -> where-expand
             # over sl_c. Bit-identical (same addresses, same op order).
-            k_ot = tl.zeros([32, HD], dtype=tl.float32)
+            k_ot = tl.zeros([16, HD], dtype=tl.float32)
             for _sl in tl.static_range(4):
                 if _sl < SL:
                     _v = tl.load(kf16_g0 + ((pid_h * SL + _sl) * B) // 2
@@ -176,7 +176,7 @@ def _serve_s7_kernel(
         # (all-body is the common case): saves 1 MMA/iter there.
         sb = tl.dot(k_tile.to(tl.float16), qwT) * SCALE
         nbody = tl.sum(body.to(tl.int32))
-        if nbody == 32:
+        if nbody == 16:
             sc = tl.where(r[:, None], sb.to(tl.float32), float("-inf"))
         else:
             st = tl.dot(k_tile.to(tl.float16), qfT) * SCALE
@@ -202,7 +202,7 @@ def _serve_s7_kernel(
             nbytev = tl.load(nptrv).to(tl.int32)
             qqv = ((nbytev >> ((vv2 % 2) * 4)) & 0xF)
         else:
-            qqv = tl.zeros([32, HD], dtype=tl.int32)
+            qqv = tl.zeros([16, HD], dtype=tl.int32)
             for i in tl.static_range(8):
                 if i < V_BITS:
                     bv = vv2 * V_BITS + i
@@ -218,8 +218,8 @@ def _serve_s7_kernel(
                    + dd_c[None, :])
         if uniform:
             # Per-slot V sc/zp: (16,SL) loads + where-expand. Bit-identical.
-            v_sc = tl.zeros([32, HD], dtype=tl.float32)
-            v_zp = tl.zeros([32, HD], dtype=tl.float32)
+            v_sc = tl.zeros([16, HD], dtype=tl.float32)
+            v_zp = tl.zeros([16, HD], dtype=tl.float32)
             for _sl in tl.static_range(4):
                 if _sl < SL:
                     _s = tl.load(kf16_g0 + ((pid_h * SL + _sl) * B) // 2
@@ -288,7 +288,7 @@ def serve_online_s7(qw, Qf, records, layout, k_bits, v_bits, exact_k,
         layout.v_s_col_off // 2, v_bits,
         records.shape[1], records.shape[2], sl, gps,
         kvh, qpk, qpad, hd, gmax, scale, sink_n, tail_eff,
-        num_warps=4)
+        num_warps=4, num_stages=1)
     sscale = 1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5)
     from _spike2_online import _combine_kernel as _combine_v2
     nbpad = 1 << (gmax - 1).bit_length()
