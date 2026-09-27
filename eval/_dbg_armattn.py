@@ -147,6 +147,16 @@ def main():
         num_b = w_got * den_bf.reshape(qh, 1)
         rep_rmse("m_b", m_bf, m_b_ref)
         rep_rmse("den_b", den_bf, den_b_ref)
+        print(f"  den scale: arm mean={float(den_bf.mean()):.3e} "
+              f"ref mean={float(den_b_ref.mean()):.3e} "
+              f"num scale: arm meanabs={float(num_b.abs().mean()):.3e} "
+              f"ref meanabs={float(num_b_ref.abs().mean()):.3e}", flush=True)
+        for hh in range(4):
+            a = num_b[hh * 6:(hh + 1) * 6]
+            b = num_b_ref[hh * 6:(hh + 1) * 6]
+            dd = (a - b).abs()
+            print(f"  kvhead {hh}: num maxdiff={float(dd.max()):.3e} "
+                  f"RMSE={float((dd ** 2).mean().sqrt()):.3e}", flush=True)
         rep_rmse("num_b", num_b, num_b_ref)
         rep_rmse("num_b-vs-bodyonly", num_b, num_bo_ref)
         # Arm torch-tail recomputed like dispatch (bmm + exrev mask).
