@@ -144,13 +144,13 @@ def _serve_s7_kernel(
         ot_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + K_OT2
                   + s[:, None])
         if uniform:
-            k_sc = k_sc0[None, :]
-            k_zp = k_zp0[None, :]
+            kk = (qq.to(tl.float32) * k_sc0[None, :]
+                  + k_zp0[None, :]) \
+                * tl.load(ot_ptr).to(tl.float32)  # (16, HD)
         else:
-            k_sc = tl.load(sc_ptr).to(tl.float32)
-            k_zp = tl.load(zp_ptr).to(tl.float32)
-        kk = (qq.to(tl.float32) * k_sc + k_zp) \
-            * tl.load(ot_ptr).to(tl.float32)  # (16, HD)
+            kk = (qq.to(tl.float32) * tl.load(sc_ptr).to(tl.float32)
+                  + tl.load(zp_ptr).to(tl.float32)) \
+                * tl.load(ot_ptr).to(tl.float32)  # (16, HD)
 
         # --- V tile 2D (16, HD) ---
         vpay_row = rec_ptr + g * C * B + V_PAY_OFF  # (TOK,)
@@ -178,12 +178,13 @@ def _serve_s7_kernel(
         vot_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + V_OT2
                    + dd_c[None, :])
         if uniform:
-            v_ot = v_ot0[None, :]
+            vv_tile = ((qqv.to(tl.float32) * tl.load(vsc_ptr).to(tl.float32)
+                        + tl.load(vzp_ptr).to(tl.float32))
+                       * v_ot0[None, :])
         else:
-            v_ot = tl.load(vot_ptr).to(tl.float32)
-        vv_tile = ((qqv.to(tl.float32) * tl.load(vsc_ptr).to(tl.float32)
-                    + tl.load(vzp_ptr).to(tl.float32))
-                   * v_ot)
+            vv_tile = ((qqv.to(tl.float32) * tl.load(vsc_ptr).to(tl.float32)
+                        + tl.load(vzp_ptr).to(tl.float32))
+                       * tl.load(vot_ptr).to(tl.float32))
 
         # --- exact-direct 2D tiles (orig-K / WHT-V) ---
         es = tl.load(exrev_ptr + g)  # (TOK,)
