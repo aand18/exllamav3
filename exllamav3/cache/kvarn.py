@@ -1115,6 +1115,14 @@ class CacheLayer_kvarn(CacheLayer):
         if s >= 0:
             return s
         free = (self._exact_slots < 0).nonzero().flatten()
+        if not free.numel():
+            # Crash-path diagnostics only (zero steady-state cost): who
+            # holds the slots at overflow (all alloc paths funnel here).
+            live = self.exact_valid.nonzero().flatten().tolist()
+            print(f"KVarN exact pressure: need g={g} "
+                  f"live={live} "
+                  f"bases={[int(self.group_base[x]) for x in live]}",
+                  flush=True)
         assert free.numel(), "KVarN: exact slot overflow"
         s = int(free[0])
         self._exact_slots[s] = g
@@ -1583,15 +1591,6 @@ class CacheLayer_kvarn(CacheLayer):
             km = m & keep
             if bool(km.any()):
                 if not bool(self.exact_valid[gi]):
-                    if not bool((self._exact_slots < 0).any()):
-                        # Crash-path diagnostics only (zero steady-state
-                        # cost): who holds the slots at overflow.
-                        live = self.exact_valid.nonzero().flatten().tolist()
-                        print(f"KVarN exact pressure: need gi={gi} "
-                              f"rows={int(rows_k.shape[0])} "
-                              f"live={live} "
-                              f"bases={[int(self.group_base[x]) for x in live]}",
-                              flush=True)
                     self._alloc_exact_block(gi)
                 es = int(self._exact_rev[gi])
                 self.exact_k[es, s[km]] = ek[km]
