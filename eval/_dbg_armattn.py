@@ -123,6 +123,8 @@ def main():
             "ref_body+atail")
         num_u_ref, den_u_ref, m_u_ref = part_stats(
             K[is_st & ~okpos], V[is_st & ~okpos], "ref_utail")
+        num_bo_ref, den_bo_ref, m_bo_ref = part_stats(
+            K[is_body], V[is_body], "ref_bodyonly")
         # Arm internals, recomputed exactly like dispatch.
         mb = lay0._ov_serve_m[:, :6, :]
         lb = lay0._ov_serve_l[:, :6, :]
@@ -130,10 +132,14 @@ def main():
         den_bf = (lb * torch.exp(mb - mb.amax(dim=2).unsqueeze(-1))) \
             .sum(dim=2).reshape(qh)
         out_b = lay0._ov_serve_out
+        print(f"  out_b: isnan={int(torch.isnan(out_b).sum())} "
+              f"isinf={int(torch.isinf(out_b).sum())} "
+              f"maxabs={float(out_b.abs().max()):.3e}", flush=True)
         num_b = kvarn_triton_wht_rows(out_b, hd) * den_bf.reshape(qh, 1)
         rep_rmse("m_b", m_bf, m_b_ref)
         rep_rmse("den_b", den_bf, den_b_ref)
         rep_rmse("num_b", num_b, num_b_ref)
+        rep_rmse("num_b-vs-bodyonly", num_b, num_bo_ref)
         # Arm torch-tail recomputed like dispatch (bmm + exrev mask).
         Kt, Vt = lay0.kvarn_online_tail(n2, bt[0])
         tp = torch.cat([torch.arange(sn, device="cuda"),
