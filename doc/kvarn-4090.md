@@ -177,10 +177,10 @@ measured components, direct flag-on run queued):
 | kvarn4 records / Bee payload | 151 | 147 | 298 | 294 |
 | kvarn4 staging / Bee staging | 50 | 25 | 50 | 25 |
 | kvarn4 exact+stash / Bee exact | 84 | 25 | 84 | 25 |
-| kvarn4 served total | 839 | 180 | 1523 | 327 |
-| kvarn4 imageless (no image) | 269 | — | 416 | — |
-| kvarn4,kvarn2 served total | ~803calc | — | 1460 | — |
-| kvarn4,kvarn2 imageless (no image) | ~249calc | — | ~364calc | — |
+| kvarn4 served total | 806 | 180 | 1490 | 327 |
+| kvarn4 imageless (no image) | 235 | — | 380 | — |
+| kvarn4,kvarn2 served total | ~770calc | — | ~1422calc | — |
+| kvarn4,kvarn2 imageless (no image) | ~199calc | — | ~314calc | — |
 
 Bee 8k components: payload K 73.4 + V 73.4, staging 25.2, exact
 tail/history/overlay ~8.4 each (categories overlap; resident 180.4 is
@@ -190,14 +190,18 @@ staging 50.4, exact 67.2, stash 16.8. Imageless measured
 298.2+67.2+50.4 — no image AND no overlay stash (lazy, never
 allocated without the image path). Decode-time online workspace
 (~2.5MB/layer @8k geometry) not included — serves from dispatch arm.
-Gap @16k imageless: 416-327 = 89MB = staging 25 + exact 42 + payload 4
-+ misc 18. K4V4 is the comparison vehicle (K4V2 parked as reference;
-reasoning benches dead last per policy).
+Gap @16k imageless: 380-327 = 53MB = staging 9 + exact/stash 42 +
+payload 4, misc −2. K4V4 is the comparison vehicle (K4V2 parked as
+reference; reasoning benches dead last per policy). Fork long-ctx tg
+check (valujin/beellama-kvarn own build 3cb90bf): @61440 tg64 fork
+45.94 vs origin 45.74, @90112 fork 45.95 vs origin 45.69 — identical
+within noise, tg flat with length on both. Claim NOT reproduced on
+4090/sm_89/Q4_K_XL/kvarn4: comparison/tg target stays origin.
 Two-point slopes are IDENTICAL on both implementations: fp16 16.0,
 q8 8.5, kvarn4 body 4.37 bits/element (kvarn4,kvarn2 body ~3.4bpE,
 "effectively 3-bit" per the paper author, vLLM #46613). The whole gap
-is the intercept: Bee ~34MB fixed vs ours ~155MB (staging 50 + exact
-67 + stash 17 + misc) plus our image on the default path.
+is the intercept: Bee ~34MB fixed vs ours ~84MB (staging 34 + exact
+50; stash absent without image) plus our image on the default path.
 Fixed-fraction shrinks with length (18% @8k -> 10% @16k -> ~5% @32k),
 which is why 16k is now the dev reference length for VRAM (a 16k probe
 costs ~22s wall).
