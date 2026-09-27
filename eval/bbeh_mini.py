@@ -211,7 +211,9 @@ def main(args):
                 if "token_ids" in result:
                     sampled_tokens += result["token_ids"].shape[-1]
                 if result.get("eos"):
-                    idx = result["identifier"]
+                    # Streaming eos results carry the job object but no
+                    # identifier key (generator API); the job does.
+                    idx = result.get("identifier", result["job"].identifier)
                     completion = result["full_completion"]
                     match result["eos_reason"]:
                         case "max_new_tokens":
