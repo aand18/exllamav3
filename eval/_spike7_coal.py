@@ -144,9 +144,16 @@ def _serve_s7_kernel(
         ot_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + K_OT2
                   + s[:, None])
         if uniform:
+            # Per-slot K oth: 2 values/row (one per slice) -> where-expand
+            # over sl_c. Bit-identical (same addresses, same op order).
+            k_ot = tl.zeros([16, HD], dtype=tl.float32)
+            for _sl in tl.static_range(4):
+                if _sl < SL:
+                    _v = tl.load(kf16_g0 + ((pid_h * SL + _sl) * B) // 2
+                                 + K_OT2 + s).to(tl.float32)  # (16,)
+                    k_ot = tl.where(sl_c[None, :] == _sl, _v[:, None], k_ot)
             kk = (qq.to(tl.float32) * k_sc0[None, :]
-                  + k_zp0[None, :]) \
-                * tl.load(ot_ptr).to(tl.float32)  # (16, HD)
+                  + k_zp0[None, :]) * k_ot  # (16, HD)
         else:
             kk = (qq.to(tl.float32) * tl.load(sc_ptr).to(tl.float32)
                   + tl.load(zp_ptr).to(tl.float32)) \
@@ -178,8 +185,19 @@ def _serve_s7_kernel(
         vot_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + V_OT2
                    + dd_c[None, :])
         if uniform:
-            vv_tile = ((qqv.to(tl.float32) * tl.load(vsc_ptr).to(tl.float32)
-                        + tl.load(vzp_ptr).to(tl.float32))
+            # Per-slot V sc/zp: (16,SL) loads + where-expand. Bit-identical.
+            v_sc = tl.zeros([16, HD], dtype=tl.float32)
+            v_zp = tl.zeros([16, HD], dtype=tl.float32)
+            for _sl in tl.static_range(4):
+                if _sl < SL:
+                    _s = tl.load(kf16_g0 + ((pid_h * SL + _sl) * B) // 2
+                                 + V_SC2 + s).to(tl.float32)  # (16,)
+                    _z = tl.load(kf16_g0 + ((pid_h * SL + _sl) * B) // 2
+                                 + V_ZP2 + s).to(tl.float32)
+                    _m = sl_c[None, :] == _sl
+                    v_sc = tl.where(_m, _s[:, None], v_sc)
+                    v_zp = tl.where(_m, _z[:, None], v_zp)
+            vv_tile = ((qqv.to(tl.float32) * v_sc + v_zp)
                        * v_ot0[None, :])
         else:
             vv_tile = ((qqv.to(tl.float32) * tl.load(vsc_ptr).to(tl.float32)
