@@ -104,15 +104,15 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
                              causal, window_size, softcap, sinks,
                              non_causal_spans, cu_seqlens):
     """Imageless KVarN decode arm (match-bee Task 3): serves single-token
-    decode attention online from records (fused kernels) + exact/staging
-    tail block + global merge, with NO persistent image. Returns fp16
-    (1, 1, qh, hd) or None (fail-closed to the get_kv path).
+    decode attention online from records (promoted single-kernel serve)
+    + torch tail block + original-domain merge, with NO persistent image.
+    Returns fp16 (1, 1, qh, hd) or None (fail-closed to the get_kv path).
 
     Stores new rows first (mirrors the qc path, so the post-attention
-    write-back is already done and this returns directly). v1 is
-    torch-heavy in tail/merge (validated patterns); fused-merge follows
-    once timed. Loud paths only: every gate declines with None, never
-    half-runs.
+    write-back is already done and this returns directly). Body served
+    by kvarn_triton_online_serve (in-kernel online partials + production
+    combine); tail (unassigned rows only) and merge stay torch.
+    Loud paths only: every gate declines with None, never half-runs.
     """
     import os
     if os.environ.get("EXL3_KVARN_IMAGELESS", "0") != "1":
@@ -152,8 +152,9 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
     from .kvarn_triton import (
         kvarn_triton_available, kvarn_triton_qwht,
         kvarn_triton_online_partials, kvarn_triton_wht_rows,
-        _kvarn_online_buffers)
-    from ...cache.kvarn import KVAR_N_SINK_TOKENS
+        kvarn_triton_online_serve, _kvarn_online_buffers)
+    from ...cache.kvarn import KVAR_N_SINK_TOKENS, KVAR_N_GROUP
+    from ...constants import PAGE_SIZE
     if not kvarn_triton_available():
         return None
     qpk = qh // kvh
@@ -167,45 +168,69 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
     sink_n = KVAR_N_SINK_TOKENS if layer.has_sink else 0
     tail_eff = int(layer.tail_effective)
     Q = q[0, 0]
-    # QWHT (persistent buffers) + body partials (persistent buffers).
+    # QWHT (persistent buffers). Body served by the promoted
+    # single-kernel serve below (own persistent partials buffers).
     qpad = 1 << (qpk - 1).bit_length()
-    m_b, l_b, acc_b, qw, qs, _o = _kvarn_online_buffers(
+    _mb, _lb, _ab, qw, qs, _o = _kvarn_online_buffers(
         layer, qh, qpad, hd, dev)
     sscale = 1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5)
     kvarn_triton_qwht(Q, qs, qw, sl, sscale)
-    ids = layer.sealed.nonzero().flatten()
-    m, l, acc = kvarn_triton_online_partials(
-        layer, qw, ids, qpk, scale, n_0d, sink_n, tail_eff)
-    m, l, acc = m[:, :qpk], l[:, :qpk], acc[:, :qpk]
+    Qf = Q.float()
+    # Body via promoted single-kernel serve (in-kernel online partials +
+    # production combine, ORIGINAL-domain normalized body out). exact_v_w
+    # refreshed from exact blocks each step (full refresh: correctness
+    # first, incremental eref queued).
+    Ew = kvarn_triton_wht_rows(layer.exact_v.float(), hd)
+    gps = PAGE_SIZE // KVAR_N_GROUP
+    gc_eff = min((n + 127) // 128, int(layer.records.shape[0]))
+    out_b, flag_b = kvarn_triton_online_serve(
+        layer, qw, Qf, layer.exact_k, Ew, layer._exact_rev, layer.sealed,
+        block_table[0], n_0d, qpk, scale, sink_n, tail_eff, gps,
+        gc=gc_eff)
+    if flag_b:
+        # Fail-closed: sticky flag means open-body rows reached the
+        # kernel (argued impossible for dense); the get_kv path serves.
+        return None
     with torch.inference_mode():
-        m_all = m.amax(dim=2, keepdim=True)
-        e = torch.exp(m - m_all)
-        body_den = (l * e).sum(dim=2).reshape(qh)
-        body_num = (acc * e.unsqueeze(-1)).sum(dim=2).reshape(qh, hd)
-        body_m = m_all.reshape(qh)
-        # Tail block (exact-first + staging fallback, original domain).
+        # Per-head body stats for the original-domain merge.
+        mb = layer._ov_serve_m[:, :qpk, :]
+        lb = layer._ov_serve_l[:, :qpk, :]
+        m_b = mb.amax(dim=2)
+        den_b = (lb * torch.exp(mb - m_b.unsqueeze(-1))).sum(dim=2)
+        num_b = kvarn_triton_wht_rows(out_b, hd) * den_b.reshape(qh, 1)
+        m_b = m_b.reshape(qh)
+        den_b = den_b.reshape(qh)
+        # Tail block (exact-first + staging fallback, original domain),
+        # UNASSIGNED rows only: assigned tail rows are already inside
+        # out_b (exact-direct); counting them again would corrupt the
+        # merge. Mask by exact-slot assignment (valid ⟺ assigned).
         Kt, Vt = layer.kvarn_online_tail(n, block_table[0])
+        sn_ = min(KVAR_N_SINK_TOKENS, n) if layer.has_sink else 0
+        t0_ = max(0, n - tail_eff)
+        tpos = torch.cat([torch.arange(sn_, device=dev),
+                          torch.arange(t0_, n, device=dev)]).long()
+        bt0 = block_table[0]
+        tg = bt0[tpos // PAGE_SIZE] * gps + (tpos % PAGE_SIZE) // KVAR_N_GROUP
+        ok = (layer._exact_rev[tg] >= 0).to(torch.float32)
         t_ms, t_ns, t_ds = [], [], []
         for h in range(kvh):
             qh_ = Q[h * qpk:(h + 1) * qpk].float()
             st = (qh_ @ Kt[:, h, :].T) * scale
             tm = st.amax(dim=-1)
-            pe = torch.exp(st - tm.unsqueeze(-1))
+            pe = torch.exp(st - tm.unsqueeze(-1)) * ok
             t_ms.append(tm)
             t_ns.append(pe @ Vt[:, h, :])
             t_ds.append(pe.sum(dim=-1))
         tail_m = torch.cat(t_ms)
         tail_num = torch.cat(t_ns)
         tail_den = torch.cat(t_ds)
-        # Merge in WHT domain, single final WHT.
-        tail_num_w = kvarn_triton_wht_rows(tail_num, hd)
-        m_g = torch.maximum(body_m, tail_m)
-        eb = torch.exp(body_m - m_g)
+        # Original-domain merge (no final WHT: body already unwrapped).
+        m_g = torch.maximum(m_b, tail_m)
+        eb = torch.exp(m_b - m_g)
         et = torch.exp(tail_m - m_g)
-        den = body_den * eb + tail_den * et
-        num = body_num * eb.unsqueeze(-1) + tail_num_w * et.unsqueeze(-1)
-        out_w = num / den.unsqueeze(-1)
-        out = kvarn_triton_wht_rows(out_w, hd).half()
+        den = den_b * eb + tail_den * et
+        num = num_b * eb.unsqueeze(-1) + tail_num * et.unsqueeze(-1)
+        out = (num / den.unsqueeze(-1)).half()
     return out.reshape(bsz, q_len, qh, hd)
 
 
