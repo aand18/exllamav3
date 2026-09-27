@@ -220,20 +220,29 @@ def _serve_s7_kernel(
         tl.store(flag_ptr, 1, mask=tl.sum(bad.to(tl.int32)) > 0)
 
         # --- MMA QK: (TOK,HD) @ (HD,QPAD) -> (TOK,QPAD), both domains ---
+        # Tail-domain dot only when the tile actually has non-body rows
+        # (all-body is the common case): saves 1 MMA/iter there.
         sb = tl.dot(k_tile.to(tl.float16), qwT) * SCALE
-        st = tl.dot(k_tile.to(tl.float16), qfT) * SCALE
-        sc = tl.where(body[:, None], sb.to(tl.float32),
-                      st.to(tl.float32))
-        sc = tl.where(r[:, None], sc, float("-inf"))
+        nbody = tl.sum(body.to(tl.int32))
+        if nbody == 16:
+            sc = tl.where(r[:, None], sb.to(tl.float32), float("-inf"))
+        else:
+            st = tl.dot(k_tile.to(tl.float16), qfT) * SCALE
+            sc = tl.where(body[:, None], sb.to(tl.float32),
+                          st.to(tl.float32))
+            sc = tl.where(r[:, None], sc, float("-inf"))
 
         smax = tl.max(sc, axis=0)  # (QPAD,)
         m_new = tl.maximum(m, smax)
         alpha = tl.exp(m - m_new)
         e = tl.exp(sc - m_new[None, :])  # (TOK, QPAD)
         l = l * alpha + tl.sum(e, axis=0)
-        # --- MMA EV: (QPAD,TOK) @ (TOK,HD) ---
-        eT = tl.trans(e.to(tl.float16))  # (QPAD, TOK)
-        acc = acc * alpha[:, None] + tl.dot(eT, v_tile.to(tl.float16))
+        # --- MMA EV via transposed form: (HD,TOK) @ (TOK,QPAD) = (HD,QPAD)
+        # M=256,N=8,K=16 hits m16n8k16; the old (QPAD,TOK) form had M=8
+        # (SIMT fallback suspect). Trans back and accumulate.
+        d = tl.dot(tl.trans(v_tile.to(tl.float16)),
+                   e.to(tl.float16))  # (HD, QPAD)
+        acc = acc * alpha[:, None] + tl.trans(d)
         m = m_new
 
     qoff2 = tl.arange(0, QPAD)
