@@ -187,10 +187,17 @@ def main():
         import types as _t
         from exllamav3.modules.attention_fn.kvarn_triton import (
             kvarn_triton_online_serve, kvarn_triton_wht_rows as _w2)
+        # LAST UNVERIFIED INPUT: dispatch's qw (production QWHT) vs the
+        # direct call's qw_d (wht_rows). Every other input is provably
+        # identical (same objects/constants). Compare first.
         layns = _t.SimpleNamespace(
             records=lay0.records, layout=lay0.layout, k_bits=4, v_bits=4,
             num_kv_heads=kvh, head_dim=hd, slices=lay0.slices)
         qw_d = _w2(Qf, hd)
+        qw_a = lay0._ov_online_qw
+        dq = (qw_a - qw_d).abs()
+        print(f"  qw arm-vs-direct: maxdiff={float(dq.max()):.3e} "
+              f"RMSE={float((dq ** 2).mean().sqrt()):.3e}", flush=True)
         Ew_d = _w2(lay0.exact_v.float(), hd)
         n_0d_d = torch.tensor([n2], dtype=torch.int32, device="cuda")
         out_d, flag_d = kvarn_triton_online_serve(
