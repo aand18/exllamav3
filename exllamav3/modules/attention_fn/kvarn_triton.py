@@ -1063,22 +1063,27 @@ if _have_triton:
         tail_num_ptr,            # (QH, HD) fp32 tail block
         out_ptr,                 # (QH, HD) fp16 merged output
         KVH: tl.constexpr, QPK: tl.constexpr, QPAD: tl.constexpr,
-        GC: tl.constexpr, HD: tl.constexpr,
+        GC: tl.constexpr, GCPAD: tl.constexpr, HD: tl.constexpr,
     ):
         """One program = one q-head: body (m, den) stats + original-domain
         merge with the torch tail block. Replaces ~13 torch dispatches
         (stats amax/exp/sum + merge maximum/exp/mul/add/div/half) with one
         launch. Same per-element math as the torch merge (gc-contiguous
         accumulation; elementwise exp), so results agree to fp32 assoc
-        noise (~1e-7 relative, far inside the 5e-4 arm gate). The den==0
+        noise (~1e-7 relative, far inside the 5e-4 arm gate). GC pads to
+        GCPAD (pow2) with -inf/0.0 like the combine kernel: padded lanes
+        contribute exactly +0.0, so the bound is bit-identical. The den==0
         NaN-proof mirrors the combine kernel (fully masked short prefix:
         the tail owns the output). num_warps=4."""
         pid = tl.program_id(0)
         ph = pid // QPK
         pq = pid % QPK
-        coff = tl.arange(0, GC)
-        m = tl.load(m_ptr + (ph * QPAD + pq) * GC + coff)
-        l = tl.load(l_ptr + (ph * QPAD + pq) * GC + coff)
+        coff = tl.arange(0, GCPAD)
+        cmask = coff < GC
+        m = tl.load(m_ptr + (ph * QPAD + pq) * GC + coff, mask=cmask,
+                    other=float("-inf"))
+        l = tl.load(l_ptr + (ph * QPAD + pq) * GC + coff, mask=cmask,
+                    other=0.0)
         m_b = tl.max(m)
         den_b = tl.sum(l * tl.exp(m - m_b))
         lane = tl.arange(0, HD)
@@ -1114,9 +1119,10 @@ def kvarn_triton_online_merge(m, l, out_b, tail_m, tail_den, tail_num,
             f"{out_b.device}.")
     qh, hd = out_b.shape
     out = torch.empty((qh, hd), dtype=torch.float16, device=dev)
+    gcpad = 1 << (gc - 1).bit_length()
     _kvarn_online_merge_kernel[(qh,)](
         m, l, out_b, tail_m, tail_den, tail_num, out,
-        m.shape[0], qpk, m.shape[1], gc, hd, num_warps=4)
+        m.shape[0], qpk, m.shape[1], gc, gcpad, hd, num_warps=4)
     return out
 
 
