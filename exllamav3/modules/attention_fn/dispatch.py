@@ -197,7 +197,12 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         lb = layer._ov_serve_l[:, :qpk, :]
         m_b = mb.amax(dim=2)
         den_b = (lb * torch.exp(mb - m_b.unsqueeze(-1))).sum(dim=2)
-        num_b = kvarn_triton_wht_rows(out_b, hd) * den_b.reshape(qh, 1)
+        # out_b is ALREADY original-domain normalized body attention
+        # (combine folds the out-WHT): un-normalize by den_b ONLY. (An
+        # earlier revision wrongly WHT'd it again here -- WHT is an
+        # involution, so that re-wrapped it and mixed domains with the
+        # original-domain tail. Caught by direct arm validation.)
+        num_b = out_b * den_b.reshape(qh, 1)
         m_b = m_b.reshape(qh)
         den_b = den_b.reshape(qh)
         # Tail block (exact-first + staging fallback, original domain),
