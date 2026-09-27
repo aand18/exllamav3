@@ -80,7 +80,22 @@ def main():
     gc_eff = (n + 127) // 128
 
     from exllamav3.modules.attention_fn import dispatch as D
+    from exllamav3.modules.attention_fn.kvarn_triton import (
+        kvarn_triton_store_row)
     t_store = hot(lambda: lay0.update_kv_direct(seqlens, bt, K1, V1, 1))
+    t_touch = hot(lambda: lay0._touch_batch(seqlens, bt, 1))
+
+    def do_fused():
+        pos_1 = seqlens.long()
+        pages_1 = bt[0, pos_1 // 256].long()
+        offs_1 = (pos_1 % 256).long()
+        return kvarn_triton_store_row(
+            lay0, K1[0, 0], V1[0, 0], pages_1, offs_1, pos_1,
+            gps, 128, 128, None, None)
+    do_fused()
+    t_fused = hot(lambda: do_fused()[0])
+    print(f"store-x: touch={t_touch * 1e3:.1f} fused={t_fused * 1e3:.1f} "
+          f"rest={(t_store - t_touch - t_fused) * 1e3:.1f} us", flush=True)
     _mb, _lb, _ab, qw, qs, _o = _kvarn_online_buffers(
         lay0, qh, qpad, hd, torch.device("cuda"))
     t_qwht = hot(lambda: kvarn_triton_qwht(Q1, qs, qw, sl, sscale),
