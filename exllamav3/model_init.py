@@ -439,12 +439,17 @@ def init(
     for _c in (cache, draft_cache):
         if _c is None:
             continue
+        _n = 0
         for _layer in list(_c.layers.values()):
             if isinstance(_layer, CacheLayer_kvarn) and \
                     getattr(_layer, "device", None) is not None:
                 _dev = _layer.device
                 _layer.free()
                 _layer.alloc(_dev)
+                _n += 1
+        if _n:
+            printp(not quiet, f" -- Reset {_n} KVarN cache layers"
+                   f" (load-dummy cleanup)...")
 
     # Load tokenizer
     if load_tokenizer:
