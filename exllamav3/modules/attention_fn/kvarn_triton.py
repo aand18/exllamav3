@@ -1128,6 +1128,77 @@ def kvarn_triton_online_merge(m, l, out_b, tail_m, tail_den, tail_num,
 
 if _have_triton:
     @triton.jit
+    def _kvarn_online_tail_kernel(
+        st_ptr,                  # (KVH, QPK, R) fp32 scaled tail scores
+        vt_ptr,                  # (R, KVH, HD) fp32 tail values
+        ok_ptr,                  # (R,) fp32 assignment mask (1 = torch-owned)
+        tail_m_ptr, tail_den_ptr,  # (KVH, QPK) fp32
+        tail_num_ptr,            # (KVH, QPK, HD) fp32
+        KVH: tl.constexpr, QPK: tl.constexpr,
+        R: tl.constexpr, RPAD: tl.constexpr, HD: tl.constexpr,
+    ):
+        """One program = one q-head: tail rowwise max + masked exp +
+        weighted value sum + weight sum. Replaces ~5 torch dispatches
+        (amax, sub/exp/mul, bmm, sum) with one launch, and the (kvh,qpk,R)
+        pe temporary with on-chip weights. Same per-element math as the
+        torch block (exp exact; accumulation order differs), so results
+        agree to fp32 assoc noise (~1e-7 relative, far inside the 5e-4 arm
+        gate). R pads to RPAD (pow2) with -inf scores / 0 mask like the
+        combine kernel: padded lanes contribute exactly +0.0.
+        num_warps=4."""
+        pid = tl.program_id(0)
+        ph = pid // QPK
+        pq = pid % QPK
+        roff = tl.arange(0, RPAD)
+        rmask = roff < R
+        s = tl.load(st_ptr + (ph * QPK + pq) * R + roff, mask=rmask,
+                    other=float("-inf"))
+        m = tl.max(s)
+        e = tl.exp(s - m) * tl.load(ok_ptr + roff, mask=rmask, other=0.0)
+        den = tl.sum(e)
+        tl.store(tail_m_ptr + pid, m)
+        tl.store(tail_den_ptr + pid, den)
+        lane = tl.arange(0, HD)
+        num = tl.zeros([HD], dtype=tl.float32)
+        # Tight bound R (not RPAD): padded lanes carry exactly +0.0
+        # (e is 0 there), so skipping them is bit-identical.
+        for r in tl.range(R):
+            er = tl.sum(tl.where(roff == r, e, 0.0))
+            v = tl.load(vt_ptr + (r * KVH + ph) * HD + lane)
+            num += v * er
+        tl.store(tail_num_ptr + (pid * HD) + lane, num)
+
+
+def kvarn_triton_online_tail_reduce(st, vt, ok):
+    """Fused tail softmax + value reduction for the imageless arm.
+
+    st: (kvh, qpk, R) fp32 scaled scores (torch bmm, already includes the
+    sm scale); vt: (R, kvh, hd) fp32 tail values; ok: (R,) fp32 mask.
+    Returns (tail_m, tail_den, tail_num): (kvh, qpk), (kvh, qpk),
+    (kvh, qpk, hd) fp32. Loud failure when unrunnable.
+    """
+    if not _have_triton:
+        raise RuntimeError(
+            "KVarN Triton online tail requires triton (import failed).")
+    dev = st.device
+    if dev.type != "cuda":
+        raise RuntimeError(
+            "KVarN Triton online tail requires CUDA tensors, got "
+            f"{st.device}.")
+    kvh, qpk, R = st.shape
+    hd = vt.shape[2]
+    tail_m = torch.empty((kvh, qpk), dtype=torch.float32, device=dev)
+    tail_den = torch.empty((kvh, qpk), dtype=torch.float32, device=dev)
+    tail_num = torch.empty((kvh, qpk, hd), dtype=torch.float32, device=dev)
+    rpad = 1 << (R - 1).bit_length()
+    _kvarn_online_tail_kernel[(kvh * qpk,)](
+        st, vt, ok, tail_m, tail_den, tail_num,
+        kvh, qpk, R, rpad, hd, num_warps=4)
+    return tail_m, tail_den, tail_num
+
+
+if _have_triton:
+    @triton.jit
     def _kvarn_online_qwht_kernel(
         q_ptr,               # (QH, HD) fp16 query rows
         scratch_ptr,         # (QH, HD) fp32 persistent scratch (per-row region)

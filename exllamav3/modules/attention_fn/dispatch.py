@@ -153,7 +153,7 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         kvarn_triton_available, kvarn_triton_qwht,
         kvarn_triton_online_partials, kvarn_triton_wht_rows,
         kvarn_triton_online_serve, kvarn_triton_online_merge,
-        _kvarn_online_buffers)
+        kvarn_triton_online_tail_reduce, _kvarn_online_buffers)
     from ...cache.kvarn import KVAR_N_SINK_TOKENS, KVAR_N_GROUP
     from ...constants import PAGE_SIZE
     if not kvarn_triton_available():
@@ -208,15 +208,16 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         # wobbles: kernel covers exrev>=0, torch covers exrev<0.
         Kt, Vt, tg = layer.kvarn_online_tail(n, block_table[0], pos=tpos)
         ok = (layer._exact_rev[tg] < 0).to(torch.float32)
-        # Batched over heads (was a per-head python loop): identical
-        # per-element contraction order, ~20 launches -> ~6.
+        # Batched scores over heads (one bmm: identical per-element
+        # contraction order), fused masked-softmax + value reduction
+        # (one launch, was ~5 dispatches + the pe temporary).
         Qh = Q.reshape(kvh, qpk, hd).float()  # head-grouped like the loop
         st = torch.bmm(Qh, Kt.permute(1, 2, 0)) * scale  # (kvh, qpk, R)
-        tail_m = st.amax(dim=-1)  # (kvh, qpk)
-        pe = torch.exp(st - tail_m.unsqueeze(-1)) * ok
-        tail_num = torch.bmm(pe, Vt.permute(1, 0, 2)).reshape(qh, hd)
-        tail_den = pe.sum(dim=-1).reshape(qh)
+        tail_m, tail_den, tail_num = kvarn_triton_online_tail_reduce(
+            st, Vt, ok)
         tail_m = tail_m.reshape(qh)
+        tail_den = tail_den.reshape(qh)
+        tail_num = tail_num.reshape(qh, hd)
         # Fused body-stats + original-domain merge (one launch, was
         # ~13 torch dispatches): out_b is already original-domain
         # normalized body attention (combine folds the out-WHT), so it
