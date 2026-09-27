@@ -60,8 +60,9 @@ def main():
     # Reference at n+1 (arm stored K1/V1 first): flag OFF = proven image.
     os.environ["EXL3_KVARN_IMAGELESS"] = "0"
     n2 = n + 1
-    k, v = lay0.get_kv(torch.tensor([n2], dtype=torch.int32, device="cuda"),
-                       bt)
+    with torch.inference_mode():
+        k, v = lay0.get_kv(torch.tensor([n2], dtype=torch.int32,
+                                        device="cuda"), bt)
     K = k[bt[0]].reshape(-1, kvh, hd)[:n2].float()
     V = v[bt[0]].reshape(-1, kvh, hd)[:n2].float()
     Qf = Q[0, 0].float()
