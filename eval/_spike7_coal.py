@@ -260,24 +260,33 @@ def _serve_s7_kernel(
 
 def serve_online_s7(qw, Qf, records, layout, k_bits, v_bits, exact_k,
                      exact_v_w, exrev, sealed, bt, n_0d, kvh, qpk, sl, hd,
-                     gps, sink_n, tail_eff, scale=0.0625):
+                     gps, sink_n, tail_eff, scale=0.0625, gc=None):
+    """gc: grid chunks served (default: all groups). Chunks fully past n
+    contribute exactly nothing (m=-inf partials), so serving
+    gc=ceil(n/128) is bit-identical while dropping dead programs AND the
+    wave-quantization tail (264 = 2x128+8 blocks -> 3rd wave of 8; with
+    gc=64: 256 = exactly 2 waves). Production recompile-per-gc concern
+    is queued; spike measures the ceiling."""
     dev = qw.device
     qh = kvh * qpk
     gmax = int(records.shape[0])
+    if gc is None:
+        gc = gmax
+    assert gc <= gmax
     qpad = 1 << (qpk - 1).bit_length()
-    key = (qh, gmax, hd)
+    key = (qh, gc, hd)
     if key not in _S7BUFS:
         _S7BUFS[key] = (
-            torch.empty((kvh, qpad, gmax), dtype=torch.float32, device=dev),
-            torch.empty((kvh, qpad, gmax), dtype=torch.float32, device=dev),
-            torch.empty((kvh, qpad, gmax, hd), dtype=torch.float32,
+            torch.empty((kvh, qpad, gc), dtype=torch.float32, device=dev),
+            torch.empty((kvh, qpad, gc), dtype=torch.float32, device=dev),
+            torch.empty((kvh, qpad, gc, hd), dtype=torch.float32,
                         device=dev),
             torch.empty((qh, hd), dtype=torch.float32, device=dev),
             torch.zeros((1,), dtype=torch.uint8, device=dev))
     m, l, acc, out, flag = _S7BUFS[key]
     flag.zero_()
     rec_f16 = records.view(torch.float16)
-    _serve_s7_kernel[(kvh, gmax,)](
+    _serve_s7_kernel[(kvh, gc,)](
         qw, Qf, records, rec_f16, exact_k, exact_v_w, exrev, sealed, bt,
         n_0d, flag, m, l, acc,
         layout.k_payload_off,
@@ -287,13 +296,13 @@ def serve_online_s7(qw, Qf, records, layout, k_bits, v_bits, exact_k,
         layout.v_s_row_off // 2, layout.v_zp_off // 2,
         layout.v_s_col_off // 2, v_bits,
         records.shape[1], records.shape[2], sl, gps,
-        kvh, qpk, qpad, hd, gmax, scale, sink_n, tail_eff,
+        kvh, qpk, qpad, hd, gc, scale, sink_n, tail_eff,
         num_warps=4, num_stages=1)
     sscale = 1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5)
     from _spike2_online import _combine_kernel as _combine_v2
-    nbpad = 1 << (gmax - 1).bit_length()
+    nbpad = 1 << (gc - 1).bit_length()
     _combine_v2[(qh,)](
-        m, l, acc, out, kvh, qpk, qpad, gmax, nbpad, hd, sl, sscale,
+        m, l, acc, out, kvh, qpk, qpad, gc, nbpad, hd, sl, sscale,
         num_warps=1)
     return out, int(flag[0])
 
@@ -462,7 +471,7 @@ def cmd_probe():
         o, _f = serve_online_s7(qw, Qf, recT, lay0.layout, k_bits,
                                 v_bits, lay0.exact_k, Ew, lay0._exact_rev,
                                 lay0.sealed, bt, n_0d, kvh, qpk, sl, hd, 2,
-                                128, 128)
+                                128, 128, gc=gc_eff)
         return o
     # Host-side K transpose of the populated records (one-off; production
     # store change queued behind this measurement). Timed below.
@@ -475,6 +484,11 @@ def cmd_probe():
     torch.cuda.synchronize()
     print(f"host K-transpose (one-off): {tT0.elapsed_time(tT1):.2f} ms",
           flush=True)
+    # Grid trim: chunks fully past n contribute exactly nothing; serving
+    # gc_eff=ceil(n/128) keeps math identical while dropping dead programs
+    # and the wave tail (66*4=264 -> 64*4=256 = exactly 2 waves of 128).
+    gc_eff = (n + 127) // 128
+    print(f"gmax={gmax} gc_eff={gc_eff}", flush=True)
     o = do_spike()
     print("spike7 full path ok", flush=True)
     t_spike = hot(do_spike)
@@ -485,18 +499,18 @@ def cmd_probe():
         o, _f = serve_online_s7(qw, Qf, recT, lay0.layout, k_bits,
                                 v_bits, lay0.exact_k, Ew, lay0._exact_rev,
                                 lay0.sealed, bt, n_0d, kvh, qpk, sl, hd, 2,
-                                128, 128)
+                                128, 128, gc=gc_eff)
         return o
     t_qwht = hot(lambda: _s3.qwht_fused(Q, qscratch, qw, sl,
                                        0.7071067811865475), iters=500)
     t_servecombine = hot(do_servecombine)
     from _spike2_online import _combine_kernel as _combine_v2
     qpad = 1 << (qpk - 1).bit_length()
-    nbpad = 1 << (gmax - 1).bit_length()
+    nbpad = 1 << (gc_eff - 1).bit_length()
     sscale = 0.7071067811865475
-    m, l, acc, out = _S7BUFS[(qh, gmax, hd)][:4]
+    m, l, acc, out = _S7BUFS[(qh, gc_eff, hd)][:4]
     t_combine = hot(lambda: _combine_v2[(qh,)](
-        m, l, acc, out, kvh, qpk, qpad, gmax, nbpad, hd, sl, sscale),
+        m, l, acc, out, kvh, qpk, qpad, gc_eff, nbpad, hd, sl, sscale),
         iters=500)
     print(f"pieces us: qwht={t_qwht * 1e3:.1f} "
           f"serve+combine={t_servecombine * 1e3:.1f} "
