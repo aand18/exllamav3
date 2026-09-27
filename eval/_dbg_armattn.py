@@ -76,6 +76,80 @@ def main():
     d = (got - ref).abs()
     print(f"arm maxdiff={float(d.max()):.3e} "
           f"RMSE={float((d ** 2).mean().sqrt()):.3e}", flush=True)
+
+    # ---- Stage decomposition: which stage diverges? ----
+    # True-row refs over partitions; arm internals recomputed like dispatch.
+    from exllamav3.cache.kvarn import KVAR_N_SINK_TOKENS
+    from exllamav3.constants import PAGE_SIZE
+    from exllamav3.modules.attention_fn.kvarn_triton import (
+        kvarn_triton_wht_rows)
+    gps = PAGE_SIZE // 128
+    teff = int(lay0.tail_effective)
+    sn = KVAR_N_SINK_TOKENS if lay0.has_sink else 0
+    pos_all = torch.arange(n2, device="cuda")
+    gg = bt[0][pos_all // PAGE_SIZE] * gps + (pos_all % PAGE_SIZE) // 128
+    okpos = (lay0._exact_rev[gg] >= 0)
+    is_body = (pos_all >= sn) & (pos_all < n2 - teff)
+    is_st = ~is_body
+
+    def part_stats(Kp, Vp, tag):
+        """torch online stats over a row subset; (num, den, m) or Nones."""
+        if Kp.shape[0] == 0:
+            print(f"  {tag}: EMPTY subset", flush=True)
+            return None, None, None
+        ns, ds, ms = [], [], []
+        for h in range(kvh):
+            q = Qf[h * 6:(h + 1) * 6]
+            s = (q @ Kp[:, h, :].T) * 0.0625
+            m = s.amax(dim=-1)
+            e = torch.exp(s - m.unsqueeze(-1))
+            den = e.sum(dim=-1)
+            num = e @ Vp[:, h, :]
+            ns.append(num)
+            ds.append(den)
+            ms.append(m)
+        return torch.cat(ns), torch.cat(ds), torch.cat(ms)
+
+    def rep_rmse(tag, a, b):
+        if a is None or b is None:
+            return
+        dd = (a - b).abs()
+        print(f"  {tag}: maxdiff={float(dd.max()):.3e} "
+              f"RMSE={float((dd ** 2).mean().sqrt()):.3e}", flush=True)
+
+    with torch.inference_mode():
+        num_b_ref, den_b_ref, m_b_ref = part_stats(
+            K[is_body | (is_st & okpos)], V[is_body | (is_st & okpos)],
+            "ref_body+atail")
+        num_u_ref, den_u_ref, m_u_ref = part_stats(
+            K[is_st & ~okpos], V[is_st & ~okpos], "ref_utail")
+        # Arm internals, recomputed exactly like dispatch.
+        mb = lay0._ov_serve_m[:, :6, :]
+        lb = lay0._ov_serve_l[:, :6, :]
+        m_bf = mb.amax(dim=2).reshape(qh)
+        den_bf = (lb * torch.exp(mb - mb.amax(dim=2).unsqueeze(-1))) \
+            .sum(dim=2).reshape(qh)
+        out_b = lay0._ov_serve_out
+        num_b = kvarn_triton_wht_rows(out_b, hd) * den_bf.reshape(qh, 1)
+        rep_rmse("m_b", m_bf, m_b_ref)
+        rep_rmse("den_b", den_bf, den_b_ref)
+        rep_rmse("num_b", num_b, num_b_ref)
+        # Arm torch-tail recomputed like dispatch (bmm + exrev mask).
+        Kt, Vt = lay0.kvarn_online_tail(n2, bt[0])
+        tp = torch.cat([torch.arange(sn, device="cuda"),
+                        torch.arange(max(0, n2 - teff), n2,
+                                     device="cuda")]).long()
+        tg = bt[0][tp // PAGE_SIZE] * gps + (tp % PAGE_SIZE) // 128
+        ok = (lay0._exact_rev[tg] < 0).to(torch.float32)
+        Qh = Qf.reshape(kvh, 6, hd)
+        st = torch.bmm(Qh, Kt.permute(1, 2, 0)) * 0.0625
+        tm = st.amax(dim=-1)
+        pe = torch.exp(st - tm.unsqueeze(-1)) * ok
+        rep_rmse("tail_m", tm.reshape(qh), m_u_ref)
+        rep_rmse("tail_den", pe.sum(dim=-1).reshape(qh), den_u_ref)
+        rep_rmse("tail_num",
+                 torch.bmm(pe, Vt.permute(1, 0, 2)).reshape(qh, hd),
+                 num_u_ref)
     assert float((d ** 2).mean().sqrt()) < 5e-4
     print("ARMATTN PASS", flush=True)
 
