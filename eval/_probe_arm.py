@@ -118,7 +118,9 @@ def main():
         lb = lay0._ov_serve_l[:, :qpk, :]
         m_b = mb.amax(dim=2)
         den_b = (lb * torch.exp(mb - m_b.unsqueeze(-1))).sum(dim=2)
-        num_b = kvarn_triton_wht_rows(o_b, hd) * den_b.reshape(qh, 1)
+        # Mirrors dispatch (cacd7af): combine output is already
+        # original-domain; un-normalize by den only, no WHT.
+        num_b = o_b * den_b.reshape(qh, 1)
         return m_b.reshape(qh), den_b.reshape(qh), num_b
     m_b, den_b, num_b = do_stats()
     t_stats = hot(do_stats, iters=500)
@@ -135,17 +137,22 @@ def main():
     t_mask = hot(do_mask, iters=500)
 
     def do_tail():
+        # Mirrors dispatch (batched over heads): gather + bmm block.
+        from exllamav3.cache.kvarn import KVAR_N_SINK_TOKENS
         Kt, Vt = lay0.kvarn_online_tail(n, bt[0])
-        t_ms, t_ns, t_ds = [], [], []
-        for h in range(kvh):
-            qh_ = Q1[h * qpk:(h + 1) * qpk].float()
-            st = (qh_ @ Kt[:, h, :].T) * scale
-            tm = st.amax(dim=-1)
-            pe = torch.exp(st - tm.unsqueeze(-1)) * ok
-            t_ms.append(tm)
-            t_ns.append(pe @ Vt[:, h, :])
-            t_ds.append(pe.sum(dim=-1))
-        return torch.cat(t_ms), torch.cat(t_ns), torch.cat(t_ds)
+        sn_ = min(KVAR_N_SINK_TOKENS, n)
+        t0_ = max(0, n - tail_eff)
+        tpos = torch.cat([torch.arange(sn_, device=dev),
+                          torch.arange(t0_, n, device=dev)]).long()
+        tg = bt[0][tpos // PAGE_SIZE] * gps + (tpos % PAGE_SIZE) // KVAR_N_GROUP
+        okk = (lay0._exact_rev[tg] < 0).to(torch.float32)
+        Qh = Q1.reshape(kvh, qpk, hd).float()
+        st = torch.bmm(Qh, Kt.permute(1, 2, 0)) * scale
+        tail_m = st.amax(dim=-1)
+        pe = torch.exp(st - tail_m.unsqueeze(-1)) * okk
+        tail_num = torch.bmm(pe, Vt.permute(1, 0, 2)).reshape(qh, hd)
+        tail_den = pe.sum(dim=-1).reshape(qh)
+        return tail_m.reshape(qh), tail_num, tail_den
     tail_m, tail_num, tail_den = do_tail()
     t_tail = hot(do_tail, iters=200)
 
