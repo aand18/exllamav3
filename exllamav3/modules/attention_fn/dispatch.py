@@ -99,6 +99,116 @@ def _print_no_attn_match_report(args: AttnArgs):
     )
 
 
+def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
+                             block_table, cache_seqlens, q_len, sm_scale,
+                             causal, window_size, softcap, sinks,
+                             non_causal_spans, cu_seqlens):
+    """Imageless KVarN decode arm (match-bee Task 3): serves single-token
+    decode attention online from records (fused kernels) + exact/staging
+    tail block + global merge, with NO persistent image. Returns fp16
+    (1, 1, qh, hd) or None (fail-closed to the get_kv path).
+
+    Stores new rows first (mirrors the qc path, so the post-attention
+    write-back is already done and this returns directly). v1 is
+    torch-heavy in tail/merge (validated patterns); fused-merge follows
+    once timed. Loud paths only: every gate declines with None, never
+    half-runs.
+    """
+    import os
+    if os.environ.get("EXL3_KVARN_IMAGELESS", "0") != "1":
+        return None
+    if os.environ.get("EXL3_KVARN_TRITON", "0") != "1":
+        return None
+    if q_len != 1 or q.shape[0] != 1:
+        return None
+    if cu_seqlens is not None or non_causal_spans:
+        return None
+    if sinks is not None or (softcap or 0.0) != 0.0:
+        return None
+    if window_size not in (None, -1):
+        return None
+    if q.device.type != "cuda" or q.dtype != torch.float16:
+        return None
+    if k.dtype != torch.float16 or v.dtype != torch.float16:
+        return None
+    layer = cache if isinstance(cache, CacheLayer) else \
+        cache.layers[cache_idx, cache_instance or 0]
+    if not isinstance(layer, CacheLayer_kvarn) or layer.is_swa:
+        return None
+    bsz, _, qh, dim = q.shape
+    kvh, hd = int(layer.num_kv_heads), int(layer.head_dim)
+    if dim != hd or qh % kvh != 0:
+        return None
+    if dim not in (128, 256, 512) or dim % 128 != 0:
+        return None
+    if k.shape[2] != kvh or v.shape[2] != kvh:
+        return None
+    if k.shape[3] != hd or v.shape[3] != hd:
+        return None
+    import importlib.util
+    if not torch.cuda.is_available() or \
+            importlib.util.find_spec("triton") is None:
+        return None
+    from .kvarn_triton import (
+        kvarn_triton_available, kvarn_triton_qwht,
+        kvarn_triton_online_partials, kvarn_triton_wht_rows,
+        _kvarn_online_buffers)
+    from ...cache.kvarn import KVAR_N_SINK_TOKENS
+    if not kvarn_triton_available():
+        return None
+    qpk = qh // kvh
+    sl = hd // 128
+    scale = sm_scale if sm_scale is not None else dim ** (-0.5)
+    dev = q.device
+    # Store first (write-back already done on this path).
+    layer.update_kv_direct(cache_seqlens, block_table, k, v, q_len)
+    n = int(cache_seqlens[0]) + q_len
+    n_0d = cache_seqlens[:1] + q_len
+    sink_n = KVAR_N_SINK_TOKENS if layer.has_sink else 0
+    tail_eff = int(layer.tail_effective)
+    Q = q[0, 0]
+    # QWHT (persistent buffers) + body partials (persistent buffers).
+    qpad = 1 << (qpk - 1).bit_length()
+    m_b, l_b, acc_b, qw, qs, _o = _kvarn_online_buffers(
+        layer, qh, qpad, hd, dev)
+    sscale = 1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5)
+    kvarn_triton_qwht(Q, qs, qw, sl, sscale)
+    ids = layer.sealed.nonzero().flatten()
+    m, l, acc = kvarn_triton_online_partials(
+        layer, qw, ids, qpk, scale, n_0d, sink_n, tail_eff)
+    m, l, acc = m[:, :qpk], l[:, :qpk], acc[:, :qpk]
+    with torch.inference_mode():
+        m_all = m.amax(dim=2, keepdim=True)
+        e = torch.exp(m - m_all)
+        body_den = (l * e).sum(dim=2).reshape(qh)
+        body_num = (acc * e.unsqueeze(-1)).sum(dim=2).reshape(qh, hd)
+        body_m = m_all.reshape(qh)
+        # Tail block (exact-first + staging fallback, original domain).
+        Kt, Vt = layer.kvarn_online_tail(n, block_table[0])
+        t_ms, t_ns, t_ds = [], [], []
+        for h in range(kvh):
+            qh_ = Q[h * qpk:(h + 1) * qpk].float()
+            st = (qh_ @ Kt[:, h, :].T) * scale
+            tm = st.amax(dim=-1)
+            pe = torch.exp(st - tm.unsqueeze(-1))
+            t_ms.append(tm)
+            t_ns.append(pe @ Vt[:, h, :])
+            t_ds.append(pe.sum(dim=-1))
+        tail_m = torch.cat(t_ms)
+        tail_num = torch.cat(t_ns)
+        tail_den = torch.cat(t_ds)
+        # Merge in WHT domain, single final WHT.
+        tail_num_w = kvarn_triton_wht_rows(tail_num, hd)
+        m_g = torch.maximum(body_m, tail_m)
+        eb = torch.exp(body_m - m_g)
+        et = torch.exp(tail_m - m_g)
+        den = body_den * eb + tail_den * et
+        num = body_num * eb.unsqueeze(-1) + tail_num_w * et.unsqueeze(-1)
+        out_w = num / den.unsqueeze(-1)
+        out = kvarn_triton_wht_rows(out_w, hd).half()
+    return out.reshape(bsz, q_len, qh, hd)
+
+
 def attn_dispatch(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -139,6 +249,15 @@ def attn_dispatch(
         assert block_table is not None
         assert cache_seqlens is not None
         layer = cache if isinstance(cache, CacheLayer) else cache.layers[cache_idx, cache_instance or 0]
+        # Imageless KVarN decode arm (match-bee): stores rows first and
+        # serves online with no image; returns directly (write-back
+        # already done). Declines (None) unless every gate holds.
+        kvarn_o = _try_kvarn_online_decode(
+            q, k, v, cache, cache_idx, cache_instance, block_table,
+            cache_seqlens, q_len, sm_scale, causal, window_size, softcap,
+            sinks, non_causal_spans, cu_seqlens)
+        if kvarn_o is not None:
+            return kvarn_o
         if (
             _qc_attn and
             isinstance(layer, CacheLayer_quant) and

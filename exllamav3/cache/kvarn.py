@@ -1114,6 +1114,76 @@ class CacheLayer_kvarn(CacheLayer):
     def _block_shape(self) -> tuple:
         return (KVAR_N_GROUP, self.num_kv_heads, self.head_dim)
 
+    def kvarn_online_maxw(self) -> int:
+        """Tail-block capacity (imageless serve): sink + tail window +
+        open-row margin (2 groups). Fixed per layer config; callers take
+        sized views (no mask needed: every served position < n holds a
+        written row).
+        """
+        return int(KVAR_N_SINK_TOKENS) + int(self.tail_effective) + \
+            2 * KVAR_N_GROUP
+
+    def kvarn_online_tail(self, n: int, bt_row: torch.Tensor):
+        """Materialize non-body rows for imageless serve (original domain
+        fp32): sink + tail-window rows from exact blocks, open rows from
+        staging (+ inverse WHT), mirroring _apply_exact_overlay priority
+        (exact -> staging -> zeros). Persistent per-layer temps, sized
+        views out (no sync on shapes). Returns (K, V) with (R, kvh, hd)
+        rows. Body rows (sealed, outside sink/tail) are NOT covered here:
+        the online kernels serve them (position-masked, no double count).
+        One CPU sync only when exact-missing rows exist (steady decode:
+        never -- the tail is always exact, so the staging fallback and
+        its sync-free masked path stay cold... the any() check itself is
+        the single sync, matching the existing torch-fallback style).
+        """
+        dev = self.device
+        kvh, hd = self.num_kv_heads, self.head_dim
+        gps = PAGE_SIZE // KVAR_N_GROUP
+        maxw = self.kvarn_online_maxw()
+        K = getattr(self, "_ov_online_tail_k", None)
+        if K is None or K.shape[0] != maxw:
+            self._ov_online_tail_k = torch.zeros(
+                (maxw, kvh, hd), dtype=torch.float32, device=dev)
+            self._ov_online_tail_v = torch.zeros(
+                (maxw, kvh, hd), dtype=torch.float32, device=dev)
+            K = self._ov_online_tail_k
+        V = self._ov_online_tail_v
+        # Tail positions: sink [0, min(128, n)) + [max(0, n - tail), n).
+        n = int(n)
+        sink_n = min(KVAR_N_SINK_TOKENS, n) if self.has_sink else 0
+        t0 = max(0, n - int(self.tail_effective))
+        pos = torch.cat([torch.arange(sink_n, device=dev),
+                         torch.arange(t0, n, device=dev)]).long()
+        pages = bt_row[pos // PAGE_SIZE]
+        offs = pos % PAGE_SIZE
+        g = pages * gps + offs // KVAR_N_GROUP
+        s = offs % KVAR_N_GROUP
+        R = int(pos.numel())
+        # Exact rows first (valid ⟺ assigned: resolve through the rev map;
+        # unassigned slots read zeros, corrected by the mask below).
+        ev = self.exact_valid[g]
+        es = self._exact_rev[g.long()].clamp_min(0)
+        rows = torch.arange(R, device=dev)
+        K[:R] = self.exact_k[es].float()[rows, s]
+        V[:R] = self.exact_v[es].float()[rows, s]
+        # Staging fallback for exact-missing rows (open groups only in
+        # practice). Single sync on the empty check; skipped entirely in
+        # steady decode where the tail is fully exact.
+        if bool((~ev).any()):
+            m = ~ev
+            nm = int(m.sum())
+            slot = self._stage_rev[g[m].long()].clamp_min(0)
+            pm = self.present[g[m], s[m]]
+            sk = kvarn_wht_head(self.stage_k[slot].float(), hd)
+            sv = kvarn_wht_head(self.stage_v[slot].float(), hd)
+            kk = sk[torch.arange(nm, device=dev), s[m]]
+            vv = sv[torch.arange(nm, device=dev), s[m]]
+            fill_k = torch.where(pm.view(-1, 1, 1), kk, 0.0)
+            fill_v = torch.where(pm.view(-1, 1, 1), vv, 0.0)
+            K[:R][m] = fill_k
+            V[:R][m] = fill_v
+        return K[:R], V[:R]
+
     def _live_stage_groups(self):
         """Groups with live staging: unsealed with any present row
         (equivalent to the old stage_blocks dict keys)."""

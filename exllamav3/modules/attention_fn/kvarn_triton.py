@@ -1138,6 +1138,48 @@ def kvarn_triton_qwht(q, scratch, out, slices, sscale):
     return out
 
 
+def kvarn_triton_online_partials(layer, qw, ids, qpk, scale, n_new,
+                                  sink_n, tail_eff):
+    """Stage-1 only: block partials for merging (imageless serve).
+
+    Same launch as kvarn_triton_online_decode minus the combine: returns
+    (m, l, acc) in persistent per-layer buffers (QPAD layout; the caller
+    slices to qpk). The caller reduces/merges (torch for v1, fused later)
+    and WHTs once at the end. Loud failure when unrunnable.
+    """
+    if not _have_triton:
+        raise RuntimeError(
+            "KVarN Triton online partials requires triton (import failed).")
+    dev = qw.device
+    if dev.type != "cuda":
+        raise RuntimeError(
+            "KVarN Triton online partials requires CUDA tensors, got "
+            f"{qw.device}.")
+    kvh, hd = int(layer.num_kv_heads), int(layer.head_dim)
+    sl = int(layer.slices)
+    assert hd == sl * 128
+    qh = kvh * qpk
+    assert qw.shape == (qh, hd)
+    qpad = 1 << (qpk - 1).bit_length()
+    m, l, acc, _, _, _ = _kvarn_online_buffers(layer, qh, qpad, hd, dev)
+    L = layer.layout
+    rec = layer.records
+    rec_f16 = rec.view(torch.float16)
+    _kvarn_online_block_kernel[(kvh, int(ids.numel()),)](
+        qw, rec, rec_f16, ids, m, l, acc,
+        L.k_payload_off,
+        L.k_s_col_off // 2, L.k_zp_off // 2, L.k_s_row_off // 2,
+        int(layer.k_bits),
+        L.v_payload_off,
+        L.v_s_row_off // 2, L.v_zp_off // 2, L.v_s_col_off // 2,
+        int(layer.v_bits),
+        rec.shape[1], rec.shape[2], sl,
+        kvh, qpk, qpad, hd, int(ids.numel()), scale,
+        n_new, int(sink_n), int(tail_eff),
+        num_warps=4)
+    return m, l, acc
+
+
 def kvarn_triton_online_decode(layer, qw, ids, qpk, scale, n_new,
                                sink_n, tail_eff):
     """Fused online attention over sealed groups (imageless serve).
