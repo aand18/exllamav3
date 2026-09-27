@@ -178,14 +178,21 @@ measured components, direct flag-on run queued):
 | kvarn4 staging / Bee staging | 50 | 25 | 50 | 25 |
 | kvarn4 exact+stash / Bee exact | 84 | 25 | 84 | 25 |
 | kvarn4 served total | 839 | 180 | 1523 | 327 |
-| kvarn4 imageless (no image) | ~286 | — | ~433 | — |
+| kvarn4 imageless (no image) | 269 | — | 416 | — |
 | kvarn4,kvarn2 served total | ~803calc | — | 1460 | — |
 | kvarn4,kvarn2 imageless (no image) | ~249calc | — | ~364calc | — |
 
 Bee 8k components: payload K 73.4 + V 73.4, staging 25.2, exact
 tail/history/overlay ~8.4 each (categories overlap; resident 180.4 is
 the headline). Ours 16k components: image 1091, records 298.2,
-staging 50.4, exact 67.2, stash 16.8.
+staging 50.4, exact 67.2, stash 16.8. Imageless measured
+(`EXL3_KVARN_IMAGELESS=1` probe): 8k = 151.4+67.2+50.4, 16k =
+298.2+67.2+50.4 — no image AND no overlay stash (lazy, never
+allocated without the image path). Decode-time online workspace
+(~2.5MB/layer @8k geometry) not included — serves from dispatch arm.
+Gap @16k imageless: 416-327 = 89MB = staging 25 + exact 42 + payload 4
++ misc 18. K4V4 is the comparison vehicle (K4V2 parked as reference;
+reasoning benches dead last per policy).
 Two-point slopes are IDENTICAL on both implementations: fp16 16.0,
 q8 8.5, kvarn4 body 4.37 bits/element (kvarn4,kvarn2 body ~3.4bpE,
 "effectively 3-bit" per the paper author, vLLM #46613). The whole gap
