@@ -999,6 +999,15 @@ class CacheLayer_kvarn(CacheLayer):
         # nonzero sync entirely (the fused store keeps the image current
         # via write-through, so the mask is empty almost every step).
         self._dirty_any = False
+        # Host-side mirror of "tail window is fully exact": every exact
+        # invalidation (torch store paths, copy_page) clears this, a clean
+        # fallback check sets it. Lets steady decode skip the (~ev).any()
+        # sync in kvarn_online_tail (~255 of 256 steps). Evict scans never
+        # clear it: dropped groups end before owner - floor, outside the
+        # keep window by construction (sink pinned too). Seals and pure
+        # fused appends only ADD exact content. Parity mode always checks
+        # (validates this audit on-box).
+        self._tail_exact_certain = False
         # Slot-remap tables for windowed staging/exact (memory plan):
         # live groups map 1:1 onto S_STAGE/S_EXACT slots; group-id
         # indexed tensors shrink to slot-indexed windows in Task 3/4.
@@ -1049,6 +1058,7 @@ class CacheLayer_kvarn(CacheLayer):
         self._img_v = None
         self._dirty_mask = None
         self._dirty_any = False
+        self._tail_exact_certain = False
         self._stage_slots = None
         self._stage_rev = None
         self._exact_slots = None
@@ -1159,13 +1169,15 @@ class CacheLayer_kvarn(CacheLayer):
         fp32): sink + tail-window rows from exact blocks, open rows from
         staging (+ inverse WHT), mirroring _apply_exact_overlay priority
         (exact -> staging -> zeros). Persistent per-layer temps, sized
-        views out (no sync on shapes). Returns (K, V) with (R, kvh, hd)
-        rows. Body rows (sealed, outside sink/tail) are NOT covered here:
+        views out (no sync on shapes). Returns (K, V, g): (R, kvh, hd)
+        rows plus the tail group ids (callers reuse them for the mask
+        instead of recomputing pages * gps + offs // GROUP).
+        Body rows (sealed, outside sink/tail) are NOT covered here:
         the online kernels serve them (position-masked, no double count).
-        One CPU sync only when exact-missing rows exist (steady decode:
-        never -- the tail is always exact, so the staging fallback and
-        its sync-free masked path stay cold... the any() check itself is
-        the single sync, matching the existing torch-fallback style).
+        One CPU sync only on the first uncertified call (steady decode:
+        the certification holds, so the check is sync-free ~255 of 256
+        steps; the staging fallback and its masked path stay cold all the
+        same). Parity mode always pays the sync.
         """
         dev = self.device
         kvh, hd = self.num_kv_heads, self.head_dim
@@ -1204,8 +1216,18 @@ class CacheLayer_kvarn(CacheLayer):
         K[:R] = self.exact_k[es, s].to(torch.float32)
         V[:R] = self.exact_v[es, s].to(torch.float32)
         # Staging fallback for exact-missing rows (open groups only in
-        # practice). Single sync on the empty check; skipped entirely in
-        # steady decode where the tail is fully exact.
+        # practice). Host-certified fast path: every exact invalidation
+        # (torch store paths, copy_page) clears _tail_exact_certain, so a
+        # set flag means this tail is fully exact and the (~ev).any()
+        # sync below can be skipped. Parity mode always pays the sync
+        # (validates the audit on-box). A clean check certifies until the
+        # next invalidation; evict scans provably never invalidate the
+        # tail (dropped groups end before owner - floor, outside the keep
+        # window; sink pinned).
+        import os as _os
+        if self._tail_exact_certain and \
+                _os.environ.get("EXL3_KVARN_TRITON_PARITY") != "1":
+            return K[:R], V[:R], g
         if bool((~ev).any()):
             m = ~ev
             nm = int(m.sum())
@@ -1219,7 +1241,11 @@ class CacheLayer_kvarn(CacheLayer):
                 self.stage_v[slot, s[m]].float(), hd)
             K[:R][m] = torch.where(pm.view(-1, 1, 1), sk, 0.0)
             V[:R][m] = torch.where(pm.view(-1, 1, 1), sv, 0.0)
-        return K[:R], V[:R]
+        else:
+            # Clean check: no exact-missing rows, certify until the next
+            # invalidation (torch store paths and copy_page clear it).
+            self._tail_exact_certain = True
+        return K[:R], V[:R], g
 
     def _live_stage_groups(self):
         """Groups with live staging: unsealed with any present row
@@ -1446,6 +1472,11 @@ class CacheLayer_kvarn(CacheLayer):
                 return
             # code == 1: fall through to the torch paths below (fresh,
             # sealed, or unassigned groups assign/reset host-side).
+        # Any torch store below may reset/release exact blocks (fresh
+        # groups, sealed overwrites, page reuse, multi-row), so the
+        # tail-exact certification lapses here. Fused code 0/2 returned
+        # above (pure appends only ADD exact rows; seals keep them).
+        self._tail_exact_certain = False
         # Torch fallbacks need the Python int (single sync, same as the
         # old caller-side int); the fused path above never paid it.
         n_new = int(n_new)
@@ -2231,6 +2262,9 @@ class CacheLayer_kvarn(CacheLayer):
         assert self.tail_dtype == source.tail_dtype and \
             self.has_sink == source.has_sink, \
             "KVarN copy_page requires matching tail dtype and sink policy"
+        # Exact blocks move between groups: the tail-exact certification
+        # lapses on the destination (re-certified by the next clean check).
+        self._tail_exact_certain = False
         gps = PAGE_SIZE // KVAR_N_GROUP
         for hh in range(gps):
             gf, gt = from_page * gps + hh, to_page * gps + hh

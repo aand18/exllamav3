@@ -139,7 +139,7 @@ def main():
     def do_tail():
         # Mirrors dispatch (batched over heads): gather + bmm block.
         from exllamav3.cache.kvarn import KVAR_N_SINK_TOKENS
-        Kt, Vt = lay0.kvarn_online_tail(n, bt[0])
+        Kt, Vt, _tg = lay0.kvarn_online_tail(n, bt[0])
         sn_ = min(KVAR_N_SINK_TOKENS, n)
         t0_ = max(0, n - tail_eff)
         tpos = torch.cat([torch.arange(sn_, device=dev),

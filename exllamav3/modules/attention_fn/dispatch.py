@@ -206,9 +206,7 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         # merge. Mask by the SAME array the kernel reads (exrev) so the
         # partition is airtight even if the valid⟺assigned invariant
         # wobbles: kernel covers exrev>=0, torch covers exrev<0.
-        Kt, Vt = layer.kvarn_online_tail(n, block_table[0], pos=tpos)
-        bt0 = block_table[0]
-        tg = bt0[tpos // PAGE_SIZE] * gps + (tpos % PAGE_SIZE) // KVAR_N_GROUP
+        Kt, Vt, tg = layer.kvarn_online_tail(n, block_table[0], pos=tpos)
         ok = (layer._exact_rev[tg] < 0).to(torch.float32)
         # Batched over heads (was a per-head python loop): identical
         # per-element contraction order, ~20 launches -> ~6.
