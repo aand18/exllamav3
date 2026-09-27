@@ -65,6 +65,31 @@ def main():
                                         device="cuda"), bt)
     K = k[bt[0]].reshape(-1, kvh, hd)[:n2].float()
     V = v[bt[0]].reshape(-1, kvh, hd)[:n2].float()
+    # V-SOURCE TRIANGULATION on real records (no attention math):
+    # torch-dequant vs image rows, triton-dequant vs image rows, over
+    # SEALED groups only (unsealed groups serve from staging, not
+    # records). fp16-image tolerance (~1e-3); looking for huge mismatch.
+    from exllamav3.cache.kvarn import kvarn_wht_head
+    with torch.inference_mode():
+        Gs = torch.arange(lay0.records.shape[0], dtype=torch.int64,
+                          device="cuda")
+        bk_t, bv_t = lay0._dequant_groups_batched_torch(Gs)
+        from exllamav3.modules.attention_fn.kvarn_triton import (
+            kvarn_triton_dequant_groups)
+        bk_x, bv_x = kvarn_triton_dequant_groups(
+            lay0.records, lay0.layout, 4, 4, kvh, 2, do_wht=False)
+        sg = lay0.sealed.nonzero().flatten()
+        Ki = K[:8192].reshape(-1, 128, kvh, hd)[sg]
+        Vi = V[:8192].reshape(-1, 128, kvh, hd)[sg]
+        Kw = kvarn_wht_head(Ki.double(), hd).float()
+        Vw = kvarn_wht_head(Vi.double(), hd).float()
+        for tag, a, b in [("torchV-vs-imageV", bv_t[sg], Vw),
+                          ("tritonV-vs-imageV", bv_x[sg], Vw),
+                          ("torchK-vs-imageK", bk_t[sg], Kw),
+                          ("tritonK-vs-imageK", bk_x[sg], Kw)]:
+            dd = (a - b).abs()
+            print(f"  {tag}: maxdiff={float(dd.max()):.3e} "
+                  f"RMSE={float((dd ** 2).mean().sqrt()):.3e}", flush=True)
     Qf = Q[0, 0].float()
     outs = []
     for h in range(kvh):
