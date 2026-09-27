@@ -235,6 +235,54 @@ def test_tile_rmse_ordering_and_cap():
     assert rv54 == rv44, (rv54, rv44)
 
 
+def test_layout_42_asymmetric_matches_bee_formula():
+    """K4V2 (paper author's gospel pick, vLLM #46613: 'effectively 3-bit').
+    Cross-checks vLLM's tile_bytes_aligned=13824 independently."""
+    L = kvarn.kvarn_make_layout(128, 128, 4, 2)
+    exp = _bee_formula_offsets(4, 2)
+    assert L.k_payload_bytes == exp["k_payload_bytes"] == 8192
+    assert (L.k_payload_off, L.k_s_col_off, L.k_zp_off, L.k_s_row_off) == \
+        (exp["k_payload_off"], exp["k_s_col_off"], exp["k_zp_off"], exp["k_s_row_off"]) == \
+        (0, 8192, 8448, 8704)
+    assert (L.v_payload_off, L.v_payload_bytes) == \
+        (exp["v_payload_off"], exp["v_payload_bytes"]) == (8960, 4096)
+    assert (L.v_s_col_off, L.v_s_row_off, L.v_zp_off) == \
+        (exp["v_s_col_off"], exp["v_s_row_off"], exp["v_zp_off"]) == \
+        (13056, 13312, 13568)
+    assert L.tile_bytes == exp["tile_bytes"] == 13824
+    assert L.k_record_bytes == exp["k_record_bytes"] == 8960
+    assert L.v_record_bytes == exp["v_record_bytes"] == 4864
+    assert L.k_record_bytes + L.v_record_bytes == L.tile_bytes
+
+
+def test_tile_rmse_k42_gospel_preset():
+    """K4V2 quality smoke: K side identical to (4,4) (per-side
+    independence); 2-bit V finite and within a loose cap. Real quality
+    gates are KLD same-top and reasoning benchmarks (per the paper
+    author, KLD alone is not proof)."""
+    k, v = _bee_tiles()
+    rk44, rv44 = _tile_rmse(k, v, 4, 4)
+    rk42, rv42 = _tile_rmse(k, v, 4, 2)
+    assert rk42 == rk44, (rk42, rk44)
+    assert rv42 > rv44, (rv42, rv44)  # 2-bit strictly coarser: the tradeoff
+    assert rv42 < 0.30, rv42
+
+
+def test_asymmetric_k_side_bytes_identical_42():
+    """Same tile sealed under (4,4) vs (4,2): K side bytes identical."""
+    k, v = _bee_tiles()
+    L44 = kvarn.kvarn_make_layout(128, 128, 4, 4)
+    L42 = kvarn.kvarn_make_layout(128, 128, 4, 2)
+    rec44 = torch.zeros(L44.tile_bytes, dtype=torch.uint8)
+    rec42 = torch.zeros(L42.tile_bytes, dtype=torch.uint8)
+    kvarn.kvarn_quantize_k_tile(k, 16, 4, L44, rec44)
+    kvarn.kvarn_quantize_v_tile(v, 16, 4, L44, rec44)
+    kvarn.kvarn_quantize_k_tile(k, 16, 4, L42, rec42)
+    kvarn.kvarn_quantize_v_tile(v, 16, 2, L42, rec42)
+    assert torch.equal(rec44[:L42.k_record_bytes], rec42[:L42.k_record_bytes])
+    assert L44.tile_bytes != L42.tile_bytes  # V payload width differs
+
+
 def test_asymmetric_k_side_bytes_identical():
     """Same tile sealed under (5,5) vs (5,4): K side bytes are identical
     (same group boundaries, K payload width); only the V side differs."""

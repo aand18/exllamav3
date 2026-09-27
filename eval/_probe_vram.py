@@ -18,6 +18,8 @@ MODEL = ("C:/Users/yoho/Downloads/tabbyAPI/models/"
          "Qwen3.8-27B-exl3-SC_1.40bpw_H3_V3")
 NTOK = int(sys.argv[1]) if len(sys.argv) > 1 else 8192
 CHUNK = 4096
+# Gospel presets: K4V4 safe baseline, K4V2 the pick (vLLM #46613).
+PRESET = sys.argv[2] if len(sys.argv) > 2 else "kvarn4"
 
 
 def account(cache, tag):
@@ -61,7 +63,8 @@ def account(cache, tag):
 
 
 def main():
-    k_bits, v_bits = kvarn_parse_preset("kvarn4")
+    k_bits, v_bits = kvarn_parse_preset(PRESET)
+    print(f"preset {PRESET} -> ({k_bits},{v_bits})", flush=True)
     config = Config.from_directory(MODEL)
     model = Model.from_config(config)
     c_fp16 = Cache(model, max_num_tokens=NTOK + 256,
@@ -97,7 +100,7 @@ def main():
     torch.cuda.synchronize()
     account(c_fp16, "fp16 cache-only")
     account(c_q8, "q8 cache-only")
-    account(c_kvarn, "kvarn cache-only")
+    account(c_kvarn, f"kvarn({PRESET}) cache-only")
 
 
 if __name__ == "__main__":
