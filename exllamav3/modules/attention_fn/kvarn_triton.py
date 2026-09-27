@@ -1545,6 +1545,19 @@ def kvarn_triton_online_serve(layer, qw, Qf, exact_k, exact_v_w, exrev,
     flag.zero_()
     if rec_f16 is None:
         rec_f16 = records.view(torch.float16)
+    import os as _os
+    if _os.environ.get("EXL3_KVARN_DEBUG_HASH") == "1":
+        # Temporary input-fingerprinting (arm-vs-direct divergence hunt):
+        # sums are order-sensitive enough to catch any differing input.
+        print(f"SERVE-HASH gc={gc} n={[int(n_0d[0])]} "
+              f"qw={float(qw.double().sum()):.6e} "
+              f"qf={float(Qf.double().sum()):.6e} "
+              f"rec={float(records.double().sum()):.6e} "
+              f"ek={float(exact_k.double().sum()):.6e} "
+              f"evw={float(exact_v_w.double().sum()):.6e} "
+              f"exrev={int(exrev.sum())} sealed={int(sealed.sum())} "
+              f"bt={int(bt.sum())} scale={scale} sink={sink_n} "
+              f"tail={tail_eff} gps={gps} qpk={qpk}", flush=True)
     _kvarn_online_serve_kernel[(kvh, gc,)](
         qw, Qf, records, rec_f16, exact_k, exact_v_w, exrev, sealed, bt,
         n_0d, flag, m, l, acc,
@@ -1562,6 +1575,13 @@ def kvarn_triton_online_serve(layer, qw, Qf, exact_k, exact_v_w, exrev,
     _kvarn_online_combine_kernel[(qh,)](
         m, l, acc, out, kvh, qpk, qpad, gc, nbpad, hd, sl, sscale,
         num_warps=1)
+    import os as _os2
+    if _os2.environ.get("EXL3_KVARN_DEBUG_HASH") == "1":
+        print(f"SERVE-OUT m={float(m.double().sum()):.6e} "
+              f"l={float(l.double().sum()):.6e} "
+              f"acc={float(acc.double().sum()):.6e} "
+              f"out={float(out.double().sum()):.6e} "
+              f"flag={int(flag[0])}", flush=True)
     if sync_flag:
         return out, int(flag[0])
     return out, flag
