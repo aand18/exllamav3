@@ -116,14 +116,16 @@ if TYPE_CHECKING:
 KVAR_N_GROUP = 128
 # Slot-window sizes for memory-plan storage (Task 2+): live staging and
 # exact groups map 1:1 onto slots; overflow is a loud assert.
-# Staging needs a full prefill chunk transiently (the torch loop stages
-# every group before the end-of-call batched seal): 40 covers chunk 4096
-# + margin. Exact needs two chunk-boundary tails + sink transiently
+# Staging is 8 slots: full groups seal (bit-identically) mid-call as soon
+# as slots run out, so only the sink + open/in-flight groups stay live
+# and a 4096-token prefill chunk needs no more. Exact needs two
+# chunk-boundary tails + sink transiently
 # (eviction only runs at end of call, so the previous tail lingers):
 # 8 covers that + margin for dense layers. SWA layers additionally hold
 # up to their visible window, so they size up from the window in
 # __init__ (still context-independent); see n_exact_slots.
-KVAR_N_STAGE_SLOTS = 40
+KVAR_N_STAGE_SLOTS = 8
+KVAR_N_STAGE_SLOTS_NATIVE_EXACT = 40
 KVAR_N_EXACT_SLOTS = 8
 KVAR_N_INV_SQRT_128 = 0.08838834764831845
 KVAR_N_SUPPORTED_HEAD_DIMS = (128, 256, 512)
@@ -944,9 +946,15 @@ class CacheLayer_kvarn(CacheLayer):
             dtype=torch.uint8, device=device)
         # Windowed staging (memory plan): S_STAGE slots, group ids
         # resolve through _stage_slot/_stage_rev. present/sealed stay
-        # group-indexed (flag tensors, not the memory hogs).
+        # group-indexed (flag tensors, not the memory hogs). Sealing
+        # layers need only sink + open/in-flight groups live (8: full
+        # groups seal mid-call on pressure, bit-identically); never-
+        # sealing native-exact layers keep the legacy 40 (they hold
+        # everything in staging, fp16-like by design).
+        n_stage = KVAR_N_STAGE_SLOTS_NATIVE_EXACT \
+            if self.tail_native_exact else KVAR_N_STAGE_SLOTS
         self.stage_k = torch.zeros(
-            (KVAR_N_STAGE_SLOTS, KVAR_N_GROUP, self.num_kv_heads,
+            (n_stage, KVAR_N_GROUP, self.num_kv_heads,
              self.head_dim),
             dtype=torch.half, device=device)
         self.stage_v = torch.zeros_like(self.stage_k)
@@ -982,7 +990,7 @@ class CacheLayer_kvarn(CacheLayer):
         # live groups map 1:1 onto S_STAGE/S_EXACT slots; group-id
         # indexed tensors shrink to slot-indexed windows in Task 3/4.
         # Until then these tables exist but nothing reads them.
-        self._stage_slots = torch.full((KVAR_N_STAGE_SLOTS,), -1,
+        self._stage_slots = torch.full((n_stage,), -1,
                                        dtype=torch.int64, device=device)
         self._stage_rev = torch.full((self.num_groups,), -1,
                                      dtype=torch.int64, device=device)
@@ -1044,11 +1052,20 @@ class CacheLayer_kvarn(CacheLayer):
         A freshly assigned slot is zeroed: slots are recycled across
         groups, and readers (refresh gathers all 128 rows unmasked)
         must never see a previous occupant's rows.
+
+        Slot pressure (no free slot) seals full staged groups first:
+        a full group is immutable (no more rows can land in it), so
+        mid-call sealing is bit-identical to the end-of-call seal.
+        Genuine overflow (only partial/open groups live, or a
+        never-sealing native-exact layer) stays a loud assert.
         """
         s = int(self._stage_rev[g])
         if s >= 0:
             return s
         free = (self._stage_slots < 0).nonzero().flatten()
+        if not free.numel():
+            self._seal_full_groups(None)
+            free = (self._stage_slots < 0).nonzero().flatten()
         assert free.numel(), "KVarN: staging slot overflow"
         s = int(free[0])
         self.stage_k[s].zero_()
@@ -1516,15 +1533,7 @@ class CacheLayer_kvarn(CacheLayer):
         self._evict_exact_all(int(rows_k.shape[0]))
         if self.tail_native_exact:
             return
-        ug = torch.unique(g)
-        done = self.present[ug].all(dim=1) & ~self.sealed[ug]
-        seal_gs = ug[done]
-        if seal_gs.numel():
-            if self.has_sink:
-                # Logical sink group (base 0) stays exact, never seals.
-                seal_gs = seal_gs[self.group_base[seal_gs] != 0]
-            if seal_gs.numel():
-                self._seal_groups_batched(seal_gs)
+        self._seal_full_groups(torch.unique(g))
 
     @torch.inference_mode()
     def _evict_exact_all(self, n_rows: int = 0):
@@ -1573,6 +1582,34 @@ class CacheLayer_kvarn(CacheLayer):
             rel = self._exact_rev[res[drop]]
             self._exact_slots[rel[rel >= 0]] = -1
             self._exact_rev[res[drop]] = -1
+
+    @torch.inference_mode()
+    def _seal_full_groups(self, gs=None):
+        """Seal every full+present+unsealed non-sink group in gs.
+
+        Bit-identical regardless of WHEN it runs: a full group holds all
+        128 rows and cannot gain more (resets clear present first), so
+        mid-call seals (staging-slot pressure) produce exactly the same
+        records as the end-of-call seal. gs=None scans all groups (rare
+        pressure path); the per-call path passes touched groups only.
+        Never-sealing native-exact layers are a no-op (as today).
+        """
+        if self.tail_native_exact:
+            return
+        if gs is None:
+            gs = torch.arange(self.num_groups, device=self.device)
+        else:
+            gs = torch.unique(gs)
+        if not gs.numel():
+            return
+        done = self.present[gs].all(dim=1) & ~self.sealed[gs]
+        seal_gs = gs[done]
+        if seal_gs.numel():
+            if self.has_sink:
+                # Logical sink group (base 0) stays exact, never seals.
+                seal_gs = seal_gs[self.group_base[seal_gs] != 0]
+            if seal_gs.numel():
+                self._seal_groups_batched(seal_gs)
 
     @torch.inference_mode()
     def _seal_groups_batched(self, gs: torch.Tensor):
