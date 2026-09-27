@@ -177,6 +177,10 @@ def _serve_s7_kernel(
             sc = tl.where(r[:, None], sb.to(tl.float32), float("-inf"))
         else:
             st = tl.dot(k_tile.to(tl.float16), qfT) * SCALE
+            # Unassigned tail rows (staging-fallback rows the torch tail
+            # path serves): -inf, else their zero exact values would still
+            # draw softmax weight and downscale real rows.
+            st = tl.where(ok_tail[:, None], st, float("-inf"))
             sc = tl.where(body[:, None], sb.to(tl.float32),
                           st.to(tl.float32))
             sc = tl.where(r[:, None], sc, float("-inf"))

@@ -372,7 +372,10 @@ def test_promoted_serve_matches_eval_spike():
     exact_k = torch.randn(Gg, 128, kvh, hd, dtype=torch.float16,
                           device="cuda")
     exact_v = torch.randn_like(exact_k)
-    exrev = torch.arange(Gg, dtype=torch.int64, device="cuda")
+    # exrev[0] = -1: sink group without an exact slot exercises the
+    # -inf path for unassigned tail rows (staging-fallback rows the torch
+    # tail path serves). Both kernels must agree bit-exactly.
+    exrev = torch.tensor([-1, 1, 2, 3], dtype=torch.int64, device="cuda")
     sealed = torch.tensor([False, True, True, True], device="cuda")
     bt = torch.arange(2, dtype=torch.int32, device="cuda")
     n_0d = torch.tensor([n], dtype=torch.int32, device="cuda")
