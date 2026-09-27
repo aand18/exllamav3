@@ -57,6 +57,15 @@ def main():
         0.0, None, None, None)
     assert out is not None, "arm declined (gate?)"
     print("arm fired, out shape:", tuple(out.shape), flush=True)
+    # Determinism check: same arm call twice back-to-back (no state
+    # change in between Possible? update runs again (same position
+    # rewrite, idempotent-ish); identical out => deterministic.
+    out_b2 = D._try_kvarn_online_decode(
+        Q, K1, V1, lay0, 0, 0, bt, seqlens, 1, 0.0625, True, None,
+        0.0, None, None, None)
+    d12 = (out.float() - out_b2.float()).abs()
+    print(f"arm-vs-arm: maxdiff={float(d12.max()):.3e} "
+          f"RMSE={float((d12 ** 2).mean().sqrt()):.3e}", flush=True)
     # Reference at n+1 (arm stored K1/V1 first): flag OFF = proven image.
     os.environ["EXL3_KVARN_IMAGELESS"] = "0"
     n2 = n + 1
@@ -211,6 +220,13 @@ def main():
         dd2 = (out_d.float() - got).abs()
         print(f"  direct-entry vs arm: maxdiff={float(dd2.max()):.3e} "
               f"RMSE={float((dd2 ** 2).mean().sqrt()):.3e}", flush=True)
+        out_d2, _ = kvarn_triton_online_serve(
+            layns, qw_d, Qf, lay0.exact_k, Ew_d, lay0._exact_rev,
+            lay0.sealed, bt[0], n_0d_d, 6, 0.0625, 128, 128, 2,
+            gc=65)
+        dd3 = (out_d.float() - out_d2.float()).abs()
+        print(f"  direct-vs-direct: maxdiff={float(dd3.max()):.3e} "
+              f"RMSE={float((dd3 ** 2).mean().sqrt()):.3e}", flush=True)
         # WHT-domain rows with kernel-consistent coverage. Online identity
         # (final acc = sum exp(s-m_final)*v) means single-pass torch refs
         # suffice; no iter replication needed. Guilty chunk types isolate
