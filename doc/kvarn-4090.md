@@ -343,7 +343,105 @@ cut only (one cut per commit keeps KLD attribution clean), gate
 (CPU, parity, KLD-8k, warmed tg, VRAM), table, commit, push.
 K4V4 stays the comparison vehicle; KLD same-top 100% + direct
 arm-vs-torch validation on every dispatch change; reasoning
-benches last.
+benches last. Implementation parallelizes across disjoint scopes
+only (no shared files without explicit coordination): one agent per
+isolated worktree, each returns a unified diff + CPU suite result,
+no commits; integrator applies sequentially (A before B), GPU-gates
+each, one cut per commit.
+
+### Subagent findings, round 1 (2026-09-29, read-only, convergent)
+
+Serve audit: per-step serve grid `(kvh, gc)` is O(n) FLOPs AND
+O(n) record traffic (`_kvarn_online_serve_kernel`, 8x16-row
+iters/chunk); per-q-head combine loops `for b in range(NB=gc)`
+serially (single-warp); `_ov_serve_acc` + m/l grow O(n)
+(~4MB/layer@8k -> ~65MB/layer@128k, realloc on gc change);
+merge reloads O(n) m/l over `arange(GCPAD)`. Ruled O(1): tail
+(R<=sink+tail_eff), store (grid `2*kvh` + 1 status sync),
+evict (resident-only scan 1x/128 rows).
+Bee-compare: Bee splits fixed 64 tok in parallel + parallel
+combine (ours: growing grid + serial reduce); Bee m16n8k16
+MMA + unpack2 pair-loads, reg-capped (ours: SIMT-ish tl.dot +
+per-element unpack); Bee same-kernel masked tail fallback
+(ours: 3 extra launches + full `Ew` refresh every step);
+Bee 3 launches total, device-side mask-skip, zero syncs (ours:
+~6/layer/step + Python aranges + 2 tolist syncs).
+Seal inventory (@4096-chunk/layer): row-WHT fwd+inv ~14-20
+launches x3 passes; Sinkhorn 16 iters x(K,V) ~300-500 launches
+for ~31 groups; `_store_rows` loop ~4-5 DtoH per group (~120
+syncs); serve dequant+unpack remat per chunk; overlay per-group
+syncs + indexed assigns. Fused `store_row` is T==1-only; prefill
+pays the full torch path.
+
+### Spec A: incremental eref + sync-kill (implement first)
+
+Current: full exact refresh `dispatch.py:184`
+(`Ew=wht_rows(exact_v.float())`, dead slots included); syncs at
+`dispatch.py:167` (`int(cache_seqlens[0])`),
+`kvarn_triton.py:1810` (`int(flag[0])`), `:482`
+(`status.tolist()`), `kvarn.py:1343` (`bool((~ev).any())`,
+skipped via `_tail_exact_certain` `:1340`, set `:1010`,
+cleaned `:1359`); parity gates at `kvarn_triton.py:56`,
+`kvarn.py:1609/1878/2021`, imageless gate `:330`.
+Recipe: cache `Ew` per layer as `_ov_eref_w (E,128,kvh,hd)`
+fp32 (shard like `exact_k/v`, `kvarn.py:978`; rev
+`_exact_rev (G,) i64` `:1021`, valid `(G,) bool` `:983`);
+each step WHT only touched slots (from `status[1]` `:482`) and
+`copy_` into cache; serve reads cached `Ew` (`dispatch.py:187`).
+Invalidate (clear rows or drop cache) on torch-store clear
+`:1592`, evict release `:1747`, copy-page lapse `:2386`,
+seal/reset `:1646`. Hoist seqlens to caller int; device-side
+flag with async check next step; 1-step-delayed status read;
+keep KLD-8k-green-gated delay (fail-closed `:191` stays
+synchronous until green). Parity twin: under PARITY=1 run full
+`wht_rows` vs incremental `Ew`, `assert torch.equal` (+flag/
+status equality), mirroring `:1609`/`:1878`/`:2021`.
+Validate: CPU twin (incremental vs full Ew over
+evict/copy/reset matrix) -> probe-arm parity maxdiff 0.0 ->
+KLD-8k flag-on identical -> tg/VRAM re-measure.
+Gain ~1.2ms/step @28 layers (+5-8% tg @8k, more at length).
+Risks: stale `Ew` (silent wrong body -- clear-on-write +
+parity twin); deferred fail-closed by one step (keep sync
+until KLD green, then delay).
+
+### Spec B: prefill WHT via triton kernel (implement second)
+
+Current: fwd torch `kvarn_wht_head` (`kvarn.py:584` via
+`kvarn_hadamard_128` `:539` + `kvarn_wht_slices` `:558`);
+prefill store fwd `kvarn.py:1615` on `stack(...)`; T==1-only
+gate `:1563` (`rows_k.shape[0]==1 and not is_swa and triton`);
+single-row torch path `_store_row_single` `:1478` (called
+`:1625`); multi-row loop `:1637`. Kernel
+`kvarn_triton_wht_rows(x, head_dim, inplace=False)` (`:370`;
+inplace asserts fp32-contig `:390-392`; flatten `:393-399`;
+grid `[(n,)] num_warps=1` `:402`). Fused store
+`kvarn_triton_store_row` (`:407`; inplace on stacked temp
+`:440-443`). Entry `update_kv` `:2304` / `update_kv_direct`
+`:2333` fan into `_store_rows` (`:2329,2357`).
+Inverses: `_group_block` `:1921` (sealed `:1931-1932`, open
+`:1941-1942`); `_refresh_into` `:2090` (rot batch
+`:2156-2157`, `wht_done` slice-only `:2110-2114`,
+open-serve `:2126-2139`); tail audit `:1350-1353`.
+Recipe: under triton, replace torch fwd with the kernel for
+ALL T (drop the shape gate for WHT only; keep
+`store_row` T==1 gate); pass stacked `(T,2,kvh,hd).float()`
+contig, `n=T*2*kvh`, `inplace=True` on the fresh temp only
+(never persistent fp16 stage/image); route group-block,
+refresh-rot, tail-audit through the kernel out-of-place;
+keep `wht_done` branch. Parity invariant: reference always
+out-of-place torch on pre-transform `stacked` (`:1607,1610`);
+keep asserts `:1609,1878,2021`. Twins: extend
+`test_wht_rows_matches_torch_head` (`:163`) to T=4096
+(kvh 2..8, hd 128/256/512) and serve-match test (`:231`,
+`:240,256`) to length-4096 chunks.
+Validate: CPU suites (env unset) -> PARITY=1 KLD-8k
+bit-identical (any assert trip = reject) -> warmed pp A/B
+(TRITON on/off) + launch count.
+Gain: low-single-digit % of the pp tax (Sinkhorn dominates;
+WHT swap saves allocs+launches only). Risks: grid scale
+(proven to 1500x128; 16-65k rows may regress -> row-cap +
+torch fallback); inplace aliasing (restrict to fresh temp,
+parity input pre-mutation).
 
 Cache-only accounting (MB; 16 cached layers; ours via
 `eval/_probe_vram.py` per-tensor bytes, Bee via `llama-bench
