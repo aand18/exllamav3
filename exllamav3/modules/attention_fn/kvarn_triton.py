@@ -1131,7 +1131,8 @@ if _have_triton:
     def _kvarn_online_tail_kernel(
         st_ptr,                  # (KVH, QPK, R) fp32 scaled tail scores
         vt_ptr,                  # (R, KVH, HD) fp32 tail values
-        ok_ptr,                  # (R,) fp32 assignment mask (1 = torch-owned)
+        tg_ptr,                  # (R,) int64 tail group ids
+        exrev_ptr,               # (G,) int64 group -> exact slot
         tail_m_ptr, tail_den_ptr,  # (KVH, QPK) fp32
         tail_num_ptr,            # (KVH, QPK, HD) fp32
         KVH: tl.constexpr, QPK: tl.constexpr,
@@ -1140,12 +1141,14 @@ if _have_triton:
         """One program = one q-head: tail rowwise max + masked exp +
         weighted value sum + weight sum. Replaces ~5 torch dispatches
         (amax, sub/exp/mul, bmm, sum) with one launch, and the (kvh,qpk,R)
-        pe temporary with on-chip weights. Same per-element math as the
-        torch block (exp exact; accumulation order differs), so results
-        agree to fp32 assoc noise (~1e-7 relative, far inside the 5e-4 arm
-        gate). R pads to RPAD (pow2) with -inf scores / 0 mask like the
-        combine kernel: padded lanes contribute exactly +0.0.
-        num_warps=4."""
+        pe temporary with on-chip weights. The assignment mask reads the
+        SAME exrev array the serve kernel reads (in-kernel this time, so
+        the torch tg/ok computation vanishes too): kernel covers
+        exrev>=0, torch covers exrev<0 -- the partition is airtight by
+        construction. Same per-element math as the torch block (exp
+        exact; masked lanes contribute exactly +0.0), so results agree
+        to fp32 assoc noise (~1e-7 relative, far inside the 5e-4 arm
+        gate). R pads to RPAD (pow2) with -inf scores. num_warps=4."""
         pid = tl.program_id(0)
         ph = pid // QPK
         pq = pid % QPK
@@ -1154,7 +1157,9 @@ if _have_triton:
         s = tl.load(st_ptr + (ph * QPK + pq) * R + roff, mask=rmask,
                     other=float("-inf"))
         m = tl.max(s)
-        e = tl.exp(s - m) * tl.load(ok_ptr + roff, mask=rmask, other=0.0)
+        t = tl.load(tg_ptr + roff, mask=rmask, other=0)
+        ev = tl.load(exrev_ptr + t, mask=rmask, other=-1)
+        e = tl.exp(s - m) * tl.where(ev < 0, 1.0, 0.0)
         den = tl.sum(e)
         tl.store(tail_m_ptr + pid, m)
         tl.store(tail_den_ptr + pid, den)
@@ -1169,13 +1174,15 @@ if _have_triton:
         tl.store(tail_num_ptr + (pid * HD) + lane, num)
 
 
-def kvarn_triton_online_tail_reduce(st, vt, ok):
+def kvarn_triton_online_tail_reduce(st, vt, tg, exrev):
     """Fused tail softmax + value reduction for the imageless arm.
 
     st: (kvh, qpk, R) fp32 scaled scores (torch bmm, already includes the
-    sm scale); vt: (R, kvh, hd) fp32 tail values; ok: (R,) fp32 mask.
-    Returns (tail_m, tail_den, tail_num): (kvh, qpk), (kvh, qpk),
-    (kvh, qpk, hd) fp32. Loud failure when unrunnable.
+    sm scale); vt: (R, kvh, hd) fp32 tail values; tg: (R,) int64 tail
+    group ids; exrev: (G,) int64 group -> exact slot (same array the
+    serve kernel reads: torch owns exrev<0 rows). Returns (tail_m,
+    tail_den, tail_num): (kvh, qpk), (kvh, qpk), (kvh, qpk, hd) fp32.
+    Loud failure when unrunnable.
     """
     if not _have_triton:
         raise RuntimeError(
@@ -1192,7 +1199,7 @@ def kvarn_triton_online_tail_reduce(st, vt, ok):
     tail_num = torch.empty((kvh, qpk, hd), dtype=torch.float32, device=dev)
     rpad = 1 << (R - 1).bit_length()
     _kvarn_online_tail_kernel[(kvh * qpk,)](
-        st, vt, ok, tail_m, tail_den, tail_num,
+        st, vt, tg, exrev, tail_m, tail_den, tail_num,
         kvh, qpk, R, rpad, hd, num_warps=4)
     return tail_m, tail_den, tail_num
 
