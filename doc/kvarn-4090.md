@@ -154,6 +154,28 @@ each length, 27B dense 1.40bpw, `EXL3_KVARN_TRITON=1` parity-off
 phase (weights + cache + temps; prefill peaks include the full-length
 fp32 scoring logits, decode peaks are the honest cache comparison).
 
+Standing bench requirements (2026-09-29, user-locked):
+- tg at 64k AND 128k, not just 8/16/32k: imageless kvarn4 + fp16
+  ref, 256 greedy decode tokens, same flags as the protocol table.
+- Every numbers table shows the BeeLlama baseline alongside ours
+  (`llama-bench -m Qwen3.8-27B-UD-Q4_K_XL.gguf -p <ctx> -n 256
+  -ctk kvarn4 -ctv kvarn4`, `--kv-memory` resident bytes) AND VRAM
+  (ours: cache-only per-tensor + decode-peak allocator; Bee:
+  `kv_resident_bytes`).
+- After every change: re-run the gates, show the updated table in
+  the report, and update this file.
+- Gate order before deep work: smoke first (needle item 0,
+  "capital of France" -> Paris, aborts the probe on fail) + short
+  reasoning (`bbeh_mini --limit 3 -fresh`) -- never go deep on a
+  wrong path.
+- VRAM guard (user-locked): poll `nvidia-smi
+  --query-gpu=memory.free` BEFORE every GPU run (must show ~0 used =
+  idle; a stale process holding VRAM gets `taskkill`ed only if it is
+  our own timed-out benchmark child), DURING long runs (sample
+  mid-run for anything over ~5min), and AFTER every run (must return
+  to idle). Abort the run if free VRAM < 100MB at any check; never
+  start a run without 1GB headroom over the expected peak.
+
 | ctx | fp16 pp | kvarn pp | fp16 tg256 (peak) | kvarn tg256 (peak) | KLD same-top |
 |-----|---------|----------|-------------------|---------------------|--------------|
 | 8192 | 3.3s, 2449 tok/s (12.5GB) | 4.8s, 1696 tok/s (13.1GB) | 88.1 tok/s (11.9GB) | 58.3 tok/s (12.0GB) | 100.00% |
@@ -173,14 +195,44 @@ throughout; ARMATTN PASS @8k):
 |-----|---------|----------|-------------------|---------------------|----------------------|----------|
 | 8192 | 3.2-3.3s, ~2525 tok/s (12.5GB) | 8.3-8.4s, ~980 tok/s (12.6GB) | 87.5-88.1 (10.4GB) | 43.0 (10.6GB) | 1e-6 / 2.3e-5 / 6.2e-4 / 3.29e-4 | 100.00% |
 | 16384 | 6.5s, ~2532 tok/s (13.2GB) | 16.4-16.5s, ~997 tok/s (13.2GB) | 83.1-83.2 (11.1GB) | 42.1/42.4 (11.3GB) | 1e-6 / 1.0e-5 / 1.85e-4 / 1.65e-4 | 100.00% |
+| 65536 | 32.6-32.7s, ~2008 tok/s (17.0GB) | 74.3-74.5s, ~880 tok/s (17.0GB) | 62.8 (14.9GB) | 36.3 (15.5GB) | 1e-6 / 1.7e-5 / 5.99e-4 / n/a | 100.00% |
+| 131072 | 201.8-203.0s, ~648 tok/s (22.1GB) | 219.4-220.0s, ~596 tok/s (23.1GB) | 47.4-47.5 (20.0GB) | 28.7 (21.1GB) | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
 
 Probe-arm per-layer (us, imageless): store 245.8, qwht 11.6, eref
 44.7, serve 97.2, stats 68.6, mask 26.8, tail 412.4, merge 112.9,
 fmerge 17.9, ftail 50.0, fgat 34.0, full arm 805.7.
 Run-variance rule: first-run-of-day tg reads low (38.3 @8k, 34.1
-@16k) vs warmed repeats (43.0 @8k; 42.1/42.4 @16k) with fp16 and KLD
-digits bit-identical across all runs -- always warm up / re-run
-before comparing tg.
+@16k, 27.7 @64k, 22.4 @128k) vs warmed repeats (43.0 @8k; 42.1/42.4
+@16k; 36.3 @64k; 28.7 @128k) with fp16 and KLD digits bit-identical
+across all runs -- always warm up / re-run before comparing tg.
+
+Long-context head-to-head (2026-09-29; ours imageless kvarn4 warmed
+runs above; Bee `llama-bench -m Qwen3.8-27B-UD-Q4_K_XL.gguf -p <ctx>
+-n 256 -ctk kvarn4 -ctv kvarn4 --kv-memory`; VRAM ours = cache-only
+measured, Bee = `kv_resident_bytes`):
+
+| ctx | ours kvarn tg256 (decode peak) | Bee kvarn tg256 | ours/Bee | ours KV cache-only | Bee KV resident | Bee f16 tg256 (ref) |
+|-----|-------------------------------|-----------------|----------|--------------------|-----------------|---------------------|
+| 65536 | 36.3 (15.5GB) | 44.0 | 83% | fp16 4.31GB / q8 2.29GB / kvarn4 1.26GB | 1.21GB | 46.1 |
+| 131072 | 28.7 (21.1GB) | 44.0 | 65% | fp16 ~8.6GB / q8 ~4.6GB / kvarn4 ~2.44GB (~calc) | 2.38GB | OOM (>24GB) |
+
+Bee tg is flat 44.0 at both lengths; ours drops 36.3 -> 28.7, so
+the gap widens with length (83% -> 65%) -- the online serve grid
+grows with ctx (position-masked over all groups) while Bee's fused
+dequant-attention does not. Next profiling target.
+Bee 128k components: payload K+V 2.35GB, staging 25MB, exact ~25MB.
+Ours 64k components: records 1179MB, exact 50.4MB, staging 33.6MB
+(live exact <=3 / stage <=1). 128k cache-only rows are ~calc from
+the identical two-point slopes (fp16 16.0 / q8 8.5 / kvarn4-body
+4.37 bpE): the direct 128k populate probe exceeds the 15min run
+budget (killed after timeout, GPU returned to idle).
+Bee f16 @128k does not fit 24GB (18GB weights + 8.6GB KV ->
+offload crawl, run killed at 39MB free); ours fits end-to-end
+(21.1GB kvarn / 20.0GB fp16-ref decode peaks) on small 1.4bpw
+weights. Gates this round: smoke Paris HIT + needle 4/4 in 66s;
+bbeh-mini --limit 3 0/3 clean exit (jsonl utf-8 fix); smi showed
+0 used before every run and after every run, min free ~1GB
+(128k kvarn prefill peak 23.1GB).
 
 Cache-only accounting (MB; 16 cached layers; ours via
 `eval/_probe_vram.py` per-tensor bytes, Bee via `llama-bench
