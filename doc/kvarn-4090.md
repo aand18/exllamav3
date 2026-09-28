@@ -262,6 +262,27 @@ Min-free record (guard, mandatory with every run): alloc-only
 128k probe hit 23MB -> guard KILL exit 2 on its first day of duty
 (all four totals already captured); q8-ref KLD 2461MB; Bee kvarn4
 @128k 4397MB (18GB weights + 2.4GB KV, never near swap).
+Equal weight footing @128k (tok/s; IQ2_XXS 7.27GB/2.13bpw
+approximates our EXL3 dir 7.88GB, vs Q4_K_XL 17.9GB/5.14bpw;
+27.32B params):
+
+| path | pp (tok/s) | tg (tok/s) | KV (GB) | min-free (MB) |
+|------|------------|------------|---------|---------------|
+| Bee Q4_K_XL kvarn4 | 1887 | 44.0 | 2.38 | 4397 |
+| Bee IQ2_XXS kvarn4 | 1882 | **80.9** | 2.38 | 13987 |
+| Bee IQ2_XXS f16 | **2068** | **88.4** | 8.59 | 8069 |
+| ours 1.40bpw kvarn4 | 754 | 28.1 | 2.44 | 2461 |
+| ours 1.40bpw fp16 | 648 (swap) | 47.5 | 8.61 | n/a (old guard) |
+
+Two things fall out. First, Bee f16 @128k exists after all --
+8.59GB resident cross-validates our 8.61GB probe to 0.2%. Second,
+decode is weight-bandwidth-bound and the weights set the ceiling:
+Bee-IQ2 streams 7.27GB/token at 80.9 tok/s = 588GB/s (~60% of
+4090 peak, credible); Bee-Q4 44.0 x 17.9GB = 788GB/s. Ours moves
+~5GB/token at 28.1 tok/s = ~140GB/s -- overhead-bound by ~4-5x,
+which corroborates the subagents independently (launches, syncs,
+serial gc-reduce -- not math). The tg prize is ~3x before
+bandwidth even binds.
 Bee f16 @128k does not fit 24GB (18GB weights + 8.6GB KV ->
 offload crawl, run killed at 39MB free); ours fits end-to-end
 on small 1.4bpw weights. Gates this round: smoke Paris HIT +
