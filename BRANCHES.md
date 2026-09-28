@@ -58,4 +58,6 @@ fused serve `52ba530` (28.8 tok/s), sync-free evict `8142fc0`,
 dirty sweep + in-place WHT `7596288` (32.0 tok/s), steady-path
 trimming `f1d93ee` (35.2 tok/s), serve-from-image stash-first
 `981b99a` (36.2 tok/s), store write-through + dirty flag `02787f7`
-(49.3 tok/s), tick-gated touch `2c4fa21` (64.5 tok/s).
+ (49.3 tok/s), tick-gated touch `2c4fa21` (64.5 tok/s). 2026-09-28:
+ rebased onto `origin/fork-overview` (house base rule changed off stale
+ Sep-10 master; zero content conflicts in kvarn paths, CPU 90+7 green).
