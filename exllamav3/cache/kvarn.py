@@ -1039,6 +1039,12 @@ class CacheLayer_kvarn(CacheLayer):
         # buffer replaces a per-call alloc (no fill needed, no staleness).
         self._store_status = torch.zeros(2, dtype=torch.int64,
                                          device=device)
+        # Incremental eref cache (Spec A): _ov_eref_w (E,128,kvh,hd) fp32
+        # mirrors WHT(exact_v) slot-for-slot. Lazy (None until first
+        # serve/store); _eref_ensure full-refreshes on creation so a
+        # mid-run first build is correct, then store/evict/copy hooks
+        # keep it fresh slot-wise (WHT only touched slots).
+        self._ov_eref_w = None
 
     @override
     def free(self):
@@ -1071,6 +1077,7 @@ class CacheLayer_kvarn(CacheLayer):
         self._page_groups = None
         self._evict_tick = 0
         self._store_status = None
+        self._ov_eref_w = None
 
     # -- Slot-remap for windowed staging/exact (memory plan) -----------------
 
@@ -1222,6 +1229,62 @@ class CacheLayer_kvarn(CacheLayer):
         if s >= 0:
             self._exact_slots[s] = -1
             self._exact_rev[g] = -1
+            self._eref_invalidate_slot(s)
+
+    # -- Incremental eref cache (Spec A, imageless decode path only) --------
+
+    def _eref_ensure(self):
+        """Return the (E,128,kvh,hd) fp32 eref cache, allocating +
+        full-refreshing on first build (a mid-run lazy build must match
+        the live exact content, not zeros). Slot sharded like exact_k/v
+        (same E, same rev map); valid ⟺ assigned sites keep it fresh."""
+        want = (int(self.n_exact_slots), KVAR_N_GROUP,
+                int(self.num_kv_heads), int(self.head_dim))
+        w = self._ov_eref_w
+        if w is None or tuple(w.shape) != want or w.device != self.device:
+            w = torch.zeros(want, dtype=torch.float32, device=self.device)
+            # Full refresh on creation (one-time; steady path is slot-wise).
+            # Torch WHT only (conservative: bit-exact vs the Triton row
+            # kernel per its header, CPU-testable, no new CUDA path in
+            # the store flow; dispatch parity twin proves equality).
+            w.copy_(kvarn_wht_head(self.exact_v.float(), self.head_dim))
+            self._ov_eref_w = w
+        return self._ov_eref_w
+
+    def _eref_refresh_slot(self, es: int) -> None:
+        """Recompute cache slot es from the live exact slot (WHT 128 rows).
+        No-op when the cache is not yet built (first _eref_ensure builds
+        it fully, so nothing is ever stale). Per-row independent over hd,
+        so a slot refresh is exactly the full-refresh rows for that slot."""
+        w = self._ov_eref_w
+        if w is None:
+            return
+        if es < 0 or es >= int(self.n_exact_slots):
+            return
+        w[es].copy_(kvarn_wht_head(
+            self.exact_v[es].float(), self.head_dim))
+
+    def _eref_refresh_all(self) -> None:
+        """Full refresh (parity reference + lazy-build path)."""
+        w = self._eref_ensure()
+        w.copy_(kvarn_wht_head(self.exact_v.float(), self.head_dim))
+
+    def _eref_invalidate_slot(self, es: int) -> None:
+        """Clear cache slot es (released/dead slots read zeros; the serve
+        kernel only reads via exrev>=0 so dead values are never served,
+        but zeros keep the full-vs-incremental parity trivially exact)."""
+        w = self._ov_eref_w
+        if w is None:
+            return
+        if es < 0 or es >= int(self.n_exact_slots):
+            return
+        w[es].zero_()
+
+    def kvarn_eref_cached(self):
+        """Serve-side read for the imageless arm (dispatch): cached Ew,
+        building it fully on first use. Store/evict/copy hooks keep it
+        fresh after that, so serve pays zero WHT launches."""
+        return self._eref_ensure()
 
     # -- M4 record access (for online-dequant Triton/CUDA kernels) ----------
 
@@ -1386,6 +1449,9 @@ class CacheLayer_kvarn(CacheLayer):
         self.exact_k[s].zero_()
         self.exact_v[s].zero_()
         self.exact_valid[g] = True
+        # Fresh zeros WHT to zeros: keep a live eref cache in sync without
+        # a WHT launch (callers fill rows next and refresh the slot then).
+        self._eref_invalidate_slot(s)
         return [self.exact_k[s], self.exact_v[s]]
 
     def _exact_keep(self, pos: torch.Tensor, n_new: int) -> torch.Tensor:
@@ -1517,6 +1583,10 @@ class CacheLayer_kvarn(CacheLayer):
             es = int(self._exact_rev[gi])
             self.exact_k[es, si] = ek[0]
             self.exact_v[es, si] = ev[0]
+            # Incremental eref: WHT only this touched slot into the cache
+            # (per-row independent over hd; other rows of the slot are
+            # unchanged so a whole-slot refresh is exactly correct).
+            self._eref_refresh_slot(es)
         cur_owner = int(self.page_owner_n[page])
         self.page_owner_n[page] = n_new if cur_owner < 0 \
             else min(cur_owner, n_new)
@@ -1574,10 +1644,20 @@ class CacheLayer_kvarn(CacheLayer):
                 img, self._img_v if img is not None else None)
             if code == 0:
                 # Pure append: the image is current via write-through,
-                # nothing dirtied (the sweep below stays empty).
+                # nothing dirtied (the sweep below stays empty). The fused
+                # kernel wrote one exact row: refresh only that slot's
+                # eref (touched group gg from status[1]; slot via rev).
+                # gg is a host int (single status sync inside the kernel
+                # wrapper); rev needs one more. No valid-check: the group
+                # was just written, so valid⟺assigned holds; a -1 rev
+                # no-ops safely inside _eref_refresh_slot.
+                self._eref_refresh_slot(
+                    int(self._exact_rev[gg]) if gg >= 0 else -1)
                 self._evict_exact_all(1)
                 return
             if code == 2:
+                self._eref_refresh_slot(
+                    int(self._exact_rev[gg]) if gg >= 0 else -1)
                 self._evict_exact_all(1)
                 self._seal_group(gg)
                 self._dirty_mask[gg] = True
@@ -1685,6 +1765,8 @@ class CacheLayer_kvarn(CacheLayer):
                 es = int(self._exact_rev[gi])
                 self.exact_k[es, s[km]] = ek[km]
                 self.exact_v[es, s[km]] = ev[km]
+                # Incremental eref: WHT only this touched slot.
+                self._eref_refresh_slot(es)
         # Every touched group changed content (stage write, reset or
         # unseal): refresh it on next materialization (idea 2).
         gm = g.to(device=self.device, dtype=torch.long)
@@ -1747,8 +1829,16 @@ class CacheLayer_kvarn(CacheLayer):
             self.exact_valid[res[drop]] = False
             # Release is vectorized and sync-free (dropped groups always
             # had slots by the valid ⟺ assigned invariant; guard the
-            # mask for the degenerate empty call).
+            # mask for the degenerate empty call). Incremental eref:
+            # clear the released cache slots (dead values are never
+            # served via exrev>=0, zeros keep full-vs-incremental exact).
             rel = self._exact_rev[res[drop]]
+            if self._ov_eref_w is not None:
+                # Vectorized, sync-free (no .tolist/.item: evict scans
+                # must stay off the DtoH path).
+                _rel_ok = rel[rel >= 0]
+                if _rel_ok.numel():
+                    self._ov_eref_w[_rel_ok].zero_()
             self._exact_slots[rel[rel >= 0]] = -1
             self._exact_rev[res[drop]] = -1
 
@@ -2425,11 +2515,16 @@ class CacheLayer_kvarn(CacheLayer):
                     if ef < 0:
                         self.exact_k[et].zero_()
                         self.exact_v[et].zero_()
+                        self._eref_invalidate_slot(et)
                     else:
                         self.exact_k[et].copy_(source.exact_k[ef],
                                                non_blocking=True)
                         self.exact_v[et].copy_(source.exact_v[ef],
                                                non_blocking=True)
+                        # Incremental eref: destination slot mirrors the
+                        # copied exact rows (copy_page is rare; a slot WHT
+                        # keeps the cache exact without a full refresh).
+                        self._eref_refresh_slot(et)
                 else:
                     self.exact_valid[gt] = False
                     self._exact_release(gt)
@@ -2476,6 +2571,7 @@ class CacheLayer_kvarn(CacheLayer):
                     if ef < 0:
                         self.exact_k[et].zero_()
                         self.exact_v[et].zero_()
+                        self._eref_invalidate_slot(et)
                     else:
                         self.exact_k[et, :nrows] \
                             .copy_(source.exact_k[ef, :nrows],
@@ -2486,6 +2582,7 @@ class CacheLayer_kvarn(CacheLayer):
                         if nrows < KVAR_N_GROUP:
                             self.exact_k[et, nrows:].zero_()
                             self.exact_v[et, nrows:].zero_()
+                        self._eref_refresh_slot(et)
                 else:
                     self.exact_valid[gt] = False
                     self._exact_release(gt)
