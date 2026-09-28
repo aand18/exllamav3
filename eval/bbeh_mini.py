@@ -138,14 +138,29 @@ def main(args):
 
     # Initialize
     model, config, cache, tokenizer = model_init.init(args)
-    generator = Generator(
-        model = model,
-        cache = cache,
-        max_batch_size = args.max_batch_size,
-        tokenizer = tokenizer,
-        show_visualizer = args.visualize_cache,
-    )
     sampler = model_init.get_arg_sampler(args)
+
+    def fresh_generator():
+        # New pagetable per question (isolation); KVarN layers reset on
+        # request so each question starts with clean slot windows (the
+        # slot budgets assume ~one live sequence; completed jobs' dead
+        # tails would otherwise pin slots across questions).
+        gen = Generator(
+            model = model,
+            cache = cache,
+            max_batch_size = args.max_batch_size,
+            tokenizer = tokenizer,
+            show_visualizer = args.visualize_cache,
+        )
+        if args.fresh:
+            from exllamav3.cache import CacheLayer_kvarn
+            for layer in list(cache.layers.values()):
+                if isinstance(layer, CacheLayer_kvarn) and \
+                        getattr(layer, "device", None) is not None:
+                    dev = layer.device
+                    layer.free()
+                    layer.alloc(dev)
+        return gen
 
     # Create prompts
     template_args = {}
@@ -153,6 +168,7 @@ def main(args):
     if args.nothink: template_args["enable_thinking"] = False
 
     all_results: list[dict] = []
+    all_jobs: list = []
     with ProgressBar("Prompts", len(bbeh), transient = False) as progress:
         for idx, bp in enumerate(bbeh):
             prompt = bp["input"]
@@ -162,7 +178,7 @@ def main(args):
                 **template_args,
             )
             all_results.append({"input": prompt, "target": bp["target"], "raw_prompt": tokenizer.decode(input_ids[0], decode_special_tokens = True)})
-            job = Job(
+            all_jobs.append(Job(
                 input_ids = input_ids,
                 max_new_tokens = args.max_tokens,
                 stop_conditions = config.eos_token_id_list,
@@ -170,15 +186,14 @@ def main(args):
                 identifier = idx,
                 max_rq_tokens = 512,
                 stop_on_loop = (300, 3),
-            )
-            generator.enqueue(job)
+            ))
             progress.update(idx + 1)
 
-    # Generate
+    # Generate (fresh generator per question: isolation)
     tps_hist = deque()
     sampled_tokens = 0
     last_update = time.time()
-    total_jobs = generator.num_remaining_jobs()
+    total_jobs = len(all_jobs)
     done_jobs = 0
     total_answered = 0
     total_correct = 0
@@ -186,75 +201,78 @@ def main(args):
 
     with (ProgressBar("Generating samples", total_jobs, transient = False) as progress):
 
-        while generator.num_remaining_jobs():
-            results = generator.iterate()
+        for job in all_jobs:
+            generator = fresh_generator()
+            generator.enqueue(job)
+            while generator.num_remaining_jobs():
+                results = generator.iterate()
 
-            # Some feedback
-            now = time.time()
-            if now > last_update + 1:
-                tps = sampled_tokens / (now - last_update)
-                sampled_tokens = 0
-                tps_hist.append(tps)
-                if len(tps_hist) > 3:
-                    tps_hist.popleft()
-                tps = round(sum(tps_hist) / len(tps_hist))
-                num_pend = generator.num_pending_jobs()
-                num_act = generator.num_active_jobs()
-                print(f" -- result: {eval_string:32}   pending: {num_pend:4}   active {num_act:4}   {tps:6} tokens/s", end = "")
-                if num_act:
-                    sjob = random.choice(generator.active_jobs)
-                    snum = "#" + str(sjob.identifier)
-                    ssamp = repr(sjob.full_completion)[-64:-1]
-                    print(f"    sample from {snum:>4}: {ssamp}")
-                else:
-                    print()
-                last_update = now
-
-            # Collect results
-            for result in results:
-                if "token_ids" in result:
-                    sampled_tokens += result["token_ids"].shape[-1]
-                if result.get("eos"):
-                    if "error" in result:
-                        import traceback as _tb
-                        print(f" !! Job #{result.get('identifier', result['job'].identifier)} failed: {result['error']!r}")
-                        print("".join(_tb.format_exception(
-                            type(result["error"]), result["error"],
-                            result["error"].__traceback__)))
-                        continue
-                    # Streaming eos results carry the job object but no
-                    # identifier key (generator API); the job does.
-                    idx = result.get("identifier", result["job"].identifier)
-                    completion = result["full_completion"]
-                    match result["eos_reason"]:
-                        case "max_new_tokens":
-                            print(f" !! Job #{idx} exceeded token limit, ends in: {repr(completion)[-100:-1]}")
-                        case "loop_detected":
-                            print(f" !! Job #{idx} loop detected, ends in: {repr(completion)[-100:-1]}")
-                        case _:
-                            pass
-
-                    # Running evaluation
-                    total_answered += 1
-                    answer = strip_reasoning(completion, args)
-                    reference = bbeh[idx]["target"]
-                    correct = evaluate_correctness(answer, reference)
-                    if correct:
-                        total_correct += 1
-                    score = total_correct / total_answered
-                    if total_answered == total_jobs:
-                        eval_string = f"{total_correct: 4}/{total_answered: 4} = {score * 100:6.2f}%"
+                # Some feedback
+                now = time.time()
+                if now > last_update + 1:
+                    tps = sampled_tokens / (now - last_update)
+                    sampled_tokens = 0
+                    tps_hist.append(tps)
+                    if len(tps_hist) > 3:
+                        tps_hist.popleft()
+                    tps = round(sum(tps_hist) / len(tps_hist))
+                    num_pend = generator.num_pending_jobs()
+                    num_act = generator.num_active_jobs()
+                    print(f" -- result: {eval_string:32}   pending: {num_pend:4}   active {num_act:4}   {tps:6} tokens/s", end = "")
+                    if num_act:
+                        sjob = random.choice(generator.active_jobs)
+                        snum = "#" + str(sjob.identifier)
+                        ssamp = repr(sjob.full_completion)[-64:-1]
+                        print(f"    sample from {snum:>4}: {ssamp}")
                     else:
-                        interval = 1.96 * math.sqrt(score * (1 - score) / total_answered * (total_jobs - total_answered) / (total_jobs - 1))
-                        eval_string = f"{total_correct: 4}/{total_answered: 4} = {score * 100:6.2f}% +/- {interval * 100: 6.2f}%"
+                        print()
+                    last_update = now
 
-                    # Save answer
-                    all_results[idx]["full_completion"] = completion
-                    all_results[idx]["answer"] = answer
-                    all_results[idx]["correct"] = correct
+                # Collect results
+                for result in results:
+                    if "token_ids" in result:
+                        sampled_tokens += result["token_ids"].shape[-1]
+                    if result.get("eos"):
+                        if "error" in result:
+                            import traceback as _tb
+                            print(f" !! Job #{result.get('identifier', result['job'].identifier)} failed: {result['error']!r}")
+                            print("".join(_tb.format_exception(
+                                type(result["error"]), result["error"],
+                                result["error"].__traceback__)))
+                            continue
+                        # Streaming eos results carry the job object but
+                        # no identifier key (generator API); the job does.
+                        idx = result.get("identifier", result["job"].identifier)
+                        completion = result["full_completion"]
+                        match result["eos_reason"]:
+                            case "max_new_tokens":
+                                print(f" !! Job #{idx} exceeded token limit, ends in: {repr(completion)[-100:-1]}")
+                            case "loop_detected":
+                                print(f" !! Job #{idx} loop detected, ends in: {repr(completion)[-100:-1]}")
+                            case _:
+                                pass
 
-                    done_jobs += 1
-                    progress.update(done_jobs)
+                        # Running evaluation
+                        total_answered += 1
+                        answer = strip_reasoning(completion, args)
+                        reference = bbeh[idx]["target"]
+                        correct = evaluate_correctness(answer, reference)
+                        if correct:
+                            total_correct += 1
+                        score = total_correct / total_answered
+                        if total_answered == total_jobs:
+                            eval_string = f"{total_correct: 4}/{total_answered: 4} = {score * 100:6.2f}%"
+                        else:
+                            interval = 1.96 * math.sqrt(score * (1 - score) / total_answered * (total_jobs - total_answered) / (total_jobs - 1))
+                            eval_string = f"{total_correct: 4}/{total_answered: 4} = {score * 100:6.2f}% +/- {interval * 100: 6.2f}%"
+
+                        # Save answer
+                        all_results[idx]["full_completion"] = completion
+                        all_results[idx]["answer"] = answer
+                        all_results[idx]["correct"] = correct
+
+                        done_jobs += 1
+                        progress.update(done_jobs)
 
     # Print result
     print(f" -- Final result: {eval_string} (95% CI)")
@@ -292,6 +310,7 @@ if __name__ == "__main__":
     parser.add_argument("-nothink", "--nothink", action = "store_true", help = "explicitly set template_arg enable_thinking=false")
     parser.add_argument("-thinktags", "--thinktags", nargs = 2, help = 'Think tags for reasoning models, default: "<think>" "</think>"', default = ["<think>", "</think>"])
     parser.add_argument("-limit", "--limit", type = int, help = "Limit number of questions (creates incomplete results file)", default = 0)
+    parser.add_argument("-fresh", "--fresh", action = "store_true", help = "Fresh generator + clean KVarN slots per question (isolation for low-slot budgets)")
     _args = parser.parse_args()
 
     # Validate args
