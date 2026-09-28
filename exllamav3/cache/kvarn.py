@@ -327,6 +327,21 @@ def _kvarn_use_triton() -> bool:
     return os.environ.get("EXL3_KVARN_TRITON", "0") == "1"
 
 
+def _eref_wht(x: torch.Tensor, head_dim: int) -> torch.Tensor:
+    """Head-WHT for the incremental eref cache: Triton row kernel (1
+    launch) when runnable, else the torch reference (bit-exact per the
+    kernel header; the dispatch PARITY twin asserts equality on-box).
+    The torch slot path measured SLOWER than the triton full refresh
+    it replaced (~10 launches + allocs vs 1 launch), so the Triton
+    route is the steady path, not an optimization."""
+    if _kvarn_use_triton() and x.is_cuda:
+        from ..modules.attention_fn.kvarn_triton import (
+            kvarn_triton_available, kvarn_triton_wht_rows)
+        if kvarn_triton_available():
+            return kvarn_triton_wht_rows(x, head_dim)
+    return kvarn_wht_head(x, head_dim)
+
+
 def _kvarn_imageless() -> bool:
     """
     Opt-in gate for imageless serve (match-bee track): the persistent
@@ -1244,10 +1259,7 @@ class CacheLayer_kvarn(CacheLayer):
         if w is None or tuple(w.shape) != want or w.device != self.device:
             w = torch.zeros(want, dtype=torch.float32, device=self.device)
             # Full refresh on creation (one-time; steady path is slot-wise).
-            # Torch WHT only (conservative: bit-exact vs the Triton row
-            # kernel per its header, CPU-testable, no new CUDA path in
-            # the store flow; dispatch parity twin proves equality).
-            w.copy_(kvarn_wht_head(self.exact_v.float(), self.head_dim))
+            w.copy_(_eref_wht(self.exact_v.float(), self.head_dim))
             self._ov_eref_w = w
         return self._ov_eref_w
 
@@ -1261,13 +1273,13 @@ class CacheLayer_kvarn(CacheLayer):
             return
         if es < 0 or es >= int(self.n_exact_slots):
             return
-        w[es].copy_(kvarn_wht_head(
+        w[es].copy_(_eref_wht(
             self.exact_v[es].float(), self.head_dim))
 
     def _eref_refresh_all(self) -> None:
         """Full refresh (parity reference + lazy-build path)."""
         w = self._eref_ensure()
-        w.copy_(kvarn_wht_head(self.exact_v.float(), self.head_dim))
+        w.copy_(_eref_wht(self.exact_v.float(), self.head_dim))
 
     def _eref_invalidate_slot(self, es: int) -> None:
         """Clear cache slot es (released/dead slots read zeros; the serve
