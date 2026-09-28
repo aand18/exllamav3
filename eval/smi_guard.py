@@ -74,35 +74,53 @@ def main() -> int:
               if x.isdigit()}
     t0 = time.time()
     seen = False
+    # Peak tracking (mandatory): min free observed over the run. Peak
+    # consumption ~= total - min_free. A falling min_free across phases
+    # is the early warning for swap spillover; the KILL line below is
+    # the hard guard.
+    min_free = None
+    def poll_free():
+        nonlocal min_free
+        try:
+            free = min_free_mb()
+        except RuntimeError as e:
+            print(f"smi error: {e}", flush=True)
+            return None
+        min_free = free if min_free is None else min(min_free, free)
+        return free
+    first = poll_free()
+    print(f"START image={a.image} free={first}MiB min_free_mb={a.min_free_mb}",
+          flush=True)
     while True:
         now = time.time()
         targets = task_pids(a.image) - before
         if targets:
             seen = True
         if seen and not targets:
-            print(f"DONE image={a.image} free={min_free_mb()}MiB", flush=True)
+            print(f"DONE image={a.image} free={poll_free()}MiB "
+                  f"min_free={min_free}MiB", flush=True)
             return 0
         if not seen and now - t0 > a.grace:
             print(f"NO-TASK image={a.image} (nothing new in {a.grace}s)",
                   flush=True)
             return 4
         if now - t0 > a.timeout:
-            print(f"TIMEOUT {int(now - t0)}s, killing {sorted(targets)}",
-                  flush=True)
+            print(f"TIMEOUT {int(now - t0)}s min_free={min_free}MiB, "
+                  f"killing {sorted(targets)}", flush=True)
             kill(targets)
             return 3
-        try:
-            free = min_free_mb()
-        except RuntimeError as e:
-            print(f"smi error: {e}", flush=True)
+        free = poll_free()
+        if free is None:
             time.sleep(a.interval)
             continue
         if int(now - t0) % 30 < a.interval:
             print(f"watch {a.image} pids={sorted(targets)} "
-                  f"free={free}MiB t={int(now - t0)}s", flush=True)
+                  f"free={free}MiB min_free={min_free}MiB "
+                  f"t={int(now - t0)}s", flush=True)
         if free < a.min_free_mb and targets:
             print(f"KILL free={free}MiB < {a.min_free_mb}MiB "
-                  f"pids={sorted(targets)}", flush=True)
+                  f"min_free={min_free}MiB pids={sorted(targets)}",
+                  flush=True)
             kill(targets)
             return 2
         time.sleep(a.interval)

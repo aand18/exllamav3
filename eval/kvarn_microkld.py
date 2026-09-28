@@ -21,6 +21,7 @@ import torch.nn.functional as F
 
 from exllamav3 import Config, Model, Tokenizer, Cache
 from exllamav3.cache import CacheLayer_fp16, CacheLayer_kvarn
+from exllamav3.cache.quant import CacheLayer_quant
 from exllamav3.cache.kvarn import kvarn_parse_preset
 
 SAMPLER_TEXT = ("The capital of France is Paris. It is known for the Eiffel "
@@ -117,6 +118,11 @@ def main():
                         help="Greedy decode steps to benchmark per path "
                              "(0 = off)")
     parser.add_argument("-d", "--device", default="cuda:0")
+    parser.add_argument("-ref", "--ref_cache", default="fp16",
+                        choices=["fp16", "q8"],
+                        help="Reference cache for KLD/pp/tg: fp16 (quality "
+                             "gospel) or q8 (fits where fp16 spills to swap, "
+                             "e.g. 128k; KLD then reads kvarn-vs-q8)")
     parser.add_argument("-mcl", "--moe_cpu_offload", type=int, default=0,
                         help="Offload first N block-sparse MoE layers to CPU "
                              "(e.g. 38 for Qwen3.8-Flash-Next 3.05bpw on 24GB VRAM)")
@@ -136,7 +142,14 @@ def main():
     max_tok = ((max_tok + 255) // 256) * 256
     assert max_tok >= args.ntok + args.decode, \
         f"max_tokens {max_tok} < ntok+decode {args.ntok + args.decode}"
-    c_fp16 = Cache(model, max_num_tokens=max_tok, layer_type=CacheLayer_fp16)
+    if args.ref_cache == "q8":
+        c_ref = Cache(model, max_num_tokens=max_tok,
+                      layer_type=CacheLayer_quant, k_bits=8, v_bits=8)
+        ref_tag = "q8"
+    else:
+        c_ref = Cache(model, max_num_tokens=max_tok,
+                      layer_type=CacheLayer_fp16)
+        ref_tag = "fp16"
     c_kvarn = Cache(model, max_num_tokens=max_tok, layer_type=CacheLayer_kvarn,
                     k_bits=k_bits, v_bits=v_bits)
     t0 = time.time()
@@ -150,9 +163,9 @@ def main():
 
     torch.cuda.reset_peak_memory_stats()
     t0 = time.time()
-    l_fp16, s_fp16 = run(model, c_fp16, ids, args.chunk)
+    l_ref, s_ref = run(model, c_ref, ids, args.chunk)
     dt = time.time() - t0
-    print(f"fp16 prefill: {dt:.1f}s ({args.ntok / dt:.0f} tok/s, "
+    print(f"{ref_tag} prefill: {dt:.1f}s ({args.ntok / dt:.0f} tok/s, "
           f"peak {_peak_gb():.1f}GB)", flush=True)
     torch.cuda.empty_cache()
 
@@ -165,19 +178,19 @@ def main():
           flush=True)
 
     p = F.log_softmax(l_kvarn, dim=-1)
-    q = F.log_softmax(l_fp16, dim=-1)
+    q = F.log_softmax(l_ref, dim=-1)
     kld = (q.exp() * (q - p)).sum(-1).squeeze(0)
-    print(f"KLD kvarn{k_bits}/kvarn{v_bits} vs fp16-cache "
+    print(f"KLD kvarn{k_bits}/kvarn{v_bits} vs {ref_tag}-cache "
           f"over {l_kvarn.shape[1]} scored continuation positions:", flush=True)
     print(f"  median {kld.median().item():.6f}  mean {kld.mean().item():.6f}  "
           f"max {kld.max().item():.6f}", flush=True)
     print(f"  p99 {kld.quantile(0.99).item():.6f}  "
           f"p99.9 {kld.quantile(0.999).item():.6f}", flush=True)
-    agree = (l_kvarn.argmax(-1) == l_fp16.argmax(-1)).float().mean().item()
+    agree = (l_kvarn.argmax(-1) == l_ref.argmax(-1)).float().mean().item()
     print(f"  same-top {agree * 100:.2f}%", flush=True)
 
     if args.decode > 0:
-        bench_decode(model, c_fp16, ids, args.decode, s_fp16, "fp16")
+        bench_decode(model, c_ref, ids, args.decode, s_ref, ref_tag)
         torch.cuda.empty_cache()
         bench_decode(model, c_kvarn, ids, args.decode, s_kvarn,
                      f"kvarn{k_bits}/kvarn{v_bits}")
