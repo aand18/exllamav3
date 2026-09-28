@@ -198,7 +198,7 @@ tg baseline (tok/s, 256 greedy decode):
 
 | ctx (tok) | tg ours fp16 (tok/s) | tg ours kvarn4 (tok/s) | tg Bee kvarn4 (tok/s) | tg Bee f16 (tok/s) | ours/Bee (%) | KLD med/mean/max/p99 (unitless) | same-top (%) |
 |-----|--------------|----------------|---------------|------------|----------|----------------------|----------|
-| 8192 | 87.5-88.1 | 43.0 | **44.0** | 46.1 | 98% | 1e-6 / 2.3e-5 / 6.2e-4 / 3.29e-4 | 100.00% |
+| 8192 | 87.7-88.4 | 41.6-42.1 (pre-eref base 43.3-43.8, same-session A/B) | **44.0** | 46.1 | 95% | 1e-6 / 2.3e-5 / 6.2e-4 / 3.29e-4 | 100.00% |
 | 16384 | 83.1-83.2 | 42.1/42.4 | **44.0** | 46.2 | 96% | 1e-6 / 1.0e-5 / 1.85e-4 / 1.65e-4 | 100.00% |
 | 65536 | 62.8 | 36.3 | **44.0** | 46.1 | 83% | 1e-6 / 1.7e-5 / 5.99e-4 / n/a | 100.00% |
 | 131072 | 47.4-47.5 | 28.1/28.7 | **44.0** | OOM (>24GB) | 65% | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
@@ -219,6 +219,18 @@ Run-variance rule: first-run-of-day tg reads low (38.3 @8k, 34.1
 @16k, 27.7 @64k, 22.4 @128k) vs warmed repeats (43.0 @8k; 42.1/42.4
 @16k; 36.3 @64k; 28.7 @128k) with fp16 and KLD digits bit-identical
 across all runs -- always warm up / re-run before comparing tg.
+Incremental-eref A/B @8k (2026-09-28, commits 30a81d9 -> 349d24a,
+fused in-kernel eref write-through): warmed current 41.6-42.1 (4
+runs) vs pre-eref base 43.3-43.8 (2 runs, same warm box), KLD
+digits bit-identical, parity asserts exact, VRAM identical. Path:
+40.4 (host slot refresh: +1 sync + 1 launch) -> 41.8 (fused, sync
+and launch removed). Residual -3.5% has no isolated mechanism:
+store +0.6us/layer and serve +0.0us/layer by micro A/B (raw kernel
++ alternating serve, 200 iters), prefill equal, gap persists under
+expandable_segments, fp16 drifted -0.8% in-window (latency-bound
+regime: 64% SM vs 99% fp16). Unresolved-but-bounded; revisit with
+profiler before further tg surgery (no third fix round without a
+hypothesis).
 
 KV head-to-head (GB cache-only, 16 layers; ours measured per-tensor,
 Bee `kv_resident_bytes`; Bee `llama-bench -m Qwen3.8-27B-UD-Q4_K_XL.gguf
