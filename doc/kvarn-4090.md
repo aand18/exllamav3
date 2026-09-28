@@ -185,17 +185,30 @@ PARITY=1 same code: 58.0/58.4/56.3 tok/s decode; KLD digits identical
 at all lengths. End-to-end allocator peaks are equal within 0.1GB --
 but that is shared weights/temps dominating, NOT cache parity.
 
-Imageless baseline @76b7fb0 (2026-09-29, `EXL3_KVARN_TRITON=1
-EXL3_KVARN_IMAGELESS=1`, kvarn4; 8k rows reuse 2026-09-28 same-HEAD
+Imageless baseline @0bf462a, rebased onto `origin/fork-overview`
+(code-identical to the validated @76b7fb0: delta is README +
+local-build docs only; 2026-09-29, `EXL3_KVARN_TRITON=1
+EXL3_KVARN_IMAGELESS=1`, kvarn4; 8k rows reuse 2026-09-28 same-code
 runs; CPU suite 90 passed 7 skipped; fused-kernel parity maxdiff 0.0
-throughout; ARMATTN PASS @8k):
+throughout; ARMATTN PASS @8k. Bold = winner.)
 
-| ctx | fp16 pp | kvarn pp | fp16 tg256 (peak) | kvarn tg256 (peak) | KLD med/mean/max/p99 | same-top |
-|-----|---------|----------|-------------------|---------------------|----------------------|----------|
-| 8192 | 3.2-3.3s, ~2525 tok/s (12.5GB) | 8.3-8.4s, ~980 tok/s (12.6GB) | 87.5-88.1 (10.4GB) | 43.0 (10.6GB) | 1e-6 / 2.3e-5 / 6.2e-4 / 3.29e-4 | 100.00% |
-| 16384 | 6.5s, ~2532 tok/s (13.2GB) | 16.4-16.5s, ~997 tok/s (13.2GB) | 83.1-83.2 (11.1GB) | 42.1/42.4 (11.3GB) | 1e-6 / 1.0e-5 / 1.85e-4 / 1.65e-4 | 100.00% |
-| 65536 | 32.6-32.7s, ~2008 tok/s (17.0GB) | 74.3-74.5s, ~880 tok/s (17.0GB) | 62.8 (14.9GB) | 36.3 (15.5GB) | 1e-6 / 1.7e-5 / 5.99e-4 / n/a | 100.00% |
-| 131072 | 201.8-203.0s, ~648 tok/s (22.1GB) | 219.4-220.0s, ~596 tok/s (23.1GB) | 47.4-47.5 (20.0GB) | 28.7 (21.1GB) | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
+tg baseline (tok/s, 256 greedy decode):
+
+| ctx | tg ours fp16 | tg ours kvarn4 | tg Bee kvarn4 | tg Bee f16 | ours/Bee | KLD med/mean/max/p99 | same-top |
+|-----|--------------|----------------|---------------|------------|----------|----------------------|----------|
+| 8192 | 87.5-88.1 | 43.0 | **44.0** | 46.1 | 98% | 1e-6 / 2.3e-5 / 6.2e-4 / 3.29e-4 | 100.00% |
+| 16384 | 83.1-83.2 | 42.1/42.4 | **44.0** | 46.2 | 96% | 1e-6 / 1.0e-5 / 1.85e-4 / 1.65e-4 | 100.00% |
+| 65536 | 62.8 | 36.3 | **44.0** | 46.1 | 83% | 1e-6 / 1.7e-5 / 5.99e-4 / n/a | 100.00% |
+| 131072 | 47.4-47.5 | 28.7 | **44.0** | OOM (>24GB) | 65% | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
+
+pp baseline (tok/s, full-context prefill):
+
+| ctx | pp ours fp16 | pp ours kvarn4 | pp Bee kvarn4 | ours/Bee |
+|-----|--------------|----------------|---------------|----------|
+| 8192 | 3.2-3.3s, ~2525 | 8.3-8.4s, ~980 | **2.8s, 2946** | 33% |
+| 16384 | 6.5s, ~2532 | 16.4-16.5s, ~997 | **5.8s, 2844** | 35% |
+| 65536 | 32.6-32.7s, ~2008 | 74.3-74.5s, ~880 | **28.1s, 2336** | 38% |
+| 131072 | 201.8-203.0s, ~648 | 219.4-220.0s, ~596 | **69.5s, 1887** | 32% |
 
 Probe-arm per-layer (us, imageless): store 245.8, qwht 11.6, eref
 44.7, serve 97.2, stats 68.6, mask 26.8, tail 412.4, merge 112.9,
@@ -205,21 +218,32 @@ Run-variance rule: first-run-of-day tg reads low (38.3 @8k, 34.1
 @16k; 36.3 @64k; 28.7 @128k) with fp16 and KLD digits bit-identical
 across all runs -- always warm up / re-run before comparing tg.
 
-Long-context head-to-head (2026-09-29; ours imageless kvarn4 warmed
-runs above; Bee `llama-bench -m Qwen3.8-27B-UD-Q4_K_XL.gguf -p <ctx>
--n 256 -ctk kvarn4 -ctv kvarn4 --kv-memory`; VRAM ours = cache-only
-measured, Bee = `kv_resident_bytes`):
+KV head-to-head (GB cache-only, 16 layers; ours measured per-tensor,
+Bee `kv_resident_bytes`; Bee `llama-bench -m Qwen3.8-27B-UD-Q4_K_XL.gguf
+-p <ctx> -n 256 -ctk kvarn4 -ctv kvarn4 --kv-memory`):
 
-| ctx | ours kvarn tg256 (decode peak) | Bee kvarn tg256 | ours/Bee | ours KV cache-only | Bee KV resident | Bee f16 tg256 (ref) |
-|-----|-------------------------------|-----------------|----------|--------------------|-----------------|---------------------|
-| 65536 | 36.3 (15.5GB) | 44.0 | 83% | fp16 4.31GB / q8 2.29GB / kvarn4 1.26GB | 1.21GB | 46.1 |
-| 131072 | 28.7 (21.1GB) | 44.0 | 65% | fp16 ~8.6GB / q8 ~4.6GB / kvarn4 ~2.44GB (~calc) | 2.38GB | OOM (>24GB) |
+| ctx | KV ours fp16 / q8 / kvarn4 | KV Bee kvarn4 | gap |
+|-----|----------------------------|---------------|-----|
+| 8192 | 0.55 / 0.29 / 0.24 | **0.18** | +60MB |
+| 16384 | 1.09 / 0.58 / 0.38 | **0.33** | +53MB |
+| 65536 | 4.31 / 2.29 / 1.26 | **1.21** | +50MB |
+| 131072 | ~8.6 / ~4.6 / ~2.44 (~calc) | **2.38** | ~+60MB |
 
-Bee tg is flat 44.0 at both lengths; ours drops 36.3 -> 28.7, so
-the gap widens with length (83% -> 65%) -- the online serve grid
-grows with ctx (position-masked over all groups) while Bee's fused
-dequant-attention does not. Next profiling target.
-Bee 128k components: payload K+V 2.35GB, staging 25MB, exact ~25MB.
+Bee tg is flat 44.0 at all lengths; ours drops 43.0 -> 42.3 ->
+36.3 -> 28.7, so the gap widens with length (98% -> 96% -> 83%
+-> 65%) -- the online serve grid grows with ctx (position-masked
+over all groups) while Bee's fused dequant-attention does not. Bee
+pp is 94% of its fp16 (2844 vs 3025 @16k); ours is 39% (997 vs
+2532) -- our prefill pays row-WHT + Sinkhorn seals + per-layer
+syncs that Bee never does. VRAM is within 4% at every length; the
+remaining gap is staging +9 and exact/stash +42MB @16k.
+Why no allocator peaks in the metric columns: the old `(15.5GB)`
+style numbers were decode-peak allocator totals (weights + cache +
+temps + full-length fp32 scoring logits), not KV cache -- they
+prove end-to-end fit and nothing about cache parity. Fit record
+(ours kvarn decode peaks): 10.6 / 11.3 / 15.5 / 21.1GB
+@8/16/64/128k. Cache truth is the KV table above.
+Components: Bee 128k payload K+V 2.35GB, staging 25MB, exact ~25MB.
 Ours 64k components: records 1179MB, exact 50.4MB, staging 33.6MB
 (live exact <=3 / stage <=1). 128k cache-only rows are ~calc from
 the identical two-point slopes (fp16 16.0 / q8 8.5 / kvarn4-body
@@ -227,11 +251,37 @@ the identical two-point slopes (fp16 16.0 / q8 8.5 / kvarn4-body
 budget (killed after timeout, GPU returned to idle).
 Bee f16 @128k does not fit 24GB (18GB weights + 8.6GB KV ->
 offload crawl, run killed at 39MB free); ours fits end-to-end
-(21.1GB kvarn / 20.0GB fp16-ref decode peaks) on small 1.4bpw
-weights. Gates this round: smoke Paris HIT + needle 4/4 in 66s;
-bbeh-mini --limit 3 0/3 clean exit (jsonl utf-8 fix); smi showed
-0 used before every run and after every run, min free ~1GB
-(128k kvarn prefill peak 23.1GB).
+on small 1.4bpw weights. Gates this round: smoke Paris HIT +
+needle 4/4 in 66s; bbeh-mini --limit 3 0/3 clean exit (jsonl utf-8
+fix); smi showed 0 used before every run and after every run, min
+free ~1GB (128k kvarn prefill peak 23.1GB).
+
+Plan to goal (2026-09-29): KV-cache VRAM about equal or better
+than BeeLlama under KVarN quant, same or better pp and tg.
+
+1. tg length scaling (98% -> 96% -> 83% -> 65%; Bee flat 44.0).
+   Suspect: online serve cost grows with ctx. Cuts, in order:
+   incremental eref (stop the full refresh), store internals,
+   mask/tpos trim. Success bar: flat-with-length tg.
+2. pp seal path (32-38% of Bee; Bee is 94% of its fp16, we are
+   39% of ours). Suspect: prefill row-WHT + Sinkhorn seals +
+   per-layer syncs. Cuts: seal batching/fusion on the pp path.
+   Success bar: kvarn pp within 20% of our fp16 pp.
+3. VRAM last ~50MB (within 4% everywhere). Suspect: staging/exact
+   slot margins. Cuts: SWA exact-margin analysis, slot
+   tightening (staging 4 / exact 6 already proven minimal for the
+   current evict cadence -- cadence moves first). Success bar:
+   imageless <= Bee resident at every length.
+Operating model (speed without chaos): the GPU is serial -- one
+run at a time, smi-guarded, never parallelize runs. Analysis
+parallelizes: each round, subagents dissect the next target
+(serve-path audit, Bee-structural-compare, seal-path inventory)
+while the GPU validates the previous cut. Then implement the top
+cut only (one cut per commit keeps KLD attribution clean), gate
+(CPU, parity, KLD-8k, warmed tg, VRAM), table, commit, push.
+K4V4 stays the comparison vehicle; KLD same-top 100% + direct
+arm-vs-torch validation on every dispatch change; reasoning
+benches last.
 
 Cache-only accounting (MB; 16 cached layers; ours via
 `eval/_probe_vram.py` per-tensor bytes, Bee via `llama-bench
