@@ -199,7 +199,7 @@ tg baseline (tok/s, 256 greedy decode):
 | 8192 | 87.5-88.1 | 43.0 | **44.0** | 46.1 | 98% | 1e-6 / 2.3e-5 / 6.2e-4 / 3.29e-4 | 100.00% |
 | 16384 | 83.1-83.2 | 42.1/42.4 | **44.0** | 46.2 | 96% | 1e-6 / 1.0e-5 / 1.85e-4 / 1.65e-4 | 100.00% |
 | 65536 | 62.8 | 36.3 | **44.0** | 46.1 | 83% | 1e-6 / 1.7e-5 / 5.99e-4 / n/a | 100.00% |
-| 131072 | 47.4-47.5 | 28.7 | **44.0** | OOM (>24GB) | 65% | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
+| 131072 | 47.4-47.5 | 28.1/28.7 | **44.0** | OOM (>24GB) | 65% | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
 
 pp baseline (tok/s, full-context prefill):
 
@@ -208,7 +208,7 @@ pp baseline (tok/s, full-context prefill):
 | 8192 | 3.2-3.3s, ~2525 | 8.3-8.4s, ~980 | **2.8s, 2946** | 33% |
 | 16384 | 6.5s, ~2532 | 16.4-16.5s, ~997 | **5.8s, 2844** | 35% |
 | 65536 | 32.6-32.7s, ~2008 | 74.3-74.5s, ~880 | **28.1s, 2336** | 38% |
-| 131072 | 201.8-203.0s, ~648 | 219.4-220.0s, ~596 | **69.5s, 1887** | 32% |
+| 131072 | 201.8-203.0s, ~648 (swap; q8: 87.7s, 1494) | 219.4-220.0s, ~596 (q8-ref run: 173.9s, 754) | **69.5s, 1887** | 32% |
 
 Probe-arm per-layer (us, imageless): store 245.8, qwht 11.6, eref
 44.7, serve 97.2, stats 68.6, mask 26.8, tail 412.4, merge 112.9,
@@ -222,12 +222,12 @@ KV head-to-head (GB cache-only, 16 layers; ours measured per-tensor,
 Bee `kv_resident_bytes`; Bee `llama-bench -m Qwen3.8-27B-UD-Q4_K_XL.gguf
 -p <ctx> -n 256 -ctk kvarn4 -ctv kvarn4 --kv-memory`):
 
-| ctx | KV ours fp16 / q8 / kvarn4 | KV Bee kvarn4 | gap |
+| ctx | KV ours fp16 / q8 / q4 / kvarn4 | KV Bee kvarn4 | gap |
 |-----|----------------------------|---------------|-----|
-| 8192 | 0.55 / 0.29 / 0.24 | **0.18** | +60MB |
-| 16384 | 1.09 / 0.58 / 0.38 | **0.33** | +53MB |
-| 65536 | 4.31 / 2.29 / 1.26 | **1.21** | +50MB |
-| 131072 | ~8.6 / ~4.6 / ~2.44 (~calc) | **2.38** | ~+60MB |
+| 8192 | 0.55 / 0.29 / 0.16 / 0.24 | **0.18** | +60MB |
+| 16384 | 1.09 / 0.58 / 0.31 / 0.38 | **0.33** | +53MB |
+| 65536 | 4.31 / 2.29 / 1.21 / 1.26 | **1.21** | +50MB |
+| 131072 | 8.61 / 4.57 / 2.42 / 2.44 | **2.38** | +60MB |
 
 Bee tg is flat 44.0 at all lengths; ours drops 43.0 -> 42.3 ->
 36.3 -> 28.7, so the gap widens with length (98% -> 96% -> 83%
@@ -244,11 +244,22 @@ prove end-to-end fit and nothing about cache parity. Fit record
 (ours kvarn decode peaks): 10.6 / 11.3 / 15.5 / 21.1GB
 @8/16/64/128k. Cache truth is the KV table above.
 Components: Bee 128k payload K+V 2.35GB, staging 25MB, exact ~25MB.
-Ours 64k components: records 1179MB, exact 50.4MB, staging 33.6MB
-(live exact <=3 / stage <=1). 128k cache-only rows are ~calc from
-the identical two-point slopes (fp16 16.0 / q8 8.5 / kvarn4-body
-4.37 bpE): the direct 128k populate probe exceeds the 15min run
-budget (killed after timeout, GPU returned to idle).
+Ours 128k measured (`alloc-only`, seconds): records 2353.4MB, exact
+50.4MB, staging 33.6MB. Plain q4 is 60-80MB SMALLER than KVarN-4 at
+every length (0.16/0.31/1.21/2.42 vs 0.24/0.38/1.26/2.44GB) -- the
+intercept price of the staging+exact window; KVarN's argument over
+q4 is quality-per-bit (vLLM #46613 gospel), not size.
+Swap verdict @128k (measured): q8-ref run gives pp q8 87.7s/1494
+tok/s, kvarn 173.9s/754, tg q8 46.6 / kvarn 28.1, KLD kvarn-vs-q8
+same-top 100% with digits identical to the fp16-ref KLD, min-free
+2461MB -- comfortable, no swap. The fp16 648 tok/s was
+swap-throttled (q8 2.3x faster at the same ctx); kvarn itself ran
+27% faster just from sharing the machine with the lighter ref
+(173.9s vs 219.4s). So `-ref q8` is confirmed policy at 128k.
+Min-free record (guard, mandatory with every run): alloc-only
+128k probe hit 23MB -> guard KILL exit 2 on its first day of duty
+(all four totals already captured); q8-ref KLD 2461MB; Bee kvarn4
+@128k 4397MB (18GB weights + 2.4GB KV, never near swap).
 Bee f16 @128k does not fit 24GB (18GB weights + 8.6GB KV ->
 offload crawl, run killed at 39MB free); ours fits end-to-end
 on small 1.4bpw weights. Gates this round: smoke Paris HIT +
