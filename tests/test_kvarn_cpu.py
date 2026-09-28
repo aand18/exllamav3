@@ -240,6 +240,42 @@ def test_multislice_head_dim_256():
 
 
 @torch.inference_mode()
+def test_prefill_4096_store_refresh_groupblock_agree():
+    # Spec B CPU twin toward T=4096 (torch path, no GPU needed): a single
+    # 4096-row prefill stores consistent state; the group-block inverse
+    # path and the legacy refresh agree bit-exact pre-overlay; the
+    # triton-or-torch helper falls back to the torch reference on CPU.
+    torch.manual_seed(11)
+    for hd in (128, 256):
+        kvh, T, ntok = 2, 4096, 8192
+        layer = _layer(kvh, hd, ntok)
+        bt = _ids(ntok)
+        k = torch.randn(T, kvh, hd).half()
+        v = torch.randn(T, kvh, hd).half()
+        layer.update_kv_direct(torch.zeros(1, dtype=torch.int32), bt,
+                               k.unsqueeze(0), v.unsqueeze(0), T)
+        x = torch.randn(256, 2, kvh, hd)
+        assert torch.equal(kvarn._kvarn_wht_head_maybe_triton(x, hd),
+                           kvarn.kvarn_wht_head(x, hd))
+        kk, vv = layer.get_kv(torch.tensor([T], dtype=torch.int32), bt)
+        got_k = kk[bt[0]].reshape(-1, kvh, hd)[:T]
+        got_v = vv[bt[0]].reshape(-1, kvh, hd)[:T]
+        assert _rmse(k.float(), got_k.float()) < 0.15, (hd, "k")
+        assert _rmse(v.float(), got_v.float()) < 0.15, (hd, "v")
+        Gs = torch.arange(layer.num_groups)
+        rk = torch.zeros((layer.num_pages, PAGE_SIZE, kvh, hd),
+                         dtype=torch.half)
+        rv = torch.zeros_like(rk)
+        layer._refresh_groups_legacy(Gs, rk, rv)
+        gk = torch.zeros_like(rk)
+        gv = torch.zeros_like(rv)
+        for g in range(layer.num_groups):
+            layer._group_block(g, gk, gv)
+        assert torch.equal(rk, gk), hd
+        assert torch.equal(rv, gv), hd
+
+
+@torch.inference_mode()
 def test_update_kv_persists_from_dequant_temps():
     """get_kv -> merge rows (as the attn fallback does) -> update_kv roundtrip."""
     torch.manual_seed(2)
