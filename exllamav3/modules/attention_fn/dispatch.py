@@ -178,10 +178,18 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
     kvarn_triton_qwht(Q, qs, qw, sl, sscale)
     Qf = Q.float()
     # Body via promoted single-kernel serve (in-kernel online partials +
-    # production combine, ORIGINAL-domain normalized body out). exact_v_w
-    # refreshed from exact blocks each step (full refresh: correctness
-    # first, incremental eref queued).
-    Ew = kvarn_triton_wht_rows(layer.exact_v.float(), hd)
+    # production combine, ORIGINAL-domain normalized body out).
+    # Incremental eref (Spec A): serve reads the per-layer cached Ew
+    # (slot-wise WHT maintained by the kvarn.py store/evict/copy hooks;
+    # _eref_ensure full-refreshes once on first build). No per-step full
+    # remat. Seqlens/flag/status stay synchronous (conservative per the
+    # spec's KLD-8k-green gate: fail-closed :191 keeps its sync until
+    # green; this cut only removes the Ew remat).
+    Ew = layer.kvarn_eref_cached()
+    if os.environ.get("EXL3_KVARN_TRITON_PARITY", "0") == "1":
+        Ew_ref = kvarn_triton_wht_rows(layer.exact_v.float(), hd)
+        assert torch.equal(Ew, Ew_ref), \
+            "KVarN incremental eref disagrees with full refresh"
     gps = PAGE_SIZE // KVAR_N_GROUP
     gc_eff = min((n + 127) // 128, int(layer.records.shape[0]))
     out_b, flag_b = kvarn_triton_online_serve(
