@@ -120,7 +120,7 @@ def _occupy_exact_sealed(lay, groups):
         lay.exact_valid[g] = True
 
 
-def test_exact_reclaim_frees_oldest_below_window():
+def test_exact_pressure_evicts_dead():
     lay = _layer()
     assert lay.has_sink
     # All 6 slots: sink group 0 + sealed groups 1..5, every page owned
@@ -128,7 +128,9 @@ def test_exact_reclaim_frees_oldest_below_window():
     _occupy_exact_sealed(lay, range(6))
     lay.page_owner_n.fill_(5000)
     s = lay._exact_slot(60)
-    # Sink (base 0) is never a victim; oldest reclaimable is group 1.
+    lay.exact_valid[60] = True  # _alloc_exact_block does this in prod
+    # Dead groups below-window are evicted (forced scan on pressure);
+    # sink (base 0) is never a victim.
     assert int(lay._exact_rev[0]) >= 0
     assert int(lay._exact_rev[1]) == -1
     assert not bool(lay.exact_valid[1])
@@ -137,7 +139,7 @@ def test_exact_reclaim_frees_oldest_below_window():
     assert bool(((lay.exact_valid) == (lay._exact_rev >= 0)).all())
 
 
-def test_exact_reclaim_refuses_live_window():
+def test_exact_pressure_keeps_live_window():
     lay = _layer()
     _occupy_exact_sealed(lay, range(6))
     # Owner 700: live window [444, 700): groups 3..5 (bases 384..640)
@@ -151,15 +153,41 @@ def test_exact_reclaim_refuses_live_window():
         assert int(lay._exact_rev[g]) >= 0
 
 
-def test_exact_reclaim_empty_means_loud():
+def test_exact_pressure_refreshes_live_owners():
+    lay = _layer()
+    assert lay.has_sink
+    # Slots full: sink 0 + sealed groups 52..56 (bases 6656..7168).
+    for g in [0, 52, 53, 54, 55, 56]:
+        lay._exact_slot(g)
+        lay.group_base[g] = g * kvarn.KVAR_N_GROUP
+        lay.exact_valid[g] = True
+        if g:
+            lay.sealed[g] = True
+    # Same-sequence owners, 127-stale (touch lag): group 52's base+128
+    # (6784) sits above the stale drop line (6744), so a bare alloc
+    # still overflows...
+    lay.page_owner_n.fill_(7000)
+    try:
+        lay._exact_slot(61)
+    except AssertionError:
+        pass
+    else:
+        raise SystemExit("expected AssertionError without live context")
+    # ...but with live context (true n=7127 on pages 26..28) the refresh
+    # + forced scan frees group 52 and the alloc succeeds.
+    live_bt = torch.tensor([26, 27, 28])
+    s = lay._exact_slot(61, live_bt, 7127)
+    assert int(lay._exact_rev[52]) == -1
+    assert int(lay._exact_rev[61]) == s
+    assert int(lay.page_owner_n[28]) == 7127
+
+
+def test_exact_pressure_empty_means_loud():
     lay = _layer()
     _occupy_exact_sealed(lay, range(6))
-    # Owner 700 protects groups 3..5; groups 1..2 are unsealed... make
-    # every below-window group unsealed so nothing is reclaimable: fill
-    # slots with groups 0..5 but unseal 1..2 and protect the rest.
-    lay.sealed[1] = False
-    lay.sealed[2] = False
-    lay.page_owner_n.fill_(700)
+    # Owner 500: live window [244, 500) covers every live group (plus
+    # sink protection for group 0) -- nothing droppable, still loud.
+    lay.page_owner_n.fill_(500)
     try:
         lay._exact_slot(60)
     except AssertionError:
@@ -183,3 +211,18 @@ def test_stage_reclaim_seals_dead_partial():
     assert int(lay._stage_rev[60]) == s
     # Sealed partial keeps its rows readable (present-gated).
     assert bool(lay.present[1, :10].all())
+
+
+def test_below_windows_strict():
+    lay = _layer()
+    lay.page_owner_n.fill_(-1)
+    lay.page_owner_n[0] = 14699
+    # Stale owner vetoes by its own window (strict): base 14336 overlaps
+    # [14443, 14699), so it is NOT reclaimable without a refresh -- this
+    # is what the live-context refresh in _exact_slot is for.
+    assert not bool(lay._below_all_windows(torch.tensor([14336]))[0])
+    # Clearly below: reclaimable.
+    assert bool(lay._below_all_windows(torch.tensor([14000]))[0])
+    # Untouched pages vote nothing (no owners at all -> no victims).
+    lay.page_owner_n.fill_(-1)
+    assert not bool(lay._below_all_windows(torch.tensor([14000]))[0])

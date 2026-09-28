@@ -1116,51 +1116,26 @@ class CacheLayer_kvarn(CacheLayer):
             self._stage_rev[g] = -1
 
     def _below_all_windows(self, b: torch.Tensor) -> torch.Tensor:
-        """(C,) bool: group bases b below live(o) for EVERY present page
-        owner o, where live(o) = [o - floor, o) with floor = tail +
-        rollback. Sink rows are NOT covered here (callers exclude base 0
-        on sink layers). Untouched pages (owner -1 → 0) contribute the
-        empty window. Fully sync-free (broadcast compare + all-reduce).
+        """(C,) bool: group bases b outside [o - floor, o) for EVERY
+        present page owner o (floor = tail + rollback). Sink rows are NOT
+        covered here (callers exclude base 0 on sink layers). Untouched
+        pages (owner <= 0: no sequence) vote nothing. Fully sync-free
+        (broadcast compare + all-reduce).
 
-        Windows slide only forward, so a group below every live window
-        can never be served again: the only reader that could want it is
-        its own sequence resuming, and resumption advances n forward from
-        the present owner. Owner understatement (page-reuse min) is safe:
-        groups touched by the current call are unsealed (excluded from
-        exact victims; staging victims get sealed, and overwrite unseals),
-        and untouched groups are never read.
+        Windows slide only forward, so a group outside every window can
+        never be served again: resumption advances n forward from the
+        present owner. Stale same-sequence owners (up to the 128-step
+        touch lag) only over-protect; the pressure paths refresh the live
+        pages' owners before testing, so staleness never vetoes a
+        genuinely dead group.
         """
         floor = int(self.tail_effective) + KVAR_N_TAIL_ROLLBACK_TOKENS
-        o = self.page_owner_n.clamp_min(0)
+        o = self.page_owner_n
+        o = o[o > 0]
+        if o.numel() == 0:
+            return torch.zeros_like(b, dtype=torch.bool)
         return ((b.unsqueeze(1) + KVAR_N_GROUP <= (o - floor).unsqueeze(0)) |
                 (b.unsqueeze(1) >= o.unsqueeze(0))).all(dim=1)
-
-    def _reclaim_exact_slot(self, g: int) -> torch.Tensor:
-        """Free one exact slot under pressure (sync-free; empty if none).
-
-        Victim ⟺ slotted + sealed + not the allocating group + (sink:
-        not base 0) + below every live window. The release keeps the
-        valid⟺assigned invariant (kernel/torch tails skip exrev<0 rows),
-        and the sealed records keep serving the victim through the
-        designed exact-missing fallbacks -- but victims are unreadable
-        anyway (window rule), so this is purely slot recycling.
-        """
-        cand = (self._exact_rev >= 0) & self.sealed
-        cand[g] = False
-        if self.has_sink:
-            cand = cand & (self.group_base != 0)
-        idx = cand.nonzero().flatten()
-        if idx.numel() == 0:
-            return idx
-        ok = idx[self._below_all_windows(self.group_base[idx])]
-        if ok.numel() == 0:
-            return ok
-        victim = ok[torch.argmin(self.group_base[ok])]
-        slot = self._exact_rev[victim]
-        self._exact_slots[slot] = -1
-        self._exact_rev[victim] = -1
-        self.exact_valid[victim] = False
-        return slot.reshape(1)
 
     def _reclaim_stage_slot(self, g: int) -> None:
         """Free one staging slot under pressure by sealing the oldest
@@ -1189,17 +1164,41 @@ class CacheLayer_kvarn(CacheLayer):
         victim = int(ok[torch.argmin(self.group_base[ok])])
         self._seal_group(victim)
 
-    def _exact_slot(self, g: int) -> int:
-        """Slot holding group g's exact rows; assigns a free slot."""
+    def _exact_slot(self, g: int, live_bt=None, live_n=None) -> int:
+        """Slot holding group g's exact rows; assigns a free slot.
+
+        live_bt/live_n (the call's full block-table row + int n, torch
+        store paths only): on pressure, refresh the live pages' owners
+        to live_n (sync-free max-put; kills same-sequence staleness up
+        to the 128-step touch lag that would otherwise veto genuinely
+        dead groups, while idle/dead sequences keep exact owners and
+        stay protected) and force an evict scan. Without live context
+        (copy_page) the forced scan still runs on present owners (safe,
+        conservative). Genuine overflow stays a loud assert.
+        """
         s = int(self._exact_rev[g])
         if s >= 0:
             return s
         free = (self._exact_slots < 0).nonzero().flatten()
         if not free.numel():
             # Slot pressure (dead tails across sequential sequences pin
-            # slots: their owners never advance). Reclaim first; genuine
-            # overflow (nothing reclaimable) stays a loud assert below.
-            free = self._reclaim_exact_slot(g)
+            # slots: their owners never advance). Refresh + forced scan
+            # first (frees everything below-window); reclaim second
+            # (strict rule, now on fresh owners); genuine overflow stays
+            # a loud assert below.
+            if live_bt is not None and live_n is not None:
+                row = live_bt.long().flatten()
+                valid = row[(row >= 0) & (row < self.num_pages)]
+                # MAX direction (never understate: prompt-cache-shared
+                # pages keep the longest sequence's owner, mirroring
+                # _touch_batch). Kills same-sequence staleness that would
+                # veto genuinely dead groups below.
+                own = self.page_owner_n[valid]
+                self.page_owner_n[valid] = torch.where(
+                    own < int(live_n), int(live_n), own)
+            self._evict_tick = KVAR_N_GROUP
+            self._evict_exact_all(0)
+            free = (self._exact_slots < 0).nonzero().flatten()
         if not free.numel():
             # Crash-path diagnostics only (zero steady-state cost): who
             # holds the slots at overflow (all alloc paths funnel here).
@@ -1375,12 +1374,13 @@ class CacheLayer_kvarn(CacheLayer):
         exact_blocks dict keys)."""
         return self.exact_valid.nonzero().flatten().tolist()
 
-    def _alloc_exact_block(self, g: int):
+    def _alloc_exact_block(self, g: int, live_bt=None, live_n=None):
         # Fresh blocks read zero (matches the old dict behavior where a
         # missing entry meant zeros); callers then fill resident slots.
         # Assigns a window slot (valid ⟺ assigned: resets/eviction
-        # release, so a valid block always has a slot).
-        s = self._exact_slot(g)
+        # release, so a valid block always has a slot). live_bt/live_n
+        # (torch store paths) feed the pressure path in _exact_slot.
+        s = self._exact_slot(g, live_bt, live_n)
         self.exact_k[s].zero_()
         self.exact_v[s].zero_()
         self.exact_valid[g] = True
@@ -1474,7 +1474,7 @@ class CacheLayer_kvarn(CacheLayer):
             self.page_owner_n[idx] = torch.where(cur < n_b, n_b, cur)
 
     def _store_row_single(self, pages, offs, pos, n_new,
-                          rk, rv, ek, ev, g, s) -> bool:
+                          rk, rv, ek, ev, g, s, bt_row=None) -> bool:
         """Single-row decode fast path. Writes the row when it purely
         appends to an open (or fresh) group; returns False for any policy
         event (reuse with live content, sealed overwrite) so the caller
@@ -1511,7 +1511,7 @@ class CacheLayer_kvarn(CacheLayer):
         if pos0 >= n_new - self.tail_effective - KVAR_N_TAIL_ROLLBACK_TOKENS or \
            (self.has_sink and pos0 < KVAR_N_SINK_TOKENS):
             if not bool(self.exact_valid[gi]):
-                self._alloc_exact_block(gi)
+                self._alloc_exact_block(gi, bt_row, n_new)
             es = int(self._exact_rev[gi])
             self.exact_k[es, si] = ek[0]
             self.exact_v[es, si] = ev[0]
@@ -1526,7 +1526,7 @@ class CacheLayer_kvarn(CacheLayer):
     @torch.inference_mode()
     def _store_rows(self, rows_k: torch.Tensor, rows_v: torch.Tensor,
                     pages: torch.Tensor, offs: torch.Tensor,
-                    pos: torch.Tensor, n_new: int):
+                    pos: torch.Tensor, n_new: int, bt_row=None):
         """
         rows_k/rows_v: (T, kvh, hd) fp16 ORIGINAL domain, at logical
         positions ``pos`` ((T,) long) with owning-sequence length
@@ -1622,7 +1622,7 @@ class CacheLayer_kvarn(CacheLayer):
         base = pos - s
         if rows_k.shape[0] == 1 and \
                 self._store_row_single(pages, offs, pos, n_new,
-                                        rk, rv, ek, ev, g, s):
+                                        rk, rv, ek, ev, g, s, bt_row):
             self._evict_exact_all(1)
             gi = int(g[0])
             if bool(self.present[gi].all()) and not bool(self.sealed[gi]):
@@ -1679,7 +1679,7 @@ class CacheLayer_kvarn(CacheLayer):
             km = m & keep
             if bool(km.any()):
                 if not bool(self.exact_valid[gi]):
-                    self._alloc_exact_block(gi)
+                    self._alloc_exact_block(gi, bt_row, n_new)
                 es = int(self._exact_rev[gi])
                 self.exact_k[es, s[km]] = ek[km]
                 self.exact_v[es, s[km]] = ev[km]
@@ -2325,7 +2325,7 @@ class CacheLayer_kvarn(CacheLayer):
             pages = bt[b, pos // PAGE_SIZE]
             offs = pos % PAGE_SIZE
             self._store_rows(k[pages, offs], v[pages, offs], pages, offs,
-                             pos, seqlens[b] + length)
+                             pos, seqlens[b] + length, bt[b])
 
     @override
     def update_kv_direct(self, cache_seqlens: torch.Tensor, block_table: torch.Tensor,
@@ -2352,7 +2352,8 @@ class CacheLayer_kvarn(CacheLayer):
                 seqlens[b] + torch.arange(length, device=bt.device)
             pages = bt[b, pos // PAGE_SIZE]
             offs = pos % PAGE_SIZE
-            self._store_rows(k[b], v[b], pages, offs, pos, seqlens[b] + length)
+            self._store_rows(k[b], v[b], pages, offs, pos, seqlens[b] + length,
+                             bt[b])
 
     @override
     def copy_page(self, source: CacheLayer_kvarn, from_page: int, to_page: int,
