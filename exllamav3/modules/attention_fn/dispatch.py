@@ -207,14 +207,15 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         # partition is airtight even if the valid⟺assigned invariant
         # wobbles: kernel covers exrev>=0, torch covers exrev<0.
         Kt, Vt, tg = layer.kvarn_online_tail(n, block_table[0], pos=tpos)
-        ok = (layer._exact_rev[tg] < 0).to(torch.float32)
         # Batched scores over heads (one bmm: identical per-element
         # contraction order), fused masked-softmax + value reduction
-        # (one launch, was ~5 dispatches + the pe temporary).
+        # (one launch, was ~5 dispatches + the pe temporary). The mask
+        # lives inside the kernel now (same exrev array the serve kernel
+        # reads: torch owns exrev<0 rows, airtight by construction).
         Qh = Q.reshape(kvh, qpk, hd).float()  # head-grouped like the loop
         st = torch.bmm(Qh, Kt.permute(1, 2, 0)) * scale  # (kvh, qpk, R)
         tail_m, tail_den, tail_num = kvarn_triton_online_tail_reduce(
-            st, Vt, ok)
+            st, Vt, tg, layer._exact_rev)
         tail_m = tail_m.reshape(qh)
         tail_den = tail_den.reshape(qh)
         tail_num = tail_num.reshape(qh, hd)

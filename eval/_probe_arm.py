@@ -127,13 +127,13 @@ def main():
 
     sn_ = min(128, n)
     t0_ = max(0, n - tail_eff)
-    tpos = torch.cat([torch.arange(sn_, device=dev),
-                      torch.arange(t0_, n, device=dev)]).long()
 
     def do_mask():
-        tg = bt[0][tpos // PAGE_SIZE] * gps + (tpos % PAGE_SIZE) // KVAR_N_GROUP
-        return (lay0._exact_rev[tg] >= 0).to(torch.float32)
-    ok = do_mask()
+        # Mirrors dispatch: tpos built once (shared by tail gather);
+        # the exrev mask now lives inside the fused tail kernel.
+        return torch.cat([torch.arange(sn_, device=dev),
+                          torch.arange(t0_, n, device=dev)]).long()
+    do_mask()
     t_mask = hot(do_mask, iters=500)
 
     def do_tail():
@@ -210,20 +210,15 @@ def main():
     t_fmerge = hot(do_fmerge, iters=500)
 
     # Fused tail reduce vs the torch block above. Rebuild the same
-    # inputs here (do_tail's are function-local).
-    from exllamav3.cache.kvarn import KVAR_N_SINK_TOKENS as _SN
+    # inputs here (do_tail's are function-local); _tg doubles as the
+    # mask index (same array the serve kernel reads).
     _Kt, _Vt, _tg = lay0.kvarn_online_tail(n, bt[0])
-    _sn = min(_SN, n)
-    _t0 = max(0, n - tail_eff)
-    _tpos = torch.cat([torch.arange(_sn, device=dev),
-                       torch.arange(_t0, n, device=dev)]).long()
-    _tg2 = bt[0][_tpos // PAGE_SIZE] * gps + (_tpos % PAGE_SIZE) // KVAR_N_GROUP
-    _okk = (lay0._exact_rev[_tg2] < 0).to(torch.float32)
     _Qh = Q1.reshape(kvh, qpk, hd).float()
     _st = torch.bmm(_Qh, _Kt.permute(1, 2, 0)) * scale
 
     def do_ftail():
-        fm, fd, fn = kvarn_triton_online_tail_reduce(_st, _Vt, _okk)
+        fm, fd, fn = kvarn_triton_online_tail_reduce(
+            _st, _Vt, _tg, lay0._exact_rev)
         return fm.reshape(qh), fd.reshape(qh), fn.reshape(qh, hd)
     ftm, ftd, ftn = do_ftail()
     for name, got, ref in (("m", ftm, tail_m), ("den", ftd, tail_den),
