@@ -12,7 +12,7 @@ from exllamav3 import Config, Model, Tokenizer, Cache
 from exllamav3.cache import CacheLayer_fp16, CacheLayer_kvarn
 from exllamav3.cache.quant import CacheLayer_quant
 from exllamav3.cache.kvarn import kvarn_parse_preset
-from kvarn_microkld import SAMPLER_TEXT, populate
+from kvarn_microkld import SAMPLER_TEXT, populate, _bshape
 
 MODEL = ("C:/Users/yoho/Downloads/tabbyAPI/models/"
          "Qwen3.8-27B-exl3-SC_1.40bpw_H3_V3")
@@ -98,6 +98,22 @@ def main():
             k, v = lay.get_kv(se, bt)
             del k, v
     torch.cuda.synchronize()
+    # Fire one imageless arm decode so the online serve temps exist
+    # before accounting (they are real serving VRAM: serve partials +
+    # tail temps, per layer). Fail-soft: without TRITON/IMAGELESS the
+    # arm declines and there is nothing extra to count. The re-stored
+    # last row is idempotent for accounting (same slots, same shapes).
+    import os as _os
+    if _os.environ.get("EXL3_KVARN_IMAGELESS") == "1":
+        try:
+            p = {"cache": c_kvarn, "attn_mode": "flash_attn",
+                 "batch_shape": (1, _bshape(ids.shape[1])), "past_len": n - 1}
+            out = model.forward(ids[:, n - 1:n], p)
+            del out
+            torch.cuda.synchronize()
+            print("arm fired once for accounting", flush=True)
+        except Exception as e:
+            print(f"arm fire skipped: {type(e).__name__}: {e}", flush=True)
     account(c_fp16, "fp16 cache-only")
     account(c_q8, "q8 cache-only")
     account(c_kvarn, f"kvarn({PRESET}) cache-only")
