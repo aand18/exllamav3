@@ -33,9 +33,14 @@ This checkout works on a fork with WIP branches. Rules:
   status, test plan, verify command, key commits, blocked-on, history notes).
 - Canonical workflow docs live here on `fork-overview` (this file,
   `BRANCHES.md`, README header). Feature branches carry only a static
-  pointer file, never copies — copies drift. Agents on a feature branch
-  read these via `git show fork-overview:AGENTS.md`; status and row updates
-  are docs-only commits made directly on `fork-overview` and pushed to `fork`.
+  pointer file, never copies — copies drift.
+- Session start (every session, every branch, before any other action):
+  `git fetch origin fork-overview`, then read `git show
+  origin/fork-overview:AGENTS.md` and `git show
+  origin/fork-overview:BRANCHES.md`. The `origin/` prefix is required:
+  clones have no local `fork-overview` branch, so the bare `git show
+  fork-overview:...` form fails. Status and row updates are docs-only
+  commits made directly on `fork-overview` and pushed to `fork`.
 - Keep `master` pullable: no extra commits, no docs edits on `master`.
 - Never force-push or delete `master` or `fork-overview` (private repos on
   free accounts get no GitHub branch protection, so this rule is the
