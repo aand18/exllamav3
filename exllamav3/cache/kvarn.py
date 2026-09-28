@@ -116,14 +116,14 @@ if TYPE_CHECKING:
 KVAR_N_GROUP = 128
 # Slot-window sizes for memory-plan storage (Task 2+): live staging and
 # exact groups map 1:1 onto slots; overflow is a loud assert.
-# Staging is 3 slots: full groups seal (bit-identically) mid-call as soon
-# as slots run out, and dead partials seal via pressure relief. Measured:
-# 1 live steady-state, 2 high-water over 610 decode steps (current-fill +
-# never-sealing sink); margin 1. Exact is 6 slots: 3 live steady-state, 5
-# high-water over decode (floor + evict-interval accumulation) -> margin
-# 1; do not cut further without tightening evict cadence first. SWA
-# layers size up from the window in __init__ (still context-independent).
-KVAR_N_STAGE_SLOTS = 3
+# Staging is 4 slots: full groups seal (bit-identically) mid-call as soon
+# as slots run out. Measured: 1 live steady-state, 2 high-water over 610
+# decode steps; prefill bursts recycle through relief (logic is
+# count-agnostic). Exact is 6 slots: 3 live steady-state, 5 high-water
+# over decode (floor + evict-interval accumulation) -> margin 1; do not
+# cut further without tightening evict cadence first. SWA layers size up
+# from the window in __init__ (still context-independent).
+KVAR_N_STAGE_SLOTS = 4
 KVAR_N_STAGE_SLOTS_NATIVE_EXACT = 40
 KVAR_N_EXACT_SLOTS = 6
 KVAR_N_INV_SQRT_128 = 0.08838834764831845
