@@ -120,7 +120,7 @@ def strip_reasoning(s: str, args) -> str:
 
 
 def write_jsonl(rows: list[dict], path: Path) -> None:
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
