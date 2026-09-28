@@ -20,6 +20,7 @@ except Exception:
     pass
 from exllamav3 import model_init, Generator, Job
 import argparse
+import torch
 
 FILLER = (
     "The municipal archive maintains records of every charter, survey, and "
@@ -43,7 +44,7 @@ def build_haystack(tokenizer, ntok, depth, seed=7):
     hay = (fids * rep)[:budget]
     at = min(int(len(hay) * depth), len(hay))
     ids = hay[:at] + needle_ids + hay[at:]
-    text = tokenizer.decode(ids)
+    text = tokenizer.decode(torch.tensor(ids))
     return text + "\n\n" + QUESTION, "BLUEBERRY-7429"
 
 
@@ -75,7 +76,6 @@ if __name__ == "__main__":
                         help="Fresh generator + clean KVarN slots per item")
     args = parser.parse_args()
 
-    import torch
     t_all = time.time()
     model, config, cache, tokenizer = model_init.init(args)
     sampler = model_init.get_arg_sampler(args)
