@@ -164,6 +164,24 @@ PARITY=1 same code: 58.0/58.4/56.3 tok/s decode; KLD digits identical
 at all lengths. End-to-end allocator peaks are equal within 0.1GB --
 but that is shared weights/temps dominating, NOT cache parity.
 
+Imageless baseline @76b7fb0 (2026-09-29, `EXL3_KVARN_TRITON=1
+EXL3_KVARN_IMAGELESS=1`, kvarn4; 8k rows reuse 2026-09-28 same-HEAD
+runs; CPU suite 90 passed 7 skipped; fused-kernel parity maxdiff 0.0
+throughout; ARMATTN PASS @8k):
+
+| ctx | fp16 pp | kvarn pp | fp16 tg256 (peak) | kvarn tg256 (peak) | KLD med/mean/max/p99 | same-top |
+|-----|---------|----------|-------------------|---------------------|----------------------|----------|
+| 8192 | 3.2-3.3s, ~2525 tok/s (12.5GB) | 8.3-8.4s, ~980 tok/s (12.6GB) | 87.5-88.1 (10.4GB) | 43.0 (10.6GB) | 1e-6 / 2.3e-5 / 6.2e-4 / 3.29e-4 | 100.00% |
+| 16384 | 6.5s, ~2532 tok/s (13.2GB) | 16.4-16.5s, ~997 tok/s (13.2GB) | 83.1-83.2 (11.1GB) | 42.1/42.4 (11.3GB) | 1e-6 / 1.0e-5 / 1.85e-4 / 1.65e-4 | 100.00% |
+
+Probe-arm per-layer (us, imageless): store 245.8, qwht 11.6, eref
+44.7, serve 97.2, stats 68.6, mask 26.8, tail 412.4, merge 112.9,
+fmerge 17.9, ftail 50.0, fgat 34.0, full arm 805.7.
+Run-variance rule: first-run-of-day tg reads low (38.3 @8k, 34.1
+@16k) vs warmed repeats (43.0 @8k; 42.1/42.4 @16k) with fp16 and KLD
+digits bit-identical across all runs -- always warm up / re-run
+before comparing tg.
+
 Cache-only accounting (MB; 16 cached layers; ours via
 `eval/_probe_vram.py` per-tensor bytes, Bee via `llama-bench
 --kv-memory` `kv_resident_bytes` + component fields; `~` = summed from
