@@ -179,6 +179,19 @@ def test_wht_rows_matches_torch_head():
         y = torch.randn(nrows, hd, dtype=torch.float32, device="cuda")
         assert torch.equal(kt.kvarn_triton_wht_rows(y, hd),
                            kvarn.kvarn_wht_head(y, hd)), (hd, nrows)
+    # Spec B prefill shape: stacked (T,2,kvh,hd) fresh temp, n=T*2*kvh
+    # rows, T=4096 (kvh endpoints 2..8, all head dims). Both out-of-place
+    # and inplace-on-fresh-temp must equal the torch reference bit-exact.
+    for kvh in (2, 8):
+        for hd in (128, 256, 512):
+            z = torch.randn(4096, 2, kvh, hd, dtype=torch.float32,
+                            device="cuda")
+            assert torch.equal(kt.kvarn_triton_wht_rows(z, hd),
+                               kvarn.kvarn_wht_head(z, hd)), (kvh, hd)
+            zi = z.clone()
+            got_i = kt.kvarn_triton_wht_rows(zi, hd, inplace=True)
+            assert torch.equal(got_i, kvarn.kvarn_wht_head(z, hd)), \
+                (kvh, hd, "inplace")
 
 
 @pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
@@ -295,6 +308,72 @@ def test_fused_serve_matches_torch_path():
                          "page_owner_n", "stage_k", "stage_v",
                          "exact_valid", "exact_k", "exact_v",
                          "_img_k", "_img_v"):
+                assert torch.equal(getattr(A, name), getattr(B, name)), \
+                    (hd, name)
+        finally:
+            if old is None:
+                os.environ.pop("EXL3_KVARN_TRITON", None)
+            else:
+                os.environ["EXL3_KVARN_TRITON"] = old
+
+
+@pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
+def test_prefill_4096_chunks_match_torch_path():
+    # Spec B prefill twin: twin layers, 4096-token prefill in 4096-wide
+    # chunks (single chunk) plus 1024-wide chunks, fused WHT (env on) vs
+    # torch (env off). State plus get_kv outputs must be identical for
+    # every head dim (covers the T=4096, n=T*2*kvh inplace path).
+    from types import SimpleNamespace
+
+    for hd in (128, 256, 512):
+        def make():
+            attn = SimpleNamespace(num_kv_heads=2, head_dim=hd,
+                                   qsa_indexer=None)
+            lay = kvarn.CacheLayer_kvarn(None, attn, 0, 8192,
+                                         k_bits=4, v_bits=4, is_swa=False)
+            lay.alloc(torch.device("cuda"))
+            return lay
+
+        torch.manual_seed(200 + hd)
+        A, B = make(), make()
+        bt = torch.arange(32, dtype=torch.int32, device="cuda").view(1, 32)
+        old = os.environ.get("EXL3_KVARN_TRITON")
+        try:
+            with torch.inference_mode():
+                # Build the eref cache up front so the multi-row hook
+                # path maintains it on both (triton-WHT vs torch
+                # prefill): the final compare isolates hook exactness.
+                A._eref_ensure()
+                B._eref_ensure()
+                pos = 0
+                for length in (4096, 1024, 1024):
+                    if pos + length > 6144:
+                        break
+                    k = torch.randn(1, length, 2, hd, dtype=torch.float16,
+                                    device="cuda")
+                    v = torch.randn(1, length, 2, hd, dtype=torch.float16,
+                                    device="cuda")
+                    se = torch.tensor([pos], dtype=torch.int32,
+                                      device="cuda")
+                    os.environ["EXL3_KVARN_TRITON"] = "1"
+                    B.update_kv_direct(se, bt, k, v, length)
+                    kb, vb = B.get_kv(se + length, bt)
+                    del os.environ["EXL3_KVARN_TRITON"]
+                    A.update_kv_direct(se, bt, k, v, length)
+                    ka, va = A.get_kv(se + length, bt)
+                    assert torch.equal(ka, kb) and torch.equal(va, vb), \
+                        (hd, length, pos)
+                    pos += length
+            if bool(getattr(B, "_ov_pending", False)):
+                kt.kvarn_triton_unoverlay(B._img_k, B._img_v, B)
+            _d = B._dirty_mask.nonzero().flatten()
+            if _d.numel():
+                B._refresh_groups(_d)
+                B._dirty_mask[_d] = False
+            for name in ("records", "sealed", "present", "group_base",
+                         "page_owner_n", "stage_k", "stage_v",
+                         "exact_valid", "exact_k", "exact_v",
+                         "_img_k", "_img_v", "_ov_eref_w"):
                 assert torch.equal(getattr(A, name), getattr(B, name)), \
                     (hd, name)
         finally:

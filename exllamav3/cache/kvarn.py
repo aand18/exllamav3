@@ -327,6 +327,42 @@ def _kvarn_use_triton() -> bool:
     return os.environ.get("EXL3_KVARN_TRITON", "0") == "1"
 
 
+# Triton row-WHT grid cap (Spec B risk): the head kernel is proven to
+# ~1500 rows; the cap covers T=4096 prefill (n=T*2*kvh <= 65536 for
+# kvh <= 8) with a torch fallback beyond it (correctness first).
+_TRITON_WHT_MAX_ROWS = 65536
+
+
+def _kvarn_wht_head_maybe_triton(x: torch.Tensor, head_dim: int) -> torch.Tensor:
+    """Out-of-place head-WHT via the Triton kernel when runnable, else torch.
+
+    Out-of-place only (never mutates persistent stage/image; the caller
+    owns the fresh temp when it wants inplace). Silent torch fallback
+    when the kernel cannot run (env off, non-CUDA, over the row cap):
+    these call sites previously had no Triton path, so no new loud
+    failure is introduced here (the store prefill path keeps its own
+    loud assert).
+    """
+    if _kvarn_use_triton() and x.is_cuda:
+        try:
+            from ..modules.attention_fn.kvarn_triton import (
+                kvarn_triton_available, kvarn_triton_wht_rows)
+        except ImportError:
+            return kvarn_wht_head(x, head_dim)
+        try:
+            runnable = bool(kvarn_triton_available())
+        except Exception:
+            runnable = False
+        if runnable:
+            try:
+                n = x.reshape(-1, head_dim).shape[0]
+            except Exception:
+                n = _TRITON_WHT_MAX_ROWS + 1
+            if 0 < n <= _TRITON_WHT_MAX_ROWS:
+                return kvarn_triton_wht_rows(x, head_dim, inplace=False)
+    return kvarn_wht_head(x, head_dim)
+
+
 def _eref_wht(x: torch.Tensor, head_dim: int) -> torch.Tensor:
     """Head-WHT for the incremental eref cache: Triton row kernel (1
     launch) when runnable, else the torch reference (bit-exact per the
@@ -1681,8 +1717,11 @@ class CacheLayer_kvarn(CacheLayer):
         n_new = int(n_new)
         # One batched WHT for K+V (was two calls): same per-element
         # math, ~half the launches. Bit-exact (batching preserves order).
-        # With EXL3_KVARN_TRITON=1 the fused Triton row-WHT runs instead
-        # (1 launch); PARITY=1 asserts it against this torch reference.
+        # With EXL3_KVARN_TRITON=1 the Triton row-WHT runs instead
+        # (1 launch, inplace on the fresh stacked temp: n=T*2*kvh rows);
+        # PARITY=1 asserts it against the out-of-place torch reference
+        # taken on the pre-transform stacked (inplace mutates it).
+        # Over-cap grids (>_TRITON_WHT_MAX_ROWS rows) fall back to torch.
         if _kvarn_use_triton():
             from ..modules.attention_fn.kvarn_triton import (
                 kvarn_triton_available, kvarn_triton_wht_rows,
@@ -1690,13 +1729,19 @@ class CacheLayer_kvarn(CacheLayer):
             assert kvarn_triton_available(), \
                 "EXL3_KVARN_TRITON=1 but the Triton path is unavailable " \
                 "(needs triton + CUDA); unset it for the torch path."
-            stacked = torch.stack((rows_k.float(), rows_v.float()))
-            rkv_t = kvarn_triton_wht_rows(stacked, self.head_dim)
-            if kvarn_triton_parity_check():
-                rkv_r = kvarn_wht_head(stacked, self.head_dim)
-                assert torch.equal(rkv_t, rkv_r), \
-                    "KVarN Triton store WHT disagrees with torch"
-            rkv = rkv_t
+            stacked = torch.stack((rows_k.float(), rows_v.float())).contiguous()
+            n = stacked.reshape(-1, self.head_dim).shape[0]
+            if stacked.is_cuda and 0 < n <= _TRITON_WHT_MAX_ROWS:
+                if kvarn_triton_parity_check():
+                    rkv_r = kvarn_wht_head(stacked.clone(), self.head_dim)
+                rkv_t = kvarn_triton_wht_rows(stacked, self.head_dim,
+                                             inplace=True)
+                if kvarn_triton_parity_check():
+                    assert torch.equal(rkv_t, rkv_r), \
+                        "KVarN Triton store WHT disagrees with torch"
+                rkv = rkv_t
+            else:
+                rkv = kvarn_wht_head(stacked, self.head_dim)
         else:
             rkv = kvarn_wht_head(torch.stack((rows_k.float(), rows_v.float())),
                                  self.head_dim)
@@ -2024,8 +2069,10 @@ class CacheLayer_kvarn(CacheLayer):
         ov = out_v[page, base: base + KVAR_N_GROUP]
         if bool(self.sealed[g]):
             kk, vv = self._sealed_tiles(g)
-            ok.copy_(kvarn_wht_head(kk, self.head_dim).half())
-            ov.copy_(kvarn_wht_head(vv, self.head_dim).half())
+            # Spec B prefill: inverse WHT via the Triton kernel
+            # out-of-place when runnable, else the torch reference.
+            ok.copy_(_kvarn_wht_head_maybe_triton(kk, self.head_dim).half())
+            ov.copy_(_kvarn_wht_head_maybe_triton(vv, self.head_dim).half())
         else:
             # Slot-windowed staging; unassigned groups read zeros,
             # matching the old dict-miss path.
@@ -2034,8 +2081,10 @@ class CacheLayer_kvarn(CacheLayer):
                 ok.zero_()
                 ov.zero_()
             else:
-                ok.copy_(kvarn_wht_head(self.stage_k[s].float(), self.head_dim).half())
-                ov.copy_(kvarn_wht_head(self.stage_v[s].float(), self.head_dim).half())
+                ok.copy_(_kvarn_wht_head_maybe_triton(
+                    self.stage_k[s].float(), self.head_dim).half())
+                ov.copy_(_kvarn_wht_head_maybe_triton(
+                    self.stage_v[s].float(), self.head_dim).half())
 
     @torch.inference_mode()
     def _apply_exact_overlay(self, k: torch.Tensor, v: torch.Tensor,
@@ -2249,8 +2298,11 @@ class CacheLayer_kvarn(CacheLayer):
                 rot_v.append(bv)
                 rot_gs.append(Gs_o)
         if rot_k:
-            mat_k = kvarn_wht_head(torch.cat(rot_k), hd).half()
-            mat_v = kvarn_wht_head(torch.cat(rot_v), hd).half()
+            # Spec B prefill: batched inverse WHT via the Triton kernel
+            # out-of-place when runnable, else the torch reference
+            # (same per-row math; the wht_done sealed branch above stays).
+            mat_k = _kvarn_wht_head_maybe_triton(torch.cat(rot_k), hd).half()
+            mat_v = _kvarn_wht_head_maybe_triton(torch.cat(rot_v), hd).half()
             rGs = torch.cat(rot_gs)
             flat_k[rGs] = mat_k
             flat_v[rGs] = mat_v
