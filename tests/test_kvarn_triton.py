@@ -202,6 +202,12 @@ def test_fused_store_matches_torch_path():
     old = os.environ.get("EXL3_KVARN_TRITON")
     try:
         with torch.inference_mode():
+            # Build the incremental eref cache up front so the fused
+            # path exercises the in-kernel eref write-through (DO_EREF)
+            # while the torch path uses the host slot refresh: the
+            # final compare below then isolates write-through exactness.
+            A._eref_ensure()
+            B._eref_ensure()
             for step in range(300):
                 k = torch.randn(1, 1, 2, 128, dtype=torch.float16,
                                 device="cuda")
@@ -216,6 +222,8 @@ def test_fused_store_matches_torch_path():
                      "page_owner_n", "stage_k", "stage_v",
                      "exact_valid", "exact_k", "exact_v"):
             assert torch.equal(getattr(A, name), getattr(B, name)), name
+        # In-kernel eref write-through (B) vs host slot refresh (A).
+        assert torch.equal(A._ov_eref_w, B._ov_eref_w), "eref"
         with torch.inference_mode():
             se = torch.tensor([300], dtype=torch.int32, device="cuda")
             ka, va = A.get_kv(se, bt)

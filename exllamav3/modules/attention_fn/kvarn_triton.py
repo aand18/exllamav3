@@ -256,11 +256,12 @@ if _have_triton:
         stage_rev_ptr,                   # (G,) int64 group -> staging slot
         exact_rev_ptr,                   # (G,) int64 group -> exact slot
         img_k_ptr, img_v_ptr,            # (P, 256, kvh, HD) fp16 image (or dummy)
+        eref_v_ptr,                      # (E, 128, kvh, HD) fp32 WHT'd-V cache
         status_ptr,                      # (2,) int64 out: [code, group]
         KVH: tl.constexpr, HD: tl.constexpr, GPS: tl.constexpr,
         TAIL_KEEP: tl.constexpr, SINK_N: tl.constexpr,
         HAS_SINK: tl.constexpr, TAIL_IS_BF16: tl.constexpr,
-        DO_IMG: tl.constexpr,
+        DO_IMG: tl.constexpr, DO_EREF: tl.constexpr,
     ):
         # Fused single-row decode store (bsz 1, length 1, non-SWA).
         # Grid (2*KVH,) programs x HD lanes. All policy is predicated
@@ -346,6 +347,15 @@ if _have_triton:
             tl.store(exact_v_ptr + e_off, e_row_v.to(tl.float16),
                      mask=(~is_k) & keep & go)
         tl.store(exact_valid_ptr + g, True, mask=keep & go)
+        # Eref write-through (incremental eref cache): the fp32 WHT'd V
+        # row lands directly in the cache slot, so the host pays no rev
+        # sync and no 128-row refresh launch. Bit-identical to a slot
+        # refresh: same fp32 row (rv), same e_off, V rows only. Pruned
+        # entirely when the cache is not yet built (DO_EREF off: dummy
+        # pointer never touched).
+        if DO_EREF:
+            tl.store(eref_v_ptr + e_off, row_v,
+                     mask=(~is_k) & keep & go)
 
         cur_owner = tl.load(owner_ptr + page)
         new_owner = tl.where(cur_owner < 0, n_new,
@@ -453,6 +463,15 @@ def kvarn_triton_store_row(layer, rows_k, rows_v, pages_1, offs_1, pos_1,
         img_k, img_v, do_img = rows_k, rows_v, False
     else:
         do_img = True
+    # Incremental eref write-through: the kernel stores the fp32 WHT'd V
+    # row directly (no host rev sync, no refresh launch). Cache-absent
+    # (None, pre-first-serve) prunes the write; the dummy is never
+    # touched (same pattern as DO_IMG above).
+    eref_w = layer._ov_eref_w
+    if eref_w is None:
+        eref_w, do_eref = rows_v, False
+    else:
+        do_eref = True
     # Callers pass long already (block_table.long() upstream): skip the
     # no-op converts (same tensor object .to() would return, minus three
     # dispatches per layer per step).
@@ -473,11 +492,12 @@ def kvarn_triton_store_row(layer, rows_k, rows_v, pages_1, offs_1, pos_1,
         layer.page_owner_n, layer.page_pinned,
         layer._stage_rev, layer._exact_rev,
         img_k, img_v,
+        eref_w,
         status,
         kvh, hd, gps,
         tail_keep, sink_n, bool(layer.has_sink),
         layer.tail_dtype == torch.bfloat16,
-        do_img,
+        do_img, do_eref,
     )
     code, g = status.tolist()
     return int(code), int(g)

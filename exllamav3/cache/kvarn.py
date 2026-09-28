@@ -1656,20 +1656,14 @@ class CacheLayer_kvarn(CacheLayer):
                 img, self._img_v if img is not None else None)
             if code == 0:
                 # Pure append: the image is current via write-through,
-                # nothing dirtied (the sweep below stays empty). The fused
-                # kernel wrote one exact row: refresh only that slot's
-                # eref (touched group gg from status[1]; slot via rev).
-                # gg is a host int (single status sync inside the kernel
-                # wrapper); rev needs one more. No valid-check: the group
-                # was just written, so valid⟺assigned holds; a -1 rev
-                # no-ops safely inside _eref_refresh_slot.
-                self._eref_refresh_slot(
-                    int(self._exact_rev[gg]) if gg >= 0 else -1)
+                # nothing dirtied (the sweep below stays empty). The
+                # fused kernel wrote one exact row AND its eref row
+                # (in-kernel write-through): no host rev sync, no
+                # refresh launch. Seals keep exact content, so the
+                # cache stays valid through them too.
                 self._evict_exact_all(1)
                 return
             if code == 2:
-                self._eref_refresh_slot(
-                    int(self._exact_rev[gg]) if gg >= 0 else -1)
                 self._evict_exact_all(1)
                 self._seal_group(gg)
                 self._dirty_mask[gg] = True
