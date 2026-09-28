@@ -168,13 +168,12 @@ Standing bench requirements (2026-09-29, user-locked):
   "capital of France" -> Paris, aborts the probe on fail) + short
   reasoning (`bbeh_mini --limit 3 -fresh`) -- never go deep on a
   wrong path.
-- VRAM guard (user-locked): poll `nvidia-smi
-  --query-gpu=memory.free` BEFORE every GPU run (must show ~0 used =
-  idle; a stale process holding VRAM gets `taskkill`ed only if it is
-  our own timed-out benchmark child), DURING long runs (sample
-  mid-run for anything over ~5min), and AFTER every run (must return
-  to idle). Abort the run if free VRAM < 100MB at any check; never
-  start a run without 1GB headroom over the expected peak.
+- VRAM guard (project-wide rule, see `AGENTS.md` on `fork-overview`):
+  every GPU run is wrapped with `eval/smi_guard.py`, which polls
+  `nvidia-smi memory.free` and KILLS the task the moment free VRAM
+  drops under 100MB (only PIDs that appeared after launch are ever
+  killed). `0 used` before starting, idle after finishing, 1GB
+  headroom over the expected peak before starting.
 
 | ctx | fp16 pp | kvarn pp | fp16 tg256 (peak) | kvarn tg256 (peak) | KLD same-top |
 |-----|---------|----------|-------------------|---------------------|--------------|
