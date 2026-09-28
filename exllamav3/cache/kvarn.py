@@ -116,14 +116,14 @@ if TYPE_CHECKING:
 KVAR_N_GROUP = 128
 # Slot-window sizes for memory-plan storage (Task 2+): live staging and
 # exact groups map 1:1 onto slots; overflow is a loud assert.
-# Staging is 4 slots: full groups seal (bit-identically) mid-call as soon
-# as slots run out. Measured: 1 live steady-state, 2 high-water over 610
-# decode steps; prefill bursts recycle through relief (logic is
-# count-agnostic). Exact is 6 slots: 3 live steady-state, 5 high-water
-# over decode (floor + evict-interval accumulation) -> margin 1; do not
-# cut further without tightening evict cadence first. SWA layers size up
-# from the window in __init__ (still context-independent).
-KVAR_N_STAGE_SLOTS = 4
+# Staging is 3 slots: full groups seal (bit-identically) mid-call as soon
+# as slots run out, and dead partials seal via pressure relief. Measured:
+# 1 live steady-state, 2 high-water over 610 decode steps (current-fill +
+# never-sealing sink); margin 1. Exact is 6 slots: 3 live steady-state, 5
+# high-water over decode (floor + evict-interval accumulation) -> margin
+# 1; do not cut further without tightening evict cadence first. SWA
+# layers size up from the window in __init__ (still context-independent).
+KVAR_N_STAGE_SLOTS = 3
 KVAR_N_STAGE_SLOTS_NATIVE_EXACT = 40
 KVAR_N_EXACT_SLOTS = 6
 KVAR_N_INV_SQRT_128 = 0.08838834764831845
@@ -1255,13 +1255,15 @@ class CacheLayer_kvarn(CacheLayer):
         return (KVAR_N_GROUP, self.num_kv_heads, self.head_dim)
 
     def kvarn_online_maxw(self) -> int:
-        """Tail-block capacity (imageless serve): sink + tail window +
-        open-row margin (2 groups). Fixed per layer config; callers take
-        sized views (no mask needed: every served position < n holds a
-        written row).
+        """Tail-block capacity (imageless serve): sink + tail window.
+        Exact bound (not a margin): tpos builds arange(sink_n) +
+        arange(t0, n) with sink_n <= 128 and n - t0 <= tail_effective,
+        so R <= sink + tail_effective always. Callers take sized views
+        (no mask needed: every served position < n holds a written row).
+        Tight sizing matters: these fp32 temps are MBs per layer (see
+        the VRAM ledger in doc/kvarn-4090.md).
         """
-        return int(KVAR_N_SINK_TOKENS) + int(self.tail_effective) + \
-            2 * KVAR_N_GROUP
+        return int(KVAR_N_SINK_TOKENS) + int(self.tail_effective)
 
     def kvarn_online_tail(self, n: int, bt_row: torch.Tensor,
                             pos: torch.Tensor | None = None):
