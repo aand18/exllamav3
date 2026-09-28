@@ -20,6 +20,9 @@ NTOK = int(sys.argv[1]) if len(sys.argv) > 1 else 8192
 CHUNK = 4096
 # Gospel presets: K4V4 safe baseline, K4V2 the pick (vLLM #46613).
 PRESET = sys.argv[2] if len(sys.argv) > 2 else "kvarn4"
+# alloc-only: allocate + account without populate (seconds even at 128k;
+# sizes are geometry-fixed; live-slot counts need populate, read 0 here).
+ALLOC_ONLY = "alloc-only" in sys.argv[3:]
 
 
 def account(cache, tag):
@@ -71,10 +74,19 @@ def main():
                    layer_type=CacheLayer_fp16)
     c_q8 = Cache(model, max_num_tokens=NTOK + 256,
                  layer_type=CacheLayer_quant, k_bits=8, v_bits=8)
+    c_q4 = Cache(model, max_num_tokens=NTOK + 256,
+                 layer_type=CacheLayer_quant, k_bits=4, v_bits=4)
     c_kvarn = Cache(model, max_num_tokens=NTOK + 256,
                     layer_type=CacheLayer_kvarn,
                     k_bits=k_bits, v_bits=v_bits)
     model.load("cuda:0", progressbar=False)
+    if ALLOC_ONLY:
+        print("alloc-only: no populate, sizes only", flush=True)
+        account(c_fp16, "fp16 cache-only")
+        account(c_q8, "q8 cache-only")
+        account(c_q4, "q4 cache-only")
+        account(c_kvarn, f"kvarn({PRESET}) cache-only")
+        return
     tokenizer = Tokenizer.from_config(config)
     reps = max(16, (NTOK // 24) + 2)
     ids = tokenizer.encode(SAMPLER_TEXT * reps)[:, :NTOK]
@@ -82,6 +94,7 @@ def main():
     with torch.inference_mode():
         populate(model, c_fp16, ids, CHUNK, n)
         populate(model, c_q8, ids, CHUNK, n)
+        populate(model, c_q4, ids, CHUNK, n)
         populate(model, c_kvarn, ids, CHUNK, n)
     # Serve once so lazy temps (kvarn image) exist.
     se = torch.tensor([n], dtype=torch.int32, device="cuda:0")
@@ -92,6 +105,9 @@ def main():
             k, v = lay.get_kv(se, bt)
             del k, v
         for lay in c_q8.layers.values():
+            k, v = lay.get_kv(se, bt)
+            del k, v
+        for lay in c_q4.layers.values():
             k, v = lay.get_kv(se, bt)
             del k, v
         for lay in c_kvarn.layers.values():
@@ -116,6 +132,7 @@ def main():
             print(f"arm fire skipped: {type(e).__name__}: {e}", flush=True)
     account(c_fp16, "fp16 cache-only")
     account(c_q8, "q8 cache-only")
+    account(c_q4, "q4 cache-only")
     account(c_kvarn, f"kvarn({PRESET}) cache-only")
 
 

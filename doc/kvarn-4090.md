@@ -256,22 +256,50 @@ needle 4/4 in 66s; bbeh-mini --limit 3 0/3 clean exit (jsonl utf-8
 fix); smi showed 0 used before every run and after every run, min
 free ~1GB (128k kvarn prefill peak 23.1GB).
 
-Plan to goal (2026-09-29): KV-cache VRAM about equal or better
-than BeeLlama under KVarN quant, same or better pp and tg.
+Agent findings (2026-09-29, 3 parallel read-only subagents,
+convergent): our body serve is O(n) per step AND serially reduced --
+serve grid `(kvh, gc)` with gc growing in n plus a single-warp
+`for b in range(NB=gc)` combine loop (97us@8k -> ~1.5ms/layer@128k).
+Bee: fixed-64 splits, parallel reduce, 3 launches, zero syncs. Our
+acc buffers also grow O(n) (~65MB/layer @128k); the tail's exact-WHT
+refreshes fully every step (~44us waste); prefill pays the torch
+store path (fused store_row is T==1-only) with ~300-500 Sinkhorn
+micro-launches and ~120 syncs per layer per 4096-chunk.
+Proposals, best (fast, easy, performant) first:
 
-1. tg length scaling (98% -> 96% -> 83% -> 65%; Bee flat 44.0).
-   Suspect: online serve cost grows with ctx. Cuts, in order:
-   incremental eref (stop the full refresh), store internals,
-   mask/tpos trim. Success bar: flat-with-length tg.
-2. pp seal path (32-38% of Bee; Bee is 94% of its fp16, we are
-   39% of ours). Suspect: prefill row-WHT + Sinkhorn seals +
-   per-layer syncs. Cuts: seal batching/fusion on the pp path.
-   Success bar: kvarn pp within 20% of our fp16 pp.
-3. VRAM last ~50MB (within 4% everywhere). Suspect: staging/exact
-   slot margins. Cuts: SWA exact-margin analysis, slot
-   tightening (staging 4 / exact 6 already proven minimal for the
-   current evict cadence -- cadence moves first). Success bar:
-   imageless <= Bee resident at every length.
+1. Incremental eref + kill per-layer syncs (fast, easy): WHT only
+   the written exact slot, drop `flag`/`status` tolists to device-side
+   checks. ~50-100us/layer/step + unstalls the pipeline.
+2. Split-parallel body + parallel combine (medium, biggest tg gain):
+   fixed-64 splits, Q_TILE>1, parallel reduce. Restores flat tg.
+3. Prefill WHT via existing `kvarn_triton_wht_rows` (fast reuse):
+   kills ~30-40 launches/layer/chunk, ~30-40% of the kvarn pp tax.
+4. Tensorize `_store_rows` loop (medium): slot-gathered scatter,
+   zero `.item/.tolist/.any` on steady path. ~15-20% pp wall.
+5. Fuse tail into body kernel (harder): -4 launches/layer/step.
+6. Lazy/fused Sinkhorn seals (hardest pp item): seal only
+   evicted/served groups; removes the 2.5x-vs-fp16 floor.
+7. Streaming acc buffers (hygiene): fixed-size, never
+   materialize per-chunk acc; unlocks length, minor speed.
+8. SWA exact-margin + slot tightening (small): tens of MB VRAM.
+
+Plan to goal (2026-09-29, refreshed): KV-cache VRAM about equal
+or better than BeeLlama under KVarN quant, same or better pp
+and tg. Order: proposal 1 (this round), then 2, then 3+4, then
+re-measure before 5-8. Success bars: flat-with-length tg; kvarn
+pp within 20% of our fp16 pp (Bee is at 94% of its); imageless
+<= Bee resident at every length.
+128k swap note: fp16 pp collapses 2008 -> 648 tok/s from 64k to
+128k while prefill peak hits 22.1GB -- swap spillover, not compute.
+Policy: at 128k the reference is q8 (`-ref q8`; KLD then reads
+kvarn-vs-q8, labeled as such), fp16 gospel stays at <=64k where
+it fits. q4 figures now probed alongside (`CacheLayer_quant`
+takes 2-8 bits); `_probe_vram.py` gained `alloc-only` (seconds
+even at 128k; live slots read 0 without populate).
+Peak+free rule (mandatory): every run report carries smi
+free-before, min-free-during (guard prints START/min_free/DONE),
+free-after, plus harness allocator peaks. A falling min-free
+across phases is the swap early-warning; <100MB kills the task.
 Operating model (speed without chaos): the GPU is serial -- one
 run at a time, smi-guarded, never parallelize runs. Analysis
 parallelizes: each round, subagents dissect the next target
