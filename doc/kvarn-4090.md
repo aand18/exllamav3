@@ -97,7 +97,7 @@ run under `EXL3_KVARN_TRITON=1` with `PARITY=1` asserting bit-exactness.
 
 ### Qwen3.8-27B dense 1.40bpw (`SC_1.40bpw_H3_V3`, Qwen3_5, hd 256)
 
-| ctx | preset | median | mean | max | p99 | p99.9 | fp16 pre | kvarn pre |
+| ctx (tok) | preset | median | mean | max | p99 | p99.9 | fp16 pre (s) | kvarn pre (s) |
 |-----|--------|--------|------|-----|-----|-------|----------|-----------|
 | 8192 | kvarn4 | 0.000001 | 0.000013 | 0.000261 | 0.000179 | 0.000253 | 4.7s | 10.0s |
 | 8192 | kvarn5,kvarn4 | 0.000001 | 0.000011 | 0.000144 | 0.000127 | 0.000142 | 4.7s | 10.0s |
@@ -110,7 +110,7 @@ Prefill history on this model @8192, kvarn4 (kvarn5,kvarn4 in
 parentheses; same quality throughout — every step reproduced the KLD
 digits exactly, same-top 100.00%):
 
-| step | change (commit) | fp16 pre | kvarn pre | ratio |
+| step | change (commit) | fp16 pre (s) | kvarn pre (s) | ratio (x) |
 |------|-----------------|----------|-----------|-------|
 | 0 | baseline: per-group Python loops (~30 launches/group, ~160/group seal) | 4.7s | 134.6s (130.9s) | 28.6x |
 | 1 | batched dequant across groups (`2345080`): 1 unpack + 1 dequant + 1 WHT per layer | 4.7s | 96.2s (95.8s) | 20.5x |
@@ -131,7 +131,7 @@ Note on BeeLlama comparison: measured on this 4090 (beellama.cpp
 main @0ba48c55, sm_89 CUDA build, Qwen3.8-27B Q4_K_XL, llama-bench
 `-p 8192,16384,32768 -n 256 -ngl 99`, 100MB-free VRAM rule enforced):
 
-| ctx | f16 pp | kvarn4 pp | f16 tg256 | kvarn4 tg256 | f16 VRAM | kvarn4 VRAM |
+| ctx (tok) | f16 pp (tok/s) | kvarn4 pp (tok/s) | f16 tg256 (tok/s) | kvarn4 tg256 (tok/s) | f16 VRAM (GB used) | kvarn4 VRAM (GB resident) |
 |-----|--------|-----------|-----------|--------------|----------|-------------|
 | 8192 | 3124 | 2946 | 46.1 | 44.0 | 18.1GB used | 180MB KV resident |
 | 16384 | 3025 | 2844 | 46.2 | 44.0 | 18.6GB used | 17.6GB used |
@@ -163,7 +163,9 @@ Standing bench requirements (2026-09-29, user-locked):
   (ours: cache-only per-tensor + decode-peak allocator; Bee:
   `kv_resident_bytes`).
 - After every change: re-run the gates, show the updated table in
-  the report, and update this file.
+  the report, and update this file. Every table header carries its
+  measure unit (tok, s, tok/s, GB, MB, %); KLD median/mean/max/p99
+  columns are divergences (unitless) unless noted.
 - Gate order before deep work: smoke first (needle item 0,
   "capital of France" -> Paris, aborts the probe on fail) + short
   reasoning (`bbeh_mini --limit 3 -fresh`) -- never go deep on a
@@ -175,7 +177,7 @@ Standing bench requirements (2026-09-29, user-locked):
   killed). `0 used` before starting, idle after finishing, 1GB
   headroom over the expected peak before starting.
 
-| ctx | fp16 pp | kvarn pp | fp16 tg256 (peak) | kvarn tg256 (peak) | KLD same-top |
+| ctx (tok) | fp16 pp (s, tok/s, peak GB) | kvarn pp (s, tok/s, peak GB) | fp16 tg256 (tok/s, peak GB) | kvarn tg256 (tok/s, peak GB) | KLD same-top (%) |
 |-----|---------|----------|-------------------|---------------------|--------------|
 | 8192 | 3.3s, 2449 tok/s (12.5GB) | 4.8s, 1696 tok/s (13.1GB) | 88.1 tok/s (11.9GB) | 58.3 tok/s (12.0GB) | 100.00% |
 | 16384 | 6.7s, 2458 tok/s (14.1GB) | 9.5s, 1722 tok/s (15.2GB) | 83.0 tok/s (14.1GB) | 58.7 tok/s (14.1GB) | 100.00% |
@@ -194,7 +196,7 @@ throughout; ARMATTN PASS @8k. Bold = winner.)
 
 tg baseline (tok/s, 256 greedy decode):
 
-| ctx | tg ours fp16 | tg ours kvarn4 | tg Bee kvarn4 | tg Bee f16 | ours/Bee | KLD med/mean/max/p99 | same-top |
+| ctx (tok) | tg ours fp16 (tok/s) | tg ours kvarn4 (tok/s) | tg Bee kvarn4 (tok/s) | tg Bee f16 (tok/s) | ours/Bee (%) | KLD med/mean/max/p99 (unitless) | same-top (%) |
 |-----|--------------|----------------|---------------|------------|----------|----------------------|----------|
 | 8192 | 87.5-88.1 | 43.0 | **44.0** | 46.1 | 98% | 1e-6 / 2.3e-5 / 6.2e-4 / 3.29e-4 | 100.00% |
 | 16384 | 83.1-83.2 | 42.1/42.4 | **44.0** | 46.2 | 96% | 1e-6 / 1.0e-5 / 1.85e-4 / 1.65e-4 | 100.00% |
@@ -203,7 +205,7 @@ tg baseline (tok/s, 256 greedy decode):
 
 pp baseline (tok/s, full-context prefill):
 
-| ctx | pp ours fp16 | pp ours kvarn4 | pp Bee kvarn4 | ours/Bee |
+| ctx (tok) | pp ours fp16 (s, tok/s) | pp ours kvarn4 (s, tok/s) | pp Bee kvarn4 (s, tok/s) | ours/Bee (%) |
 |-----|--------------|----------------|---------------|----------|
 | 8192 | 3.2-3.3s, ~2525 | 8.3-8.4s, ~980 | **2.8s, 2946** | 33% |
 | 16384 | 6.5s, ~2532 | 16.4-16.5s, ~997 | **5.8s, 2844** | 35% |
@@ -222,7 +224,7 @@ KV head-to-head (GB cache-only, 16 layers; ours measured per-tensor,
 Bee `kv_resident_bytes`; Bee `llama-bench -m Qwen3.8-27B-UD-Q4_K_XL.gguf
 -p <ctx> -n 256 -ctk kvarn4 -ctv kvarn4 --kv-memory`):
 
-| ctx | KV ours fp16 / q8 / q4 / kvarn4 | KV Bee kvarn4 | gap |
+| ctx (tok) | KV ours fp16 / q8 / q4 / kvarn4 (GB) | KV Bee kvarn4 (GB) | gap (MB) |
 |-----|----------------------------|---------------|-----|
 | 8192 | 0.55 / 0.29 / 0.16 / 0.24 | **0.18** | +60MB |
 | 16384 | 1.09 / 0.58 / 0.31 / 0.38 | **0.33** | +53MB |
@@ -327,7 +329,7 @@ Cache-only accounting (MB; 16 cached layers; ours via
 --kv-memory` `kv_resident_bytes` + component fields; `~` = summed from
 measured components, direct flag-on run queued):
 
-| store | ours 8k | Bee 8k | ours 16k | Bee 16k |
+| store | ours 8k (MB) | Bee 8k (MB) | ours 16k (MB) | Bee 16k (MB) |
 |-------|--------:|-------:|---------:|--------:|
 | fp16 K+V | 554 | 537 | 1091 | 1074 |
 | q8 payload+scales | 294 | 285 | 579 | 570 |
@@ -551,7 +553,7 @@ Generation optimization history (all KLD-identical, same-top 100%):
 
 ### Qwen3.8-27B dense 5.00bpw (`SC_5.00bpw_H6`)
 
-| ctx | preset | median | mean | max | fp16 pre | kvarn pre |
+| ctx (tok) | preset | median | mean | max | fp16 pre (s) | kvarn pre (s) |
 |-----|--------|--------|------|-----|----------|-----------|
 | 400 | kvarn4 | 0.000043 | 0.006330 | 0.380000 | — | — |
 | 400 | kvarn5,kvarn4 | 0.000039 | 0.000406 | 0.006960 | — | — |
@@ -564,7 +566,7 @@ checkpoints.
 
 ### Qwen3.8-Flash-Next 3.05bpw (Qwen4Exp, MoE+QSA, `-mcl 40`)
 
-| ctx | preset | median | mean | max |
+| ctx (tok) | preset | median | mean | max |
 |-----|--------|--------|------|-----|
 | 400 | kvarn4 | 0.000131 | 0.000818 | 0.009026 |
 | 400 | kvarn5,kvarn4 | 0.000121 | 0.001276 | 0.059106 |
