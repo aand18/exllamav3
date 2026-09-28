@@ -46,3 +46,12 @@ This checkout works on a fork with WIP branches. Rules:
   (global or local) without being asked; hard-won local build lessons
   (VsDevCmd trap, arch-list syntax, no-GPU caveat) live in
   `doc/local-build.md` — read it before touching the extension build.
+- GPU runs on any box (VRAM is a factor): every CUDA run is wrapped with
+  an `nvidia-smi memory.free` watchdog that KILLS the task the moment
+  free VRAM drops under 100MB at any time — a guard that only warns is
+  not enough. Confirm ~0 used before starting (a stale runaway holding
+  the GPU gets killed only if it is your own timed-out benchmark child;
+  never touch other processes) and idle after finishing; never start
+  without 1GB headroom over the expected peak. Reference implementation:
+  `eval/smi_guard.py` on `wip/kvarn-cache` (`--image <exe> --before
+  <pre-existing PIDs>`; exits 2 = killed, 3 = timeout, 4 = no task).
