@@ -207,7 +207,7 @@ pp baseline (tok/s, full-context prefill):
 
 | ctx (tok) | pp ours fp16 (s, tok/s) | pp ours kvarn4 (s, tok/s) | pp Bee kvarn4 (s, tok/s) | ours/Bee (%) |
 |-----|--------------|----------------|---------------|----------|
-| 8192 | 3.2-3.3s, ~2525 | 8.3-8.4s, ~980 | **2.8s, 2946** | 33% |
+| 8192 | 3.2-3.3s, ~2525 | 8.3-8.7s, ~938-984 (Spec B: exact, perf-neutral) | **2.8s, 2946** | 33% |
 | 16384 | 6.5s, ~2532 | 16.4-16.5s, ~997 | **5.8s, 2844** | 35% |
 | 65536 | 32.6-32.7s, ~2008 | 74.3-74.5s, ~880 | **28.1s, 2336** | 38% |
 | 131072 | 201.8-203.0s, ~648 (swap; q8: 87.7s, 1494) | 219.4-220.0s, ~596 (q8-ref run: 173.9s, 754) | **69.5s, 1887** | 32% |
@@ -231,6 +231,17 @@ expandable_segments, fp16 drifted -0.8% in-window (latency-bound
 regime: 64% SM vs 99% fp16). Unresolved-but-bounded; revisit with
 profiler before further tg surgery (no third fix round without a
 hypothesis).
+Spec B integrated 2026-09-28 (commit b24efff, rebased from
+/tmp/impl-wht with offset; only conflict was the helper insert site
+next to _eref_wht): prefill store WHT inplace-on-fresh-temp (n <=
+65536 rows, torch fallback beyond), _group_block + refresh-rot via
+_triton_wht_head_maybe_triton; twins: prefill-4096 chunks + WHT
+shapes + eref-buffer compares. On-box: 31 passed, PARITY=1 green,
+KLD digits bit-identical, same-top 100%. Warmed perf perf-neutral
+at 8k (prefill 8.3/8.7s, 984/938 tok/s; decode 41.7/42.0) -- the
+row-WHT is not the prefill bottleneck (dequant/seals/image
+dominate); value is alloc-hygiene + the inplace pattern for later
+fusion. tg residual -3.5% carries over unchanged.
 
 KV head-to-head (GB cache-only, 16 layers; ours measured per-tensor,
 Bee `kv_resident_bytes`; Bee `llama-bench -m Qwen3.8-27B-UD-Q4_K_XL.gguf
