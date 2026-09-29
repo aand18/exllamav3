@@ -217,6 +217,12 @@ hang/OOM, slot windows hold). Quality gate stays KLD (same-top
 100% + digits). Real reasoning calibration (run fp16 over more
 items, lock solvable ones as the regression set) is queued work;
 use -mt 2048 for fast smokes until then.
+Needle gate (2026-09-29, eval/kvarn_needle.py from prior session —
+smoke + passcode at 5/50/95% depths, greedy, substring check):
+fp16 4/4 (25s), q4 4/4 (36s), kvarn4 4/4 (44s), all depths HIT.
+THIS is the discriminative long-context gate (baseline solves
+it): any retention regression (evict/slot/seal) shows as MISS.
+Run per cut when touching store/evict/seal/serve paths.
 | 131072 | 47.4-47.5 | 28.1/28.7 | **44.0** | OOM (>24GB) | 65% | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
 
 128k q8-ref (2026-09-29, current code, same box/flags): q8 prefill
