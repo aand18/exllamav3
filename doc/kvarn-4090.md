@@ -363,10 +363,32 @@ Proposals, best (fast, easy, performant) first:
 
 Plan to goal (2026-09-29, refreshed): KV-cache VRAM about equal
 or better than BeeLlama under KVarN quant, same or better pp
-and tg. Order: proposal 1 (this round), then 2, then 3+4, then
-re-measure before 5-8. Success bars: flat-with-length tg; kvarn
-pp within 20% of our fp16 pp (Bee is at 94% of its); imageless
-<= Bee resident at every length.
+and tg. Status: Spec A done (incremental eref + fused
+write-through, parity-proven, tg -1.5%@8k/-3%@64k under
+expandable); Spec B done (prefill WHT inplace, exact but
+perf-neutral — WHT is NOT the prefill bottleneck); harness fixed
+(phase reorder + ref free + no-grad; 64k KLD green, same-top 100%);
+fragmentation diagnosed as the tg-gap amplifier (default alloc:
+-3.5%@8k/-24%@64k; expandable recovers to -1.5%/-3%).
+Next order (evidence-driven, one cut per commit):
+1. Prefill breakdown (measure first): attribute kvarn prefill
+   (8.3s@8k / 73.6s@64k vs Bee 2.8s/28.1s) across dequant /
+   Sinkhorn seals / store-WHT / remat / fixed costs with a Kineto
+   probe; attack the biggest piece (seal inventory suspects
+   Sinkhorn: 16 iters x K,V x ~31 groups/chunk).
+2. Split-parallel body serve (tg @length): serve grid (kvh, gc)
+   is O(n) + serial combine (ours drops 43->36 with length, Bee
+   flat 44); shard body over fixed token blocks, parallel combine.
+3. Fragmentation hygiene: preallocated decode temps (or
+   expandable_segments as 64k+ standard).
+4. VRAM: close imageless gap 53MB@16k (staging 9 + exact/stash
+   42 + payload 4): window exact 8->6, staging pressure.
+Success bars: flat-with-length tg; kvarn pp within 20% of our
+fp16 pp (Bee is at 94% of its); imageless <= Bee resident at
+every length. Gate every cut: CPU suite, real PARITY=1
+(`set VAR=1&&`, never `set VAR=1 &&` — trailing space kills
+every =="1" gate), KLD-8k + KLD-64k identical, warmed pp/tg
+@8k/64k, VRAM, table, commit.
 128k swap note: fp16 pp collapses 2008 -> 648 tok/s from 64k to
 128k while prefill peak hits 22.1GB -- swap spillover, not compute.
 Policy: at 128k the reference is q8 (`-ref q8`; KLD then reads
