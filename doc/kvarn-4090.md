@@ -254,6 +254,16 @@ phantom OOMs, vacuous parity). Bat files (`set VAR=1` at line end)
 are clean, as is `set VAR=1&&`. Verified via in-process ENV print.
 Affected: only ad-hoc probe/parity runs; all bat-driven table
 numbers and in-process-env test twins stand.
+Test-hygiene gap (pre-existing, not a code regression): many
+kvarn tests assume TRITON/IMAGELESS unset globally and fail when
+the box pytest sets them (11 failures incl. overlay/fused-serve/
+prefill twins that build the image path: imageless leaves _img_k
+None; CPU tests hit triton branches with CPU tensors). Proven
+pre-existing by identical failure sets pre/post Sinkhorn+split;
+env-unset runs are 33/33 green incl. the new split twin. The
+twins need per-test env management (like the fused-store twin
+already does); queued as test-only cleanup, no prod impact
+(KLD same-top 100% throughout).
 Spec B integrated 2026-09-28 (commit b24efff, rebased from
 /tmp/impl-wht with offset; only conflict was the helper insert site
 next to _eref_wht): prefill store WHT inplace-on-fresh-temp (n <=
