@@ -393,12 +393,19 @@ Proposals, best (fast, easy, performant) first:
 Plan to goal (2026-09-29, refreshed): KV-cache VRAM about equal
 or better than BeeLlama under KVarN quant, same or better pp
 and tg. Status: Spec A done (incremental eref + fused
-write-through, parity-proven, tg -1.5%@8k/-3%@64k under
-expandable); Spec B done (prefill WHT inplace, exact but
-perf-neutral — WHT is NOT the prefill bottleneck); harness fixed
-(phase reorder + ref free + no-grad; 64k KLD green, same-top 100%);
-fragmentation diagnosed as the tg-gap amplifier (default alloc:
--3.5%@8k/-24%@64k; expandable recovers to -1.5%/-3%).
+write-through, parity-proven, tg at base parity); Spec B done
+(prefill WHT inplace, exact but perf-neutral — WHT is NOT the
+prefill bottleneck); harness fixed (phase reorder + ref free +
+no-grad; 64k KLD green, same-top 100%); fragmentation diagnosed
+(default-alloc gaps collapse under expandable); Sinkhorn cut done
+(pp 8.3->6.7s); deferred-batched pressure seals done (pp 6.7s ->
+5.05s@8k, 62s -> 48.2s@64k, 29 seal-calls/chunk -> 1 batched;
+KLD same-top 100%, mean +9%@8k/+35%@64k budgeted).
+Remaining gaps need structural work, not tweaks (post-cut
+Kineto: GEMM 65% shared; kvarn-specific is a <5%-each long tail
+of launch overhead): CUDA graphs for prefill chunks (kill all
+launch overhead), tensorized serve (MMA + reg-cap + fuse
+combine), VRAM window tightening (staging/exact).
 Next order (evidence-driven, one cut per commit):
 1. Prefill breakdown (measure first): attribute kvarn prefill
    (8.3s@8k / 73.6s@64k vs Bee 2.8s/28.1s) across dequant /
