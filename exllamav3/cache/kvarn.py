@@ -685,6 +685,16 @@ def kvarn_variance_normalize(tile: torch.Tensor, sinkhorn_iters: int = KVAR_N_SI
         return tile / (log_c.exp().unsqueeze(-2) * log_r.exp().unsqueeze(-1))
 
     cur = tile
+    # Sync-free best-tracking + stall break (prefill seal cut): the
+    # live iteration state (log_c/log_r/cur) evolves unconditionally,
+    # so best-so-far recording is a pure sideline -- unconditional
+    # torch.where is bit-identical to the all/any branches (all-True:
+    # full replace; any: masked replace; none: no-op) with zero DtoH
+    # syncs (was 1-2 per iter). Imbalance plateaus by iter ~4 on
+    # typical tiles (measured); break when a 4-iter window shows no
+    # strict improvement anywhere (1 sync per window). Slow tiles run
+    # to sinkhorn_iters exactly as before. KLD-8k/64k gates quality.
+    imb_floor = imb_best
     for _ in range(sinkhorn_iters):
         std_c = _sample_std_cols(cur).clamp(1e-3, 1e3)
         log_c = (log_c + std_c.log()).clamp(-0.3, 10.0)
@@ -694,15 +704,15 @@ def kvarn_variance_normalize(tile: torch.Tensor, sinkhorn_iters: int = KVAR_N_SI
         cur = rebuild()
         imb = kvarn_imbalance(cur)
         better = imb <= imb_best
-        if bool(better.all()):
-            imb_best = imb
-            s_col_best = log_c.exp()
-            s_row_best = log_r.exp()
-        elif bool(better.any()):
-            imb_best = torch.where(better, imb, imb_best)
-            ec, er = log_c.exp(), log_r.exp()
-            s_col_best = torch.where(better.unsqueeze(-1), ec, s_col_best)
-            s_row_best = torch.where(better.unsqueeze(-1), er, s_row_best)
+        imb_best = torch.where(better, imb, imb_best)
+        ec, er = log_c.exp(), log_r.exp()
+        s_col_best = torch.where(better.unsqueeze(-1), ec, s_col_best)
+        s_row_best = torch.where(better.unsqueeze(-1), er, s_row_best)
+        if (_ + 1) % 4 == 0 or _ == sinkhorn_iters - 1:
+            if bool((imb_best < imb_floor).any()):
+                imb_floor = imb_best
+            else:
+                break
 
     balanced = tile / (s_col_best.unsqueeze(-2) * s_row_best.unsqueeze(-1))
     return balanced, s_col_best, s_row_best
