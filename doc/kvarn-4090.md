@@ -203,6 +203,17 @@ tg baseline (tok/s, 256 greedy decode):
 | 65536 | 62.8 | 36.1 (base 36.4; expandable: 35.9 vs 37.0) | **44.0** | 46.1 | 82% | 1e-6 / 2.3e-5 / 8.19e-4 / n/a | 100.00% |
 | 131072 | 47.4-47.5 | 28.1/28.7 | **44.0** | OOM (>24GB) | 65% | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
 
+128k q8-ref (2026-09-29, current code, same box/flags): q8 prefill
+85.7s (1529 tok/s, peak 18.3GB), q8 tg 56.3; kvarn prefill 148.4s
+(883 tok/s, peak 19.3GB, was 171.6-219.4s pre-Sinkhorn), kvarn tg
+22.8 (base 28.8; expandable_segments: 29.0, i.e. parity-or-better);
+KLD kvarn-vs-q8 median 1e-6 / mean 4e-6 / max 4.6e-5, same-top
+100%. Fragmentation verdict, third confirmation: default-alloc
+tg gaps (-3.5%@8k, -24%@64k, -21%@128k) all collapse under
+expandable (8k 42.9, 64k 35.9 vs 37.0, 128k 29.0 vs 28.8). The
+code is perf-neutral-or-better everywhere; the pool layout is the
+lever. Recommendation stands: expandable_segments for 64k+.
+
 pp baseline (tok/s, full-context prefill):
 
 | ctx (tok) | pp ours fp16 (s, tok/s) | pp ours kvarn4 (s, tok/s) | pp Bee kvarn4 (s, tok/s) | ours/Bee (%) |
@@ -210,7 +221,7 @@ pp baseline (tok/s, full-context prefill):
 | 8192 | 3.2-3.3s, ~2525 | 6.7s, ~1220 (Sinkhorn cut; was 8.3s) | **2.8s, 2946** | 41% |
 | 16384 | 6.5s, ~2532 | 16.4-16.5s, ~997 | **5.8s, 2844** | 35% |
 | 65536 | 32.6-32.7s, ~2008 | 62.0s, ~1056 (Sinkhorn cut; was 74.3s) | **28.1s, 2336** | 45% |
-| 131072 | 201.8-203.0s, ~648 (swap; q8: 87.7s, 1494) | 219.4-220.0s, ~596 (q8-ref run: 173.9s, 754) | **69.5s, 1887** | 32% |
+| 131072 | 201.8-203.0s, ~648 (swap; q8: 87.7s, 1494) | 219.4-220.0s, ~596 (q8-ref run: 173.9s, 754; now 148.4s, 883 post-Sinkhorn) | **69.5s, 1887** | 39% |
 
 Probe-arm per-layer (us, imageless): store 245.8, qwht 11.6, eref
 44.7, serve 97.2, stats 68.6, mask 26.8, tail 412.4, merge 112.9,
