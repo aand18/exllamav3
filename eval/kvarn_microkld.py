@@ -15,6 +15,7 @@ Example:
 """
 
 import argparse
+import gc
 import time
 import torch
 import torch.nn.functional as F
@@ -130,6 +131,11 @@ def main():
 
     k_bits, v_bits = kvarn_parse_preset(args.cache_quant)
 
+    # Eval hygiene: forwards must not build autograd graphs (same
+    # numerics, smaller pool; matters at 64k+ where pool headroom is
+    # thin). Affects all ctx sizes equally.
+    torch.set_grad_enabled(False)
+
     config = Config.from_directory(args.model_dir)
     if args.moe_cpu_offload:
         config.infer_params.moe_cpu_offload = args.moe_cpu_offload
@@ -167,6 +173,25 @@ def main():
     dt = time.time() - t0
     print(f"{ref_tag} prefill: {dt:.1f}s ({args.ntok / dt:.0f} tok/s, "
           f"peak {_peak_gb():.1f}GB)", flush=True)
+
+    # Long-context fit (64k+ on 24GB): the fp16/q8 reference cache
+    # (4.31GB fp16 @64k) must not stay resident during kvarn prefill
+    # (pool peaks ~19GB alone). fp16 decode runs on the reference
+    # cache FIRST, then it is freed; kvarn phases run alone; KLD
+    # scoring needs only the saved logits (tiny). Same forwards,
+    # same decode inputs -- only the phase order changes.
+    if args.decode > 0:
+        bench_decode(model, c_ref, ids, args.decode, s_ref, ref_tag)
+    # Release the reference cache's tensors explicitly: layer shells
+    # may outlive `del` (referrer hunt @64k: 4.31GB fp16 kept by
+    # CacheLayer_fp16 objects), and at 64k that residue + the kvarn
+    # pool exceeds 24GB. free() drops k/v tensors regardless.
+    for _lay in c_ref.layers.values():
+        _free = getattr(_lay, "free", None)
+        if callable(_free):
+            _free()
+    del c_ref, s_ref
+    gc.collect()
     torch.cuda.empty_cache()
 
     torch.cuda.reset_peak_memory_stats()
@@ -190,8 +215,6 @@ def main():
     print(f"  same-top {agree * 100:.2f}%", flush=True)
 
     if args.decode > 0:
-        bench_decode(model, c_ref, ids, args.decode, s_ref, ref_tag)
-        torch.cuda.empty_cache()
         bench_decode(model, c_kvarn, ids, args.decode, s_kvarn,
                      f"kvarn{k_bits}/kvarn{v_bits}")
 
