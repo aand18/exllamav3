@@ -152,7 +152,8 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
     from .kvarn_triton import (
         kvarn_triton_available, kvarn_triton_qwht,
         kvarn_triton_online_partials, kvarn_triton_wht_rows,
-        kvarn_triton_online_serve, kvarn_triton_online_merge,
+        kvarn_triton_online_serve, kvarn_triton_online_serve_split,
+        kvarn_triton_online_merge,
         kvarn_triton_online_tail_reduce, _kvarn_online_buffers)
     from ...cache.kvarn import KVAR_N_SINK_TOKENS, KVAR_N_GROUP
     from ...constants import PAGE_SIZE
@@ -192,10 +193,24 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
             "KVarN incremental eref disagrees with full refresh"
     gps = PAGE_SIZE // KVAR_N_GROUP
     gc_eff = min((n + 127) // 128, int(layer.records.shape[0]))
-    out_b, flag_b = kvarn_triton_online_serve(
-        layer, qw, Qf, layer.exact_k, Ew, layer._exact_rev, layer.sealed,
-        block_table[0], n_0d, qpk, scale, sink_n, tail_eff, gps,
-        gc=gc_eff)
+    _ns_need = (n + 2047) // 2048
+    if os.environ.get("EXL3_KVARN_SPLIT_SERVE", "0") == "1" and \
+            1 <= _ns_need <= 32:
+        # Split-parallel body serve (fixed 2048-token splits, NS<=32):
+        # same tail/merge below, with ns as gc. Env unset (or n beyond
+        # the 32-split capacity) keeps the group path bit-identical.
+        out_b, flag_b = kvarn_triton_online_serve_split(
+            layer, qw, Qf, layer.exact_k, Ew, layer._exact_rev,
+            layer.sealed, block_table[0], n_0d, qpk, scale, sink_n,
+            tail_eff, gps, ns=_ns_need)
+        gc_eff = _ns_need
+        _m_b, _l_b = layer._ov_split_m, layer._ov_split_l
+    else:
+        out_b, flag_b = kvarn_triton_online_serve(
+            layer, qw, Qf, layer.exact_k, Ew, layer._exact_rev, layer.sealed,
+            block_table[0], n_0d, qpk, scale, sink_n, tail_eff, gps,
+            gc=gc_eff)
+        _m_b, _l_b = layer._ov_serve_m, layer._ov_serve_l
     if flag_b:
         # Fail-closed: sticky flag means open-body rows reached the
         # kernel (argued impossible for dense); the get_kv path serves.
@@ -232,7 +247,7 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         # normalized body attention (combine folds the out-WHT), so it
         # un-normalizes by den with NO extra WHT (cacd7af).
         out = kvarn_triton_online_merge(
-            layer._ov_serve_m, layer._ov_serve_l, out_b,
+            _m_b, _l_b, out_b,
             tail_m, tail_den, tail_num, qpk, gc_eff)
     return out.reshape(bsz, q_len, qh, hd)
 
