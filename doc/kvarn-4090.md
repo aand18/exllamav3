@@ -198,18 +198,18 @@ tg baseline (tok/s, 256 greedy decode):
 
 | ctx (tok) | tg ours fp16 (tok/s) | tg ours kvarn4 (tok/s) | tg Bee kvarn4 (tok/s) | tg Bee f16 (tok/s) | ours/Bee (%) | KLD med/mean/max/p99 (unitless) | same-top (%) |
 |-----|--------------|----------------|---------------|------------|----------|----------------------|----------|
-| 8192 | 87.7-88.4 | 41.6-42.1 (pre-eref base 43.3-43.8, same-session A/B) | **44.0** | 46.1 | 95% | 1e-6 / 2.3e-5 / 6.2e-4 / 3.29e-4 | 100.00% |
+| 8192 | 87.5-88.1 | 43.6-43.8 (pre-eref base 43.3-43.8; expandable 42.9) | **44.0** | 46.1 | 99% | 1e-6 / 2.5e-5 / 6.61e-4 / 3.51e-4 | 100.00% |
 | 16384 | 83.1-83.2 | 42.1/42.4 | **44.0** | 46.2 | 96% | 1e-6 / 1.0e-5 / 1.85e-4 / 1.65e-4 | 100.00% |
-| 65536 | 62.8 | 27.6 (base 36.4; expandable: 35.9 vs 37.0) | **44.0** | 46.1 | 83% | 1e-6 / 1.7e-5 / 5.99e-4 / n/a | 100.00% |
+| 65536 | 62.8 | 36.1 (base 36.4; expandable: 35.9 vs 37.0) | **44.0** | 46.1 | 82% | 1e-6 / 2.3e-5 / 8.19e-4 / n/a | 100.00% |
 | 131072 | 47.4-47.5 | 28.1/28.7 | **44.0** | OOM (>24GB) | 65% | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
 
 pp baseline (tok/s, full-context prefill):
 
 | ctx (tok) | pp ours fp16 (s, tok/s) | pp ours kvarn4 (s, tok/s) | pp Bee kvarn4 (s, tok/s) | ours/Bee (%) |
 |-----|--------------|----------------|---------------|----------|
-| 8192 | 3.2-3.3s, ~2525 | 8.3-8.7s, ~938-984 (Spec B: exact, perf-neutral) | **2.8s, 2946** | 33% |
+| 8192 | 3.2-3.3s, ~2525 | 6.7s, ~1220 (Sinkhorn cut; was 8.3s) | **2.8s, 2946** | 41% |
 | 16384 | 6.5s, ~2532 | 16.4-16.5s, ~997 | **5.8s, 2844** | 35% |
-| 65536 | 32.6-32.7s, ~2008 | 74.3-74.5s, ~880 | **28.1s, 2336** | 38% |
+| 65536 | 32.6-32.7s, ~2008 | 62.0s, ~1056 (Sinkhorn cut; was 74.3s) | **28.1s, 2336** | 45% |
 | 131072 | 201.8-203.0s, ~648 (swap; q8: 87.7s, 1494) | 219.4-220.0s, ~596 (q8-ref run: 173.9s, 754) | **69.5s, 1887** | 32% |
 
 Probe-arm per-layer (us, imageless): store 245.8, qwht 11.6, eref
@@ -228,9 +228,11 @@ and launch removed). Residual -3.5% has no isolated mechanism:
 store +0.6us/layer and serve +0.0us/layer by micro A/B (raw kernel
 + alternating serve, 200 iters), prefill equal, gap persists under
 expandable_segments, fp16 drifted -0.8% in-window (latency-bound
-regime: 64% SM vs 99% fp16). Unresolved-but-bounded; revisit with
-profiler before further tg surgery (no third fix round without a
-hypothesis).
+regime: 64% SM vs 99% fp16). RESOLVED by the Sinkhorn cut
+(0b1b9c7, see below): the residual was prefill pool pollution,
+not decode code — fewer prefill launches/syncs leave a cleaner
+pool, and tg recovered to base parity (8k 43.6-43.8, 64k 36.1
+vs 36.4) under the default allocator.
 64k A/B (2026-09-29, same box/flags/harness, current b24efff vs base
 1f29695): default allocator base 36.4 vs current 27.6 (-24%);
 expandable_segments base 37.0 vs current 35.9 (-3%). The 8k residual
