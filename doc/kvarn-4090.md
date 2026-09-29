@@ -208,10 +208,15 @@ absolute values tiny). Budgeted: each cut must keep same-top
 100% and mean < 1e-4 @64k; reasoning benches (not KLD) decide
 ultimately per gospel policy.
 Reasoning smoke (2026-09-29, bbeh_mini --limit 3 -fresh, current
-code): kvarn4 0/3, fp16 baseline 0/3 on the same 3 (BBH-hard tasks
-hit token limits on both; ~47 tok/s kvarn vs ~89 tok/s fp16
-observed). No reasoning regression vs fp16; KLD same-top 100%
-stands as the quality gate.
+code): kvarn4 0/3, fp16 baseline 0/3 on the same 3 (BBEH-mini is
+frontier-hard; both ramble to the 16k cap). Honest reading: this
+config has ZERO discriminative power (0-baseline gate decides
+nothing) — do not cite it as a quality gate. What it does prove:
+end-to-end stability (3× up-to-16k-token generations, no crash/
+hang/OOM, slot windows hold). Quality gate stays KLD (same-top
+100% + digits). Real reasoning calibration (run fp16 over more
+items, lock solvable ones as the regression set) is queued work;
+use -mt 2048 for fast smokes until then.
 | 131072 | 47.4-47.5 | 28.1/28.7 | **44.0** | OOM (>24GB) | 65% | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
 
 128k q8-ref (2026-09-29, current code, same box/flags): q8 prefill
