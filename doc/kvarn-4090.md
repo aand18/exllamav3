@@ -406,6 +406,14 @@ Kineto: GEMM 65% shared; kvarn-specific is a <5%-each long tail
 of launch overhead): CUDA graphs for prefill chunks (kill all
 launch overhead), tensorized serve (MMA + reg-cap + fuse
 combine), VRAM window tightening (staging/exact).
+Decode-step Kineto @64k (26ms wall, 17ms device): serve 4.0ms
+(23%) + combine 1.2ms (7%, serial NB=gc loop) + tail 0.8ms;
+~9ms wall is bubbles (host gaps/syncs/allocator), not kernels.
+Hoist loop-invariants evaluated and SKIPPED (loads not dominant;
+dots+MMA shape + bubbles are). Priority: (1) launch/bubble
+reduction via per-layer fusion (serve+combine+tail+merge),
+(2) MMA reshape of QK dots (N=QPAD<16 falls back to SIMT),
+(3) prefill graphs.
 Next order (evidence-driven, one cut per commit):
 1. Prefill breakdown (measure first): attribute kvarn prefill
    (8.3s@8k / 73.6s@64k vs Bee 2.8s/28.1s) across dequant /
