@@ -479,3 +479,88 @@ def test_promoted_serve_matches_eval_spike():
         0.0625, 128, 128, 2)
     assert flag_e == flag_p == 0
     assert torch.equal(out_e, out_p)
+
+
+@pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
+def test_split_serve_matches_group_serve():
+    # Split-parallel serve (fixed 2048-token splits) vs per-group serve on
+    # synthetic records at 8k/32k/64k ctx (small kvh/hd to keep it fast):
+    # same sticky flag, serve+merge outputs within fp32 assoc noise
+    # (max-rel-err < 5e-4). NOT bit-exact: splits re-order the online
+    # softmax reduction. Merge inputs (torch tail block) are shared, so
+    # the compare isolates the body-partial difference.
+    sys.path.insert(0, str(ROOT / "eval"))
+    from _spike2_online import _make_records
+    torch.manual_seed(9)
+    kvh, sl, hd, qpk = 2, 1, 128, 2
+    qh = kvh * qpk
+    bits = (4, 4)
+    layout = kvarn.kvarn_make_layout(128, 128, bits[0], bits[1])
+    gps = 2
+    scale = hd ** -0.5
+    sink_n, tail_eff = 0, 128
+    Q = torch.randn(qh, hd, dtype=torch.float16, device="cuda")
+    Qf = Q.float()
+    qw = kt.kvarn_triton_wht_rows(Q.float(), hd)
+    tail_m0 = torch.randn(qh, dtype=torch.float32, device="cuda")
+    tail_d0 = torch.rand(qh, dtype=torch.float32, device="cuda") + 0.5
+    tail_n0 = torch.randn(qh, hd, dtype=torch.float32, device="cuda")
+    for n in (8192, 32768, 65536):
+        G = (n + 127) // 128
+        ns = (n + 2047) // 2048
+        records = _make_records(G, kvh, sl, layout, bits[0], bits[1])
+        exact_k = torch.randn(G, 128, kvh, hd, dtype=torch.float16,
+                              device="cuda")
+        exact_v = torch.randn_like(exact_k)
+        exact_v_w = kt.kvarn_triton_wht_rows(exact_v.float(), hd)
+        exrev = torch.arange(G, dtype=torch.int64, device="cuda")
+        sealed = torch.ones(G, dtype=torch.bool, device="cuda")
+        bt = torch.arange((n + 255) // 256, dtype=torch.int32,
+                          device="cuda")
+        n_0d = torch.tensor([n], dtype=torch.int32, device="cuda")
+        lay = types.SimpleNamespace(
+            records=records, layout=layout, k_bits=bits[0],
+            v_bits=bits[1], num_kv_heads=kvh, head_dim=hd, slices=sl)
+        out_g, flag_g = kt.kvarn_triton_online_serve(
+            lay, qw, Qf, exact_k, exact_v_w, exrev, sealed, bt, n_0d,
+            qpk, scale, sink_n, tail_eff, gps)
+        out_s, flag_s = kt.kvarn_triton_online_serve_split(
+            lay, qw, Qf, exact_k, exact_v_w, exrev, sealed, bt, n_0d,
+            qpk, scale, sink_n, tail_eff, gps, ns=ns)
+        assert flag_g == flag_s == 0, (n, flag_g, flag_s)
+        mg = kt.kvarn_triton_online_merge(
+            lay._ov_serve_m, lay._ov_serve_l, out_g,
+            tail_m0, tail_d0, tail_n0, qpk, G)
+        ms = kt.kvarn_triton_online_merge(
+            lay._ov_split_m, lay._ov_split_l, out_s,
+            tail_m0, tail_d0, tail_n0, qpk, ns)
+        d = (ms.float() - mg.float()).abs().max().item()
+        ref = max(mg.float().abs().max().item(), 1e-6)
+        assert d / ref < 5e-4, (n, d, ref)
+
+
+def test_split_buffers_cpu_shapes():
+    # CPU-side smoke (no CUDA/triton needed): split buffer geometry and
+    # keying. Buffers are (kvh, qpad, NSMAX=32) keyed by (qh, qpad, hd),
+    # never gc: repeat calls reuse, key changes realloc.
+    from types import SimpleNamespace
+    assert kt._KVARN_SPLIT_TOKENS == 2048
+    assert kt._KVARN_SPLIT_NSMAX == 32
+    lay = SimpleNamespace(num_kv_heads=2)
+    dev = torch.device("cpu")
+    m, l, acc, out, flag = kt._kvarn_split_buffers(lay, 4, 2, 128, dev)
+    assert m.shape == (2, 2, 32) and l.shape == (2, 2, 32)
+    assert acc.shape == (2, 2, 32, 128)
+    assert out.shape == (4, 128) and flag.shape == (1,)
+    m2, *_ = kt._kvarn_split_buffers(lay, 4, 2, 128, dev)
+    assert m2 is m
+    m3, l3, acc3, out3, _ = kt._kvarn_split_buffers(lay, 8, 4, 128, dev)
+    assert m3 is not m and m3.shape == (2, 4, 32)
+    assert acc3.shape == (2, 4, 32, 128) and out3.shape == (8, 128)
+    # Split serve stays loud when unrunnable (mirrors the group wrapper).
+    with pytest.raises(RuntimeError):
+        kt.kvarn_triton_online_serve_split(
+            lay, torch.zeros(4, 128), torch.zeros(4, 128),
+            torch.zeros(1), torch.zeros(1), torch.zeros(1),
+            torch.zeros(1), torch.zeros(1), torch.zeros(1),
+            2, 0.088, 0, 128, 2, ns=1)
