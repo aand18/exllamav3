@@ -200,7 +200,7 @@ tg baseline (tok/s, 256 greedy decode):
 |-----|--------------|----------------|---------------|------------|----------|----------------------|----------|
 | 8192 | 87.7-88.4 | 41.6-42.1 (pre-eref base 43.3-43.8, same-session A/B) | **44.0** | 46.1 | 95% | 1e-6 / 2.3e-5 / 6.2e-4 / 3.29e-4 | 100.00% |
 | 16384 | 83.1-83.2 | 42.1/42.4 | **44.0** | 46.2 | 96% | 1e-6 / 1.0e-5 / 1.85e-4 / 1.65e-4 | 100.00% |
-| 65536 | 62.8 | 36.3 | **44.0** | 46.1 | 83% | 1e-6 / 1.7e-5 / 5.99e-4 / n/a | 100.00% |
+| 65536 | 62.8 | 27.6 (base 36.4; expandable: 35.9 vs 37.0) | **44.0** | 46.1 | 83% | 1e-6 / 1.7e-5 / 5.99e-4 / n/a | 100.00% |
 | 131072 | 47.4-47.5 | 28.1/28.7 | **44.0** | OOM (>24GB) | 65% | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
 
 pp baseline (tok/s, full-context prefill):
@@ -231,6 +231,27 @@ expandable_segments, fp16 drifted -0.8% in-window (latency-bound
 regime: 64% SM vs 99% fp16). Unresolved-but-bounded; revisit with
 profiler before further tg surgery (no third fix round without a
 hypothesis).
+64k A/B (2026-09-29, same box/flags/harness, current b24efff vs base
+1f29695): default allocator base 36.4 vs current 27.6 (-24%);
+expandable_segments base 37.0 vs current 35.9 (-3%). The 8k residual
+likewise shrinks under expandable (current 42.9 vs ~43.5 base, ~-1.5%).
+Mechanism: pool fragmentation, not kernel code (store +0.6us/layer
+and serve +0.0us/layer by micro A/B; prefill identical 73.6/73.7s;
+KLD identical). The persistent eref buffer + changed temp cadence
+shift the pool layout; under default allocator at near-full VRAM the
+decode temps fragment into retry/split storms (uniform ~1000x op
+inflation, zero net growth, zero alloc retries). Rule: use
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True for 64k+ runs (and
+note it); code-level fragmentation hygiene (preallocated decode
+temps) is follow-up work.
+Env pitfall (2026-09-29, cost real debugging time): cmd.exe `set
+VAR=1 && ...` bakes a TRAILING SPACE into the value (`'1 '`), so
+every `== "1"` gate silently fails. All direct-chain probe/parity
+runs that day ran torch fallbacks (the phantom "0.1 tok/s 64k cliff",
+phantom OOMs, vacuous parity). Bat files (`set VAR=1` at line end)
+are clean, as is `set VAR=1&&`. Verified via in-process ENV print.
+Affected: only ad-hoc probe/parity runs; all bat-driven table
+numbers and in-process-env test twins stand.
 Spec B integrated 2026-09-28 (commit b24efff, rebased from
 /tmp/impl-wht with offset; only conflict was the helper insert site
 next to _eref_wht): prefill store WHT inplace-on-fresh-temp (n <=
