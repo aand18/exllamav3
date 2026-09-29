@@ -478,6 +478,92 @@ def _load_dispatch():
 
 
 @torch.inference_mode()
+def test_deferred_pressure_seals_match_immediate():
+    """Deferred-batched pressure seals (default ON) vs legacy immediate
+    seals (EXL3_KVARN_DEFER_SEAL=0): a single 4096-token prefill (32
+    groups vs 4 staging slots, one held by the sink) forces staging
+    pressure; records / sealed / present / exact + get_kv outputs must be
+    bit-identical, with strictly fewer seal calls in the deferred branch.
+    """
+    import os
+    torch.manual_seed(1234)
+    kvh, hd, ntok, T = 2, 128, 4096, 4096
+    k = torch.randn(T, kvh, hd).half()
+    v = torch.randn(T, kvh, hd).half()
+
+    def snapshot(layer):
+        snap = {
+            "records": layer.records.clone(),
+            "sealed": layer.sealed.clone(),
+            "present": layer.present.clone(),
+            "group_base": layer.group_base.clone(),
+            "exact_valid": layer.exact_valid.clone(),
+            "page_owner": layer.page_owner_n.clone(),
+        }
+        # Slot-independent images: slot indices may legally differ
+        # across branches, per-group rows must not.
+        sk = torch.zeros((layer.num_groups, 128, kvh, hd), dtype=torch.half)
+        sv = torch.zeros_like(sk)
+        for gi in range(layer.num_groups):
+            s = int(layer._stage_rev[gi])
+            if s >= 0:
+                sk[gi] = layer.stage_k[s]
+                sv[gi] = layer.stage_v[s]
+        snap["stage_k"], snap["stage_v"] = sk, sv
+        ek = torch.zeros((layer.num_groups, 128, kvh, hd),
+                         dtype=layer.tail_dtype)
+        ev = torch.zeros_like(ek)
+        for gi in range(layer.num_groups):
+            if bool(layer.exact_valid[gi]):
+                es = int(layer._exact_rev[gi])
+                ek[gi] = layer.exact_k[es]
+                ev[gi] = layer.exact_v[es]
+        snap["exact_k"], snap["exact_v"] = ek, ev
+        return snap
+
+    results = {}
+    old = os.environ.get("EXL3_KVARN_DEFER_SEAL")
+    try:
+        # Gate defaults ON.
+        os.environ.pop("EXL3_KVARN_DEFER_SEAL", None)
+        assert kvarn._kvarn_defer_seal_enabled()
+        for defer_on in (True, False):
+            os.environ["EXL3_KVARN_DEFER_SEAL"] = "1" if defer_on else "0"
+            layer = _layer(kvh, hd, ntok)
+            bt = _ids(ntok)
+            calls = {"n": 0}
+            orig = layer._seal_staged_blocks
+
+            def counting(_self, gs, bk, bv, _orig=orig, _calls=calls):
+                _calls["n"] += 1
+                return _orig(gs, bk, bv)
+
+            layer._seal_staged_blocks = counting.__get__(layer, type(layer))
+            layer.update_kv_direct(torch.zeros(1, dtype=torch.int32), bt,
+                                   k.unsqueeze(0), v.unsqueeze(0), T)
+            kk, vv = layer.get_kv(torch.tensor([T], dtype=torch.int32), bt)
+            snap = snapshot(layer)
+            snap["kv"] = (kk.clone(), vv.clone())
+            snap["seal_calls"] = calls["n"]
+            results[defer_on] = snap
+    finally:
+        if old is None:
+            os.environ.pop("EXL3_KVARN_DEFER_SEAL", None)
+        else:
+            os.environ["EXL3_KVARN_DEFER_SEAL"] = old
+
+    on, off = results[True], results[False]
+    assert on["seal_calls"] < off["seal_calls"], \
+        (on["seal_calls"], off["seal_calls"])
+    for key in ("records", "sealed", "present", "group_base",
+                "exact_valid", "page_owner",
+                "stage_k", "stage_v", "exact_k", "exact_v"):
+        assert torch.equal(on[key], off[key]), key
+    assert torch.equal(on["kv"][0], off["kv"][0]), "get_kv K"
+    assert torch.equal(on["kv"][1], off["kv"][1]), "get_kv V"
+
+
+@torch.inference_mode()
 def test_dispatch_kvarn_vs_fp16_cpu():
     dispatch = _load_dispatch()
     fp16_cls = sys.modules["exllamav3.cache.fp16"].CacheLayer_fp16
