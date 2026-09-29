@@ -73,6 +73,16 @@ def main():
 
         do_serve(Ew_cache)
         do_serve(Ew_fresh)
+        # Flag diagnostic: nonzero => the production arm would
+        # decline (fail-closed) and fall back to legacy full-remat.
+        _o, _f = kvarn_triton_online_serve(
+            lay0, qw, Qf, lay0.exact_k, Ew_cache, lay0._exact_rev,
+            lay0.sealed, bt[0], n_0d, qpk, scale, sink_n,
+            tail_eff, gps, gc=gc_eff)
+        import torch as _t
+        print(f"serve flag_b={int(_t.as_tensor(_f).max())} "
+              f"sealed.sum={int(lay0.sealed.sum())}/{lay0.sealed.numel()} "
+              f"n={n} gc={gc_eff}", flush=True)
         tc, tf = [], []
         for _ in range(ITERS):
             t0 = time.perf_counter()
