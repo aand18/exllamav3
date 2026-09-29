@@ -119,11 +119,19 @@ def main():
                         help="Greedy decode steps to benchmark per path "
                              "(0 = off)")
     parser.add_argument("-d", "--device", default="cuda:0")
+    parser.add_argument("-corpus", "--corpus", default="prose",
+                        choices=["prose", "code"],
+                        help="Scoring corpus: prose (repetitive sampler "
+                             "text) or code (concatenated repo .py -- "
+                             "higher entropy, longer-range dependencies, "
+                             "stricter tripwire)")
     parser.add_argument("-ref", "--ref_cache", default="fp16",
-                        choices=["fp16", "q8"],
+                        choices=["fp16", "q8", "q4"],
                         help="Reference cache for KLD/pp/tg: fp16 (quality "
                              "gospel) or q8 (fits where fp16 spills to swap, "
-                             "e.g. 128k; KLD then reads kvarn-vs-q8)")
+                             "e.g. 128k; KLD then reads kvarn-vs-q8) or q4 "
+                             "(bit-similar baseline: is kvarn4 at parity "
+                             "with plain 4-bit quant?)")
     parser.add_argument("-mcl", "--moe_cpu_offload", type=int, default=0,
                         help="Offload first N block-sparse MoE layers to CPU "
                              "(e.g. 38 for Qwen3.8-Flash-Next 3.05bpw on 24GB VRAM)")
@@ -152,6 +160,10 @@ def main():
         c_ref = Cache(model, max_num_tokens=max_tok,
                       layer_type=CacheLayer_quant, k_bits=8, v_bits=8)
         ref_tag = "q8"
+    elif args.ref_cache == "q4":
+        c_ref = Cache(model, max_num_tokens=max_tok,
+                      layer_type=CacheLayer_quant, k_bits=4, v_bits=4)
+        ref_tag = "q4"
     else:
         c_ref = Cache(model, max_num_tokens=max_tok,
                       layer_type=CacheLayer_fp16)
@@ -163,8 +175,28 @@ def main():
     print(f"load ok ({time.time() - t0:.1f}s)", flush=True)
 
     tokenizer = Tokenizer.from_config(config)
-    reps = max(16, (args.ntok // 24) + 2)
-    ids = tokenizer.encode(SAMPLER_TEXT * reps)[:, :args.ntok]
+    if args.corpus == "code":
+        import glob as _glob
+        import os as _os
+        root = _os.path.join(_os.path.dirname(__file__), "..",
+                             "exllamav3")
+        src = []
+        for _f in sorted(_glob.glob(_os.path.join(root, "**/*.py"),
+                                    recursive=True)):
+            try:
+                with open(_f, encoding="utf-8") as _fh:
+                    src.append(_fh.read())
+            except OSError:
+                pass
+        one = tokenizer.encode("\n".join(src))
+        one = one if one.dim() == 2 else one.unsqueeze(0)
+        n1 = int(one.shape[1])
+        ids = one.repeat(1, (args.ntok + n1 - 1) // n1)[:, :args.ntok]
+        print(f"corpus: code ({len(src)} files, {n1} tok each)",
+              flush=True)
+    else:
+        reps = max(16, (args.ntok // 24) + 2)
+        ids = tokenizer.encode(SAMPLER_TEXT * reps)[:, :args.ntok]
     print("tokens:", tuple(ids.shape), flush=True)
 
     torch.cuda.reset_peak_memory_stats()
