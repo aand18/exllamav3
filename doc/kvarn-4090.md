@@ -391,6 +391,13 @@ Next order (evidence-driven, one cut per commit):
 2. Split-parallel body serve (tg @length): serve grid (kvh, gc)
    is O(n) + serial combine (ours drops 43->36 with length, Bee
    flat 44); shard body over fixed token blocks, parallel combine.
+   RESULT 2026-09-29 (reverted 312eefb): split S=2048 (grid
+   (kvh,ns), ns<=32) is SLOWER at both lengths (8k 31.3 vs 43.6;
+   64k 30.6 vs 36.1), KLD-identical. Lesson: serve is
+   throughput-bound on total work, not parallelization-starved.
+   Bee's flatness = less work per step + better kernels (MMA,
+   reg-capped, 3 launches). Next lever is kernel efficiency
+   (tensorize serve), not work partitioning.
 3. Fragmentation hygiene: preallocated decode temps (or
    expandable_segments as 64k+ standard).
 4. VRAM: close imageless gap 53MB@16k (staging 9 + exact/stash
