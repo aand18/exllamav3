@@ -378,6 +378,19 @@ def _eref_wht(x: torch.Tensor, head_dim: int) -> torch.Tensor:
     return kvarn_wht_head(x, head_dim)
 
 
+def _kvarn_defer_seal_enabled() -> bool:
+    """
+    Opt-out gate for deferred-batched pressure seals (multi-row store
+    path only). Default ON: spilling eligible victims mid-call and sealing
+    them in ONE end-of-call batched call is timing-invariant (full groups
+    are immutable, so mid-call seals are bit-identical to end-of-call
+    seals), trading ~10+ small seal calls per chunk per layer for 1.
+    EXL3_KVARN_DEFER_SEAL=0 restores the legacy immediate-seal behavior
+    (loud fallback: same records, more seal calls).
+    """
+    return os.environ.get("EXL3_KVARN_DEFER_SEAL", "1") != "0"
+
+
 def _kvarn_imageless() -> bool:
     """
     Opt-in gate for imageless serve (match-bee track): the persistent
@@ -1142,7 +1155,7 @@ class CacheLayer_kvarn(CacheLayer):
 
     # -- Slot-remap for windowed staging/exact (memory plan) -----------------
 
-    def _stage_slot(self, g: int) -> int:
+    def _stage_slot(self, g: int, defer=None) -> int:
         """Slot holding group g's staging rows; assigns a free slot.
 
         A freshly assigned slot is zeroed: slots are recycled across
@@ -1154,20 +1167,36 @@ class CacheLayer_kvarn(CacheLayer):
         mid-call sealing is bit-identical to the end-of-call seal.
         Genuine overflow (only partial/open groups live, or a
         never-sealing native-exact layer) stays a loud assert.
+
+        defer (multi-row store path only, else None): spill context dict
+        (``spills`` list + the call's p0/p1 position range and g/s/rk/rv
+        row refs). On pressure, eligible victims spill instead of
+        sealing immediately: the victim's (gi, call-row indices) are
+        recorded and its slot freed WITHOUT sealing, and all spilled
+        victims seal in ONE batched call at end-of-call
+        (``_seal_spilled_batched``). Ineligible victims (prior-chunk
+        leftovers, partial-edge splits whose rows are not all in this
+        call) fall back to the legacy immediate seals below.
         """
         s = int(self._stage_rev[g])
         if s >= 0:
             return s
         free = (self._stage_slots < 0).nonzero().flatten()
         if not free.numel():
-            self._seal_full_groups(None)
-            free = (self._stage_slots < 0).nonzero().flatten()
+            if defer is not None and self._try_spill_stage_slot(g, defer):
+                free = (self._stage_slots < 0).nonzero().flatten()
+            else:
+                self._seal_full_groups(None)
+                free = (self._stage_slots < 0).nonzero().flatten()
         if not free.numel():
             # Staging pressure (dead partial tails across sequential
             # sequences: unsealed groups never release). Seal the oldest
             # below-window open group; genuine overflow stays loud below.
-            self._reclaim_stage_slot(g)
-            free = (self._stage_slots < 0).nonzero().flatten()
+            if defer is not None and self._try_spill_stage_slot(g, defer):
+                free = (self._stage_slots < 0).nonzero().flatten()
+            else:
+                self._reclaim_stage_slot(g)
+                free = (self._stage_slots < 0).nonzero().flatten()
         assert free.numel(), "KVarN: staging slot overflow"
         s = int(free[0])
         self.stage_k[s].zero_()
@@ -1205,6 +1234,64 @@ class CacheLayer_kvarn(CacheLayer):
         return ((b.unsqueeze(1) + KVAR_N_GROUP <= (o - floor).unsqueeze(0)) |
                 (b.unsqueeze(1) >= o.unsqueeze(0))).all(dim=1)
 
+    def _select_reclaim_victim(self, g: int):
+        """Sync-free victim selection shared by immediate reclaim and the
+        deferred-spill path (only the seal-vs-spill action differs).
+        Returns the oldest below-window staged + unsealed victim with rows
+        (never the allocating group; never base 0 on sink layers), or None
+        when no candidate exists. Early groups of a large prefill chunk
+        are below-window (the window is the trailing N+R), so same-call
+        groups are selectable here; the spill path additionally requires
+        full row coverage in this call (range + index checks).
+        """
+        cand = (self._stage_rev >= 0) & ~self.sealed & \
+            self.present.any(dim=1)
+        cand[g] = False
+        if self.has_sink:
+            cand = cand & (self.group_base != 0)
+        idx = cand.nonzero().flatten()
+        if idx.numel() == 0:
+            return None
+        ok = idx[self._below_all_windows(self.group_base[idx])]
+        if ok.numel() == 0:
+            return None
+        return int(ok[torch.argmin(self.group_base[ok])])
+
+    def _try_spill_stage_slot(self, g: int, defer) -> bool:
+        """Spill one eligible victim for deferred-batched sealing.
+
+        Selection reuses ``_select_reclaim_victim`` (same victim the
+        immediate path would seal). The victim spills only when ALL its
+        rows are re-extractable from this call: its base lies within the
+        call's [p0, p1) position range AND exactly 128 distinct call rows
+        map to it (full coverage; prior-chunk leftovers and partial-edge
+        splits fail one of these and fall back to immediate seal).
+        On spill, (gi, call-row indices) are appended to
+        ``defer["spills"]`` and the victim slot is freed WITHOUT sealing
+        (slot released + rev cleared; present stays True, sealed stays
+        False). Staging content is exactly recoverable at end-of-call
+        from the call's rk/rv rows (fresh slots read zero; the loop wrote
+        these same half rows), so the deferred seal is bit-identical.
+        Returns True when a victim spilled (a slot is free now).
+        """
+        victim = self._select_reclaim_victim(g)
+        if victim is None:
+            return False
+        bv = int(self.group_base[victim])
+        if not (bv >= defer["p0"] and bv + KVAR_N_GROUP <= defer["p1"]):
+            return False
+        idx = (defer["g"] == victim).nonzero().flatten()
+        if int(idx.numel()) != KVAR_N_GROUP:
+            return False
+        if int(torch.unique(defer["s"][idx]).numel()) != KVAR_N_GROUP:
+            return False
+        defer["spills"].append((victim, idx))
+        sv = int(self._stage_rev[victim])
+        assert sv >= 0, "KVarN: spill victim without a staging slot"
+        self._stage_slots[sv] = -1
+        self._stage_rev[victim] = -1
+        return True
+
     def _reclaim_stage_slot(self, g: int) -> None:
         """Free one staging slot under pressure by sealing the oldest
         below-window open group (sync-free select; one sync for the id;
@@ -1217,19 +1304,13 @@ class CacheLayer_kvarn(CacheLayer):
         staged + unsealed + has rows + not the allocating group + (sink:
         not base 0) + below every live window. The current call's filling
         groups are in-window by construction, so they are never victims.
+        Victim selection is shared with the deferred-spill path
+        (``_select_reclaim_victim``); only the seal-vs-spill action
+        differs here (always immediate seal).
         """
-        cand = (self._stage_rev >= 0) & ~self.sealed & \
-            self.present.any(dim=1)
-        cand[g] = False
-        if self.has_sink:
-            cand = cand & (self.group_base != 0)
-        idx = cand.nonzero().flatten()
-        if idx.numel() == 0:
+        victim = self._select_reclaim_victim(g)
+        if victim is None:
             return
-        ok = idx[self._below_all_windows(self.group_base[idx])]
-        if ok.numel() == 0:
-            return
-        victim = int(ok[torch.argmin(self.group_base[ok])])
         self._seal_group(victim)
 
     def _exact_slot(self, g: int, live_bt=None, live_n=None) -> int:
@@ -1775,6 +1856,23 @@ class CacheLayer_kvarn(CacheLayer):
             self._dirty_mask[gv[(gv >= 0) & (gv < self.num_groups)]] = True
             self._dirty_any = True
             return
+        # Deferred-batched pressure seals (default ON, multi-row path
+        # only): the loop below spills eligible victims on staging-slot
+        # pressure (record + free, no seal) and seals them all in ONE
+        # batched call before the end-of-call seal. Single-row decode,
+        # SWA and native-exact paths keep defer=None (legacy immediate
+        # seals). Positions are contiguous per caller (seqlens + arange),
+        # so [min, max] bounds the call's range for the spill check.
+        defer = None
+        if (not self.is_swa and not self.tail_native_exact
+                and rows_k.shape[0] > 1
+                and _kvarn_defer_seal_enabled()):
+            # Sync-free range: pos is contiguous [seqlens, seqlens+T)
+            # (length>1 branch above), so [n_new-T, n_new) bounds it
+            # without .min()/.max() DtoH syncs.
+            _T = int(rows_k.shape[0])
+            defer = {"spills": [], "p0": n_new - _T, "p1": n_new,
+                     "g": g, "s": s, "rk": rk, "rv": rv}
         for gi in torch.unique(g).tolist():
             gi = int(gi)
             m = (g == gi)
@@ -1783,7 +1881,7 @@ class CacheLayer_kvarn(CacheLayer):
             bold = int(self.group_base[gi])
             # Staging lives in the group's slot (assign zeroes a fresh
             # slot; the reset branch zeroes a kept slot explicitly).
-            slot = self._stage_slot(gi)
+            slot = self._stage_slot(gi, defer)
             if bold != bnew:
                 # New content (first write or page reuse): reset the group.
                 # A reused page stops aliasing its prompt-cache sibling.
@@ -1840,6 +1938,12 @@ class CacheLayer_kvarn(CacheLayer):
         self._evict_exact_all(int(rows_k.shape[0]))
         if self.tail_native_exact:
             return
+        # Deferred victims seal first in ONE batched call (they are
+        # slotless, so the normal path below must never see them
+        # unsealed: it skips rev<0 groups, and they are sealed by the
+        # time it runs, hence skipped automatically).
+        if defer is not None and defer["spills"]:
+            self._seal_spilled_batched(defer)
         self._seal_full_groups(torch.unique(g))
 
     @torch.inference_mode()
@@ -1928,6 +2032,13 @@ class CacheLayer_kvarn(CacheLayer):
             if self.has_sink:
                 # Logical sink group (base 0) stays exact, never seals.
                 seal_gs = seal_gs[self.group_base[seal_gs] != 0]
+            # Deferred-spill guard: mid-call spilled groups are present +
+            # unsealed + slotless until the end-of-call batched seal; a
+            # -1 slot gather would read another group's rows. Skip them
+            # here (the deferred seal owns them; they are sealed by the
+            # time the end-of-call scan runs). No-op with no spill in
+            # flight (legacy invariant: staged ⟹ assigned).
+            seal_gs = seal_gs[self._stage_rev[seal_gs] >= 0]
             if seal_gs.numel():
                 self._seal_groups_batched(seal_gs)
 
@@ -1943,11 +2054,29 @@ class CacheLayer_kvarn(CacheLayer):
         C = kvh * sl
         # Staging is slot-windowed: gather through the rev map (sealed
         # groups are always assigned — rows only seal after being
-        # stored, and every store path assigns).
+        # stored, and every store path assigns), then run the shared
+        # seal core (identical math for immediate and deferred seals).
         gl = gs.to(device=self.device, dtype=torch.long)
         slot_g = self._stage_rev[gl]
         bk = self.stage_k[slot_g].float()
         bv = self.stage_v[slot_g].float()
+        self._seal_staged_blocks(gs, bk, bv)
+
+    @torch.inference_mode()
+    def _seal_staged_blocks(self, gs: torch.Tensor, bk: torch.Tensor,
+                            bv: torch.Tensor):
+        """Shared seal core: (G, 128, kvh, hd) fp32 rotated-domain blocks
+        -> records + sealed + dirty + staging release. The tile math
+        (variance_normalize, RTN quantize, pack) is per-tile independent,
+        so blocks gathered from staging and blocks restored from spilled
+        call rows seal bit-identically. Partial groups seal
+        present-gated-identically to the immediate path: missing rows are
+        zeros in both (fresh slots read zero). Staging release is a safe
+        no-op for slotless (already spilled) groups.
+        """
+        L = self.layout
+        kvh, sl = self.num_kv_heads, self.slices
+        C = kvh * sl
         G = bk.shape[0]
         bkr = bk.reshape(G, KVAR_N_GROUP, kvh, sl, KVAR_N_GROUP)
         bvr = bv.reshape(G, KVAR_N_GROUP, kvh, sl, KVAR_N_GROUP)
@@ -1987,11 +2116,64 @@ class CacheLayer_kvarn(CacheLayer):
         # M4: staging is freed on seal; only the single open group (plus
         # the sink) retains fp16 staging. Exact blocks stay for the
         # overlay over sealed tail groups. Release is vectorized and
-        # sync-free (sealed groups are always assigned; guard the mask
-        # for the degenerate empty call).
+        # sync-free (sealed groups are always assigned, except slotless
+        # deferred victims whose release is a safe no-op here; guard the
+        # mask for the degenerate empty call).
+        gl = gs.to(device=self.device, dtype=torch.long)
         rel = self._stage_rev[gl]
         self._stage_slots[rel[rel >= 0]] = -1
         self._stage_rev[gl] = -1
+
+    @torch.inference_mode()
+    def _seal_spilled_batched(self, defer) -> None:
+        """Seal all mid-call spilled victims in ONE batched call.
+
+        Staging-equivalent blocks are restored from the call's own rk/rv
+        rows (still alive, zero extra memory): fresh staging slots read
+        zero and the loop wrote these same half rows, so the restored
+        half blocks are exactly what the freed staging held, and the
+        shared ``_seal_staged_blocks`` core seals bit-identically to the
+        immediate path (same tiles -> same Sinkhorn/quantize/pack).
+        Spilled groups are full-coverage by construction (the spill
+        checks), so every restored row is a call row; missing rows stay
+        zero exactly like fresh staging.
+
+        Mid-call audit: spilled groups are present + unsealed + slotless
+        from their spill until here. Nothing between reads their
+        staging: serve/get_kv and the exact overlay never run inside
+        _store_rows; _evict_exact_all touches exact slots only (spilled
+        exact rows stay resident, so the loop's eref slot refresh stays
+        valid -- no re-refresh needed at seal, only the dirty flags the
+        core sets); _seal_full_groups skips rev<0 groups; reclaim only
+        selects rev>=0 groups.
+
+        Must run BEFORE the end-of-call ``_seal_full_groups``: spilled
+        groups have no staging, so the normal path must never see them
+        unsealed (they are sealed by the time it runs, hence skipped).
+        """
+        spills = defer["spills"]
+        rk, rv, s = defer["rk"], defer["rv"], defer["s"]
+        kvh, hd = self.num_kv_heads, self.head_dim
+        G = len(spills)
+        bk = torch.zeros((G, KVAR_N_GROUP, kvh, hd),
+                         dtype=torch.half, device=self.device)
+        bv = torch.zeros_like(bk)
+        gis: list = []
+        for gi, idx in spills:
+            gi = int(gi)
+            sl = s[idx]
+            bk[len(gis), sl] = rk[idx]
+            bv[len(gis), sl] = rv[idx]
+            gis.append(gi)
+        gs = torch.tensor(gis, device=self.device, dtype=torch.long)
+        # Still slotless + unsealed (nothing re-sealed them early: the
+        # _seal_full_groups rev>=0 guard owns this invariant). One
+        # vectorized check instead of per-group syncs.
+        assert bool((self._stage_rev[gs] < 0).all()), \
+            "KVarN: spilled group regained staging mid-call"
+        assert not bool(self.sealed[gs].any()), \
+            "KVarN: spilled group sealed before deferred seal"
+        self._seal_staged_blocks(gs, bk.float(), bv.float())
 
     @torch.inference_mode()
     def _seal_group(self, g: int):
@@ -2003,6 +2185,9 @@ class CacheLayer_kvarn(CacheLayer):
         # cliff on 256-step runs.
         assert bool(self.present[g].any()), \
             f"KVarN: sealing group {g} without staging (base {int(self.group_base[g])})"
+        assert int(self._stage_rev[g]) >= 0, \
+            f"KVarN: sealing group {g} without a staging slot " \
+            f"(spilled groups seal only via _seal_spilled_batched)"
         self._seal_groups_batched(
             torch.tensor([g], device=self.device, dtype=torch.long))
 
