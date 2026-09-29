@@ -207,6 +207,11 @@ max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,
 absolute values tiny). Budgeted: each cut must keep same-top
 100% and mean < 1e-4 @64k; reasoning benches (not KLD) decide
 ultimately per gospel policy.
+Reasoning smoke (2026-09-29, bbeh_mini --limit 3 -fresh, current
+code): kvarn4 0/3, fp16 baseline 0/3 on the same 3 (BBH-hard tasks
+hit token limits on both; ~47 tok/s kvarn vs ~89 tok/s fp16
+observed). No reasoning regression vs fp16; KLD same-top 100%
+stands as the quality gate.
 | 131072 | 47.4-47.5 | 28.1/28.7 | **44.0** | OOM (>24GB) | 65% | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
 
 128k q8-ref (2026-09-29, current code, same box/flags): q8 prefill
