@@ -200,7 +200,13 @@ tg baseline (tok/s, 256 greedy decode):
 |-----|--------------|----------------|---------------|------------|----------|----------------------|----------|
 | 8192 | 87.5-88.1 | 43.6-43.8 (pre-eref base 43.3-43.8; expandable 42.9) | **44.0** | 46.1 | 99% | 1e-6 / 2.5e-5 / 6.61e-4 / 3.51e-4 | 100.00% |
 | 16384 | 83.1-83.2 | 42.1/42.4 | **44.0** | 46.2 | 96% | 1e-6 / 1.0e-5 / 1.85e-4 / 1.65e-4 | 100.00% |
-| 65536 | 62.8 | 36.1 (base 36.4; expandable: 35.9 vs 37.0) | **44.0** | 46.1 | 82% | 1e-6 / 2.3e-5 / 8.19e-4 / n/a | 100.00% |
+| 65536 | 62.8 | 36.6 (base 36.4) | **44.0** | 46.1 | 83% | 1e-6 / 3.2e-5 / 1.30e-3 / n/a | 100.00% |
+Note: KLD divergence trend across approximation cuts (mean
+1.7e-5 base -> 2.3e-5 Sinkhorn -> 3.2e-5 deferred seals @64k;
+max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,
+absolute values tiny). Budgeted: each cut must keep same-top
+100% and mean < 1e-4 @64k; reasoning benches (not KLD) decide
+ultimately per gospel policy.
 | 131072 | 47.4-47.5 | 28.1/28.7 | **44.0** | OOM (>24GB) | 65% | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
 
 128k q8-ref (2026-09-29, current code, same box/flags): q8 prefill
@@ -218,9 +224,9 @@ pp baseline (tok/s, full-context prefill):
 
 | ctx (tok) | pp ours fp16 (s, tok/s) | pp ours kvarn4 (s, tok/s) | pp Bee kvarn4 (s, tok/s) | ours/Bee (%) |
 |-----|--------------|----------------|---------------|----------|
-| 8192 | 3.2-3.3s, ~2525 | 6.7s, ~1220 (Sinkhorn cut; was 8.3s) | **2.8s, 2946** | 41% |
+| 8192 | 3.2-3.3s, ~2525 | 5.0-5.1s, ~1630 (deferred seals; was 6.7s) | **2.8s, 2946** | 55% |
 | 16384 | 6.5s, ~2532 | 16.4-16.5s, ~997 | **5.8s, 2844** | 35% |
-| 65536 | 32.6-32.7s, ~2008 | 62.0s, ~1056 (Sinkhorn cut; was 74.3s) | **28.1s, 2336** | 45% |
+| 65536 | 32.6-32.7s, ~2008 | 48.2s, ~1359 (deferred seals; was 62.0s) | **28.1s, 2336** | 58% |
 | 131072 | 201.8-203.0s, ~648 (swap; q8: 87.7s, 1494) | 219.4-220.0s, ~596 (q8-ref run: 173.9s, 754; now 148.4s, 883 post-Sinkhorn) | **69.5s, 1887** | 39% |
 
 Probe-arm per-layer (us, imageless): store 245.8, qwht 11.6, eref
