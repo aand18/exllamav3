@@ -225,6 +225,15 @@ pp baseline (tok/s, full-context prefill):
 | ctx (tok) | pp ours fp16 (s, tok/s) | pp ours kvarn4 (s, tok/s) | pp Bee kvarn4 (s, tok/s) | ours/Bee (%) |
 |-----|--------------|----------------|---------------|----------|
 | 8192 | 3.2-3.3s, ~2525 | 5.0-5.1s, ~1630 (deferred seals; was 6.7s) | **2.8s, 2946** | 55% |
+Chunk 8192 (single forward, 2026-09-29): kvarn pre 4.8s, 1718 tok/s
+(+5% vs chunk-4096 5.05s; fp16 peak 14.5GB vs 12.5GB), KLD median
+1e-6 / mean 1.9e-5 / max 5.15e-4 (slightly BETTER than chunk-4096:
+fewer chunk boundaries), same-top 100%. Recipe: biggest chunk
+that fits VRAM (fewer forwards amortize per-call fixed costs).
+K4V2 vehicle check @8k (2026-09-29, same flags): pre 5.0s (same),
+tg 34.9 (vs 43.6 K4V4, -20%), KLD median 2.7e-4 / mean 5.2e-4 /
+max 7.8e-3 (270x K4V4 median), same-top 100%. K4V4 stays the
+vehicle (confirmed by data, not just policy).
 | 16384 | 6.5s, ~2532 | 16.4-16.5s, ~997 | **5.8s, 2844** | 35% |
 | 65536 | 32.6-32.7s, ~2008 | 48.2s, ~1359 (deferred seals; was 62.0s) | **28.1s, 2336** | 58% |
 | 131072 | 201.8-203.0s, ~648 (swap; q8: 87.7s, 1494) | 219.4-220.0s, ~596 (q8-ref run: 173.9s, 754; now 148.4s, 883 post-Sinkhorn) | **69.5s, 1887** | 39% |
