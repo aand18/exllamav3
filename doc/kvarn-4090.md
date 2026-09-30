@@ -204,7 +204,7 @@ fast path, protocol v2 hot-cache). Bee columns are external
 |-----|--------------|----------------|---------------|------------|----------|----------------------|----------|
 | 8192 | 87.5-88.1 | 40.2-40.9 (was 43.6-43.8 pre-v2: cold-cache inflation) | **44.0** | 46.1 | 93% | 1e-6 / 2.3e-5 / 6.45e-4 / n/a | 100.00% |
 | 16384 | 82.2-82.4 | 39.4 (first run 31.8 cold: nbpad recompile) | **44.0** | 46.2 | 90% | 1e-6 / 1.1e-5 / 2.96e-4 / n/a | 100.00% |
-| 65536 | 62.2-62.3 | 34 (28.4 cold -> 33.7 -> 34.2; was 36.6 pre-v2) | **44.0** | 46.1 | 77% | 1e-6 / 2.8e-5 / 1.36e-3 / n/a | 100.00% |
+| 65536 | 62.2-62.3 | 35.1 (was 34 pre-hierarchical; 28.4 cold -> 33.7 -> 34.2 -> 35.1) | **44.0** | 46.1 | 80% | 1e-6 / 2.8e-5 / 1.36e-3 / n/a | 100.00% |
 Note: KLD divergence trend across approximation cuts (mean
 1.7e-5 base -> 2.3e-5 Sinkhorn -> 3.2e-5 deferred seals @64k;
 max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,
@@ -259,14 +259,21 @@ chunk 8192, protocol v2): NO kvarn cliff. pp kvarn/fp16 slips
 the 16 full-attn layers hits everyone: fp16 itself falls
 2525 -> 2565 -> 2044, Bee 2946 -> 2844 -> 2336). The old 16k cliff
 (997 tok/s) was stale measurement, killed by re-measure (2175).
-tg slope is the real scale story: 40.8 -> 39.4 (-3%) -> 34
+tg slope is the real scale story: 40.8 -> 39.4 (-3%) -> 35.1
 (-14%), vs Bee flat 44 -- serve partials traffic is O(n) in gc
 (acc + m/l combine reads double per doubling) while Bee's fused
-serve + parallel combine is flat. Serve+combine fusion would
-address exactly this slope. New-context-length = new triton
-specializations (nbpad): first run at each ctx reads 15-25% low
-(16k: 31.8 -> 39.4; 64k: 28.4 -> 33.7 -> 34.2); always run twice
-per ctx, take the hot number (protocol v2 amendment).
+serve + parallel combine is flat. Hierarchical serve+combine
+(`3647f54`, groups capped at 128 past gc 64: 8k/16k bit-identical
+direct-equiv, 64k 4x fewer partials) recovered +3% (34 -> 35.1,
+K4V2@64k 35.5, all gates green). Lesson inside the lesson: the
+first attempt (flat 32 groups) LOST 4% -- serve is
+parallelism-bound, not traffic-bound (128 CTAs underfilled the
+144 SMs); 512 CTAs saturate, so the cap is 128, not 32.
+New-context-length = new triton specializations (nbpad): first run
+at each ctx reads 15-25% low (16k: 31.8 -> 39.4; 64k: 28.4 ->
+33.7 -> 34.2); always run twice per ctx, take the hot number
+(protocol v2 amendment). Same for ANY kernel source change
+(comments included: triton hashes source text).
 Chunk 8192 (single forward, 2026-09-29): kvarn pre 4.8s, 1718 tok/s
 (+5% vs chunk-4096 5.05s; fp16 peak 14.5GB vs 12.5GB), KLD median
 1e-6 / mean 1.9e-5 / max 5.15e-4 (slightly BETTER than chunk-4096:
