@@ -268,10 +268,13 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         # Fused body-stats + original-domain merge (one launch, was
         # ~13 torch dispatches): out_b is already original-domain
         # normalized body attention (combine folds the out-WHT), so it
-        # un-normalizes by den with NO extra WHT (cacd7af).
+        # un-normalizes by den with NO extra WHT (cacd7af). Groups (not
+        # gc_eff): serve partials are groups-strided under hierarchical
+        # subgroups; read the stride from the buffer itself.
         out = kvarn_triton_online_merge(
             layer._ov_serve_m, layer._ov_serve_l, out_b,
-            tail_m, tail_den, tail_num, qpk, gc_eff)
+            tail_m, tail_den, tail_num, qpk,
+            int(layer._ov_serve_m.shape[2]))
     return out.reshape(bsz, q_len, qh, hd)
 
 
