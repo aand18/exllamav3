@@ -1527,6 +1527,7 @@ if _have_triton:
         KVH: tl.constexpr, QPK: tl.constexpr, QPAD: tl.constexpr,
         HD: tl.constexpr, GMAX: tl.constexpr, SCALE: tl.constexpr,
         SINK_N: tl.constexpr, TAIL_EFF: tl.constexpr,
+        CPG: tl.constexpr, GROUPS: tl.constexpr,
     ):
         pid_h = tl.program_id(0)
         pid_c = tl.program_id(1)
@@ -1547,10 +1548,16 @@ if _have_triton:
         l = tl.zeros([QPAD], dtype=tl.float32)
         acc = tl.zeros([QPAD, HD], dtype=tl.float32)
     
-        tok = tl.arange(0, 16)  # TOK=16 rows/iter; 8 iters cover 128
-        for t0 in tl.range(8):
+        tok = tl.arange(0, 16)  # TOK=16 rows/iter
+        # Hierarchical super-chunk: each program covers CPG chunks
+        # (CPG*128 rows) with one online state instead of one chunk per
+        # program. CPG=1 is exactly the old path (8 iters cover 128).
+        # Past-n tiles are no-ops via the r-mask (same mechanism as the
+        # old last-chunk partial tiles); the reduction order changes
+        # (tree of depth 2 vs flat: fp32 assoc noise only, allclose-gated).
+        for t0 in tl.range(8 * CPG):
             t = t0 * 16
-            p = pid_c * 128 + t + tok  # (TOK,)
+            p = (pid_c * CPG) * 128 + t + tok  # (TOK,)
             r = p < n
             body = (p >= SINK_N) & (p < tail_start) & r
             pa = tl.where(r, p, 0)
@@ -1734,11 +1741,13 @@ if _have_triton:
     
         qoff2 = tl.arange(0, QPAD)
         qmask2 = qoff2 < QPK
-        tl.store(m_ptr + (pid_h * QPAD * GMAX) + qoff2 * GMAX + pid_c, m,
-                 mask=qmask2)
-        tl.store(l_ptr + (pid_h * QPAD * GMAX) + qoff2 * GMAX + pid_c, l,
-                 mask=qmask2)
-        tl.store(out_ptr + ((pid_h * QPAD * GMAX) + qoff2[:, None] * GMAX
+        # Partials strided by GROUPS (subgroup count), not GMAX: with
+        # CPG=1 (GROUPS==GMAX) this is bit-identical to the old layout.
+        tl.store(m_ptr + (pid_h * QPAD * GROUPS) + qoff2 * GROUPS + pid_c,
+                 m, mask=qmask2)
+        tl.store(l_ptr + (pid_h * QPAD * GROUPS) + qoff2 * GROUPS + pid_c,
+                 l, mask=qmask2)
+        tl.store(out_ptr + ((pid_h * QPAD * GROUPS) + qoff2[:, None] * GROUPS
                             + pid_c) * HD + lane[None, :], acc,
                  mask=qmask2[:, None])
 
@@ -1778,14 +1787,25 @@ def kvarn_triton_online_serve(layer, qw, Qf, exact_k, exact_v_w, exrev,
         gc = gmax
     assert gc <= gmax
     qpad = 1 << (qpk - 1).bit_length()
-    need = (qh, qpad, gc, hd)
+    # Hierarchical subgroups: direct (one chunk per program) while
+    # gc <= 64 (today's exact path, incl. all of 8k), else cap at 128
+    # subgroups (16k: 128 groups = direct-equivalent; 64k: 128 groups
+    # x CPG=4; 128k: x CPG=8). The first attempt (flat 32) proved serve
+    # is parallelism-bound, not traffic-bound: 128 CTAs underfilled the
+    # GPU and lost 4% despite 16x less traffic. 512 CTAs saturate the
+    # 144 SMs, so 128 groups keep full occupancy AND cut partials
+    # traffic 4x at 64k. Combine/merge read GROUPS partials with
+    # matching strides (stride == count invariant holds, both UNCHANGED).
+    groups = gc if gc <= 64 else min(gc, 128)
+    cpg = (gc + groups - 1) // groups
+    need = (qh, qpad, groups, hd)
     if getattr(layer, "_ov_serve_shape", None) != need or \
             getattr(layer, "_ov_serve_m", None) is None:
-        layer._ov_serve_m = torch.empty((kvh, qpad, gc),
+        layer._ov_serve_m = torch.empty((kvh, qpad, groups),
                                         dtype=torch.float32, device=dev)
-        layer._ov_serve_l = torch.empty((kvh, qpad, gc),
+        layer._ov_serve_l = torch.empty((kvh, qpad, groups),
                                         dtype=torch.float32, device=dev)
-        layer._ov_serve_acc = torch.empty((kvh, qpad, gc, hd),
+        layer._ov_serve_acc = torch.empty((kvh, qpad, groups, hd),
                                           dtype=torch.float32, device=dev)
         layer._ov_serve_out = torch.empty((qh, hd), dtype=torch.float32,
                                           device=dev)
@@ -1813,7 +1833,7 @@ def kvarn_triton_online_serve(layer, qw, Qf, exact_k, exact_v_w, exrev,
               f"exrev={int(exrev.sum())} sealed={int(sealed.sum())} "
               f"bt={int(bt.sum())} scale={scale} sink={sink_n} "
               f"tail={tail_eff} gps={gps} qpk={qpk}", flush=True)
-    _kvarn_online_serve_kernel[(kvh, gc,)](
+    _kvarn_online_serve_kernel[(kvh, groups,)](
         qw, Qf, records, rec_f16, exact_k, exact_v_w, exrev, sealed, bt,
         n_0d, flag, m, l, acc,
         layout.k_payload_off,
@@ -1823,12 +1843,12 @@ def kvarn_triton_online_serve(layer, qw, Qf, exact_k, exact_v_w, exrev,
         layout.v_s_row_off // 2, layout.v_zp_off // 2,
         layout.v_s_col_off // 2, v_bits,
         records.shape[1], records.shape[2], sl, gps,
-        kvh, qpk, qpad, hd, gc, scale, sink_n, tail_eff,
+        kvh, qpk, qpad, hd, gc, scale, sink_n, tail_eff, cpg, groups,
         num_warps=4, num_stages=1)
     sscale = 1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5)
-    nbpad = 1 << (gc - 1).bit_length()
+    nbpad = 1 << (groups - 1).bit_length()
     _kvarn_online_combine_kernel[(qh,)](
-        m, l, acc, out, kvh, qpk, qpad, gc, nbpad, hd, sl, sscale,
+        m, l, acc, out, kvh, qpk, qpad, groups, nbpad, hd, sl, sscale,
         num_warps=1)
     import os as _os2
     if _os2.environ.get("EXL3_KVARN_DEBUG_HASH") == "1":

@@ -386,6 +386,73 @@ def test_online_serve_k4v2_matches_torch():
 
 
 @pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
+def test_online_serve_grouped_matches_torch():
+    # Hierarchical subgroups (gc=130 > 64 -> 128 groups, CPG=2, uneven
+    # tail: program 64 covers chunk 128-129 (129 real + 1 masked no-op),
+    # programs 65-127 fully masked) vs torch reference: same pattern as
+    # the k4v2 twin but K4V4 (production vehicle, nibble path).
+    # Reduction order differs twice (within-subgroup online +
+    # across-subgroup combine), so allclose (not equal); a
+    # stride/count bug shows as O(1) errors.
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(ROOT / "eval"))
+    from _spike2_online import _make_records
+
+    torch.manual_seed(15)
+    kvh, sl, hd, qpk = 2, 1, 128, 2
+    qh = kvh * qpk
+    layout = kvarn.kvarn_make_layout(128, 128, 4, 4)
+    G, n = 130, 130 * 128
+    gps, scale = 2, hd ** -0.5
+    Q = torch.randn(qh, hd, dtype=torch.float16, device="cuda")
+    Qf = Q.float()
+    Qw = kt.kvarn_triton_wht_rows(Q.float(), hd)
+    records = _make_records(G, kvh, sl, layout, 4, 4)
+    exact_k = torch.zeros(G, 128, kvh, hd, dtype=torch.float16,
+                          device="cuda")
+    exact_v_w = torch.zeros(G, 128, kvh, hd, dtype=torch.float32,
+                            device="cuda")
+    exrev = torch.arange(G, dtype=torch.int64, device="cuda")
+    sealed = torch.ones(G, dtype=torch.bool, device="cuda")
+    bt = torch.arange((n + 255) // 256, dtype=torch.int32, device="cuda")
+    n_0d = torch.tensor([n], dtype=torch.int32, device="cuda")
+    lay = SimpleNamespace(
+        records=records, layout=layout, k_bits=4, v_bits=4,
+        num_kv_heads=kvh, head_dim=hd, slices=sl)
+    out_b, flag_b = kt.kvarn_triton_online_serve(
+        lay, Qw, Qf, exact_k, exact_v_w, exrev, sealed, bt, n_0d,
+        qpk, scale, 0, 0, gps, gc=G)
+    assert flag_b == 0
+    # Subgroup buffers: 128 partials, not 130 (qpad=2 for qpk=2).
+    assert tuple(lay._ov_serve_m.shape) == (kvh, 2, 128), \
+        lay._ov_serve_m.shape
+    Ks, Vs = [], []
+    for g in range(G):
+        for h in range(kvh):
+            rec = records[g, h * sl]
+            tk = kvarn.kvarn_dequantize_k_tile(rec, 4, layout)
+            tv = kvarn.kvarn_dequantize_v_tile(rec, 4, layout)
+            Ks.append(tk.T.contiguous())
+            Vs.append(tv)
+    K_all = torch.stack(Ks).reshape(G, kvh, 128, hd).permute(1, 0, 2, 3)
+    V_all = torch.stack(Vs).reshape(G, kvh, 128, hd).permute(1, 0, 2, 3)
+    refs = []
+    for h in range(kvh):
+        q = Qw[h * qpk:(h + 1) * qpk].float()
+        st = torch.bmm(q.unsqueeze(0).expand(1, -1, -1),
+                       K_all[h].reshape(-1, hd).T.unsqueeze(0)
+                       ).squeeze(0) * scale
+        pe = torch.softmax(st, dim=-1)
+        refs.append(pe @ V_all[h].reshape(-1, hd))
+    ref = kvarn.kvarn_wht_head(torch.cat(refs).reshape(qh, hd), hd)
+    d = (out_b.float() - ref.float()).abs()
+    print(f"grouped serve: maxabs={float(d.max()):.3e} "
+          f"meanabs={float(d.mean()):.3e}")
+    assert float(d.max()) < 5e-3, float(d.max())
+
+
+@pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
 def test_prefill_4096_chunks_match_torch_path():
     # Spec B prefill twin: twin layers, 4096-token prefill in 4096-wide
     # chunks (single chunk) plus 1024-wide chunks, fused WHT (env on) vs
