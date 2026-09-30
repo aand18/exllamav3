@@ -196,11 +196,15 @@ throughout; ARMATTN PASS @8k. Bold = winner.)
 
 tg baseline (tok/s, 256 greedy decode):
 
+Code version for ours columns: `f73271f` (2026-09-30; seal-direct
+fast path, protocol v2 hot-cache). Bee columns are external
+(beellama.cpp). Untagged older numbers predate versioning.
+
 | ctx (tok) | tg ours fp16 (tok/s) | tg ours kvarn4 (tok/s) | tg Bee kvarn4 (tok/s) | tg Bee f16 (tok/s) | ours/Bee (%) | KLD med/mean/max/p99 (unitless) | same-top (%) |
 |-----|--------------|----------------|---------------|------------|----------|----------------------|----------|
-| 8192 | 87.5-88.1 | 43.6-43.8 (pre-eref base 43.3-43.8; expandable 42.9) | **44.0** | 46.1 | 99% | 1e-6 / 2.5e-5 / 6.61e-4 / 3.51e-4 | 100.00% |
-| 16384 | 83.1-83.2 | 42.1/42.4 | **44.0** | 46.2 | 96% | 1e-6 / 1.0e-5 / 1.85e-4 / 1.65e-4 | 100.00% |
-| 65536 | 62.8 | 36.6 (base 36.4) | **44.0** | 46.1 | 83% | 1e-6 / 3.2e-5 / 1.30e-3 / n/a | 100.00% |
+| 8192 | 87.5-88.1 | 40.2-40.9 (was 43.6-43.8 pre-v2: cold-cache inflation) | **44.0** | 46.1 | 93% | 1e-6 / 2.3e-5 / 6.45e-4 / n/a | 100.00% |
+| 16384 | 82.2-82.4 | 39.4 (first run 31.8 cold: nbpad recompile) | **44.0** | 46.2 | 90% | 1e-6 / 1.1e-5 / 2.96e-4 / n/a | 100.00% |
+| 65536 | 62.2-62.3 | 34 (28.4 cold -> 33.7 -> 34.2; was 36.6 pre-v2) | **44.0** | 46.1 | 77% | 1e-6 / 2.8e-5 / 1.36e-3 / n/a | 100.00% |
 Note: KLD divergence trend across approximation cuts (mean
 1.7e-5 base -> 2.3e-5 Sinkhorn -> 3.2e-5 deferred seals @64k;
 max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,
@@ -238,9 +242,31 @@ lever. Recommendation stands: expandable_segments for 64k+.
 
 pp baseline (tok/s, full-context prefill):
 
+Code version for ours columns: `f73271f` (2026-09-30; seal-direct
+fast path, protocol v2 hot-cache, chunk 8192 unless noted). Bee
+columns are external (beellama.cpp). Untagged older numbers predate
+versioning.
+
 | ctx (tok) | pp ours fp16 (s, tok/s) | pp ours kvarn4 (s, tok/s) | pp Bee kvarn4 (s, tok/s) | ours/Bee (%) |
 |-----|--------------|----------------|---------------|----------|
-| 8192 | 3.2-3.3s, ~2525 | 5.0-5.1s, ~1630 (deferred seals; was 6.7s) | **2.8s, 2946** | 55% |
+| 8192 | 3.2-3.3s, ~2525 | 3.7-3.8s, ~2180 (was 5.0-5.1s pre-fast-path) | **2.8s, 2946** | 75% |
+| 16384 | 6.4s, ~2565 | 7.5-7.6s, ~2175 (was 16.4s pre-v2: stale) | **5.8s, 2844** | 77% |
+| 65536 | 32.1s, ~2044 | 40.0s, ~1637 (was 48.2s pre-fast-path) | **28.1s, 2336** | 70% |
+
+Long-context degradation verdict (2026-09-30, code `f73271f`,
+chunk 8192, protocol v2): NO kvarn cliff. pp kvarn/fp16 slips
+88% -> 85% -> 80% over 8x ctx (shared O(n^2) prefill attention in
+the 16 full-attn layers hits everyone: fp16 itself falls
+2525 -> 2565 -> 2044, Bee 2946 -> 2844 -> 2336). The old 16k cliff
+(997 tok/s) was stale measurement, killed by re-measure (2175).
+tg slope is the real scale story: 40.8 -> 39.4 (-3%) -> 34
+(-14%), vs Bee flat 44 -- serve partials traffic is O(n) in gc
+(acc + m/l combine reads double per doubling) while Bee's fused
+serve + parallel combine is flat. Serve+combine fusion would
+address exactly this slope. New-context-length = new triton
+specializations (nbpad): first run at each ctx reads 15-25% low
+(16k: 31.8 -> 39.4; 64k: 28.4 -> 33.7 -> 34.2); always run twice
+per ctx, take the hot number (protocol v2 amendment).
 Chunk 8192 (single forward, 2026-09-29): kvarn pre 4.8s, 1718 tok/s
 (+5% vs chunk-4096 5.05s; fp16 peak 14.5GB vs 12.5GB), KLD median
 1e-6 / mean 1.9e-5 / max 5.15e-4 (slightly BETTER than chunk-4096:
@@ -355,8 +381,8 @@ unpack; mechanism open, not goal-blocking). Quad path stays
 (correct, exercised by twin; helps if K4V2 revives). K4V2 parked:
 slower AND 270x KLD despite author's pick; its memorandum value
 is VRAM (smaller v payload), not speed.
-| 16384 | 6.5s, ~2532 | 16.4-16.5s, ~997 | **5.8s, 2844** | 35% |
-| 65536 | 32.6-32.7s, ~2008 | 48.2s, ~1359 (deferred seals; was 62.0s) | **28.1s, 2336** | 58% |
+(The 16k/64k pp rows that lived here are superseded by the versioned
+pp baseline table above; 128k below is the latest available.)
 | 131072 | 201.8-203.0s, ~648 (swap; q8: 87.7s, 1494) | 219.4-220.0s, ~596 (q8-ref run: 173.9s, 754; now 148.4s, 883 post-Sinkhorn) | **69.5s, 1887** | 39% |
 
 Probe-arm per-layer (us, imageless): store 245.8, qwht 11.6, eref
