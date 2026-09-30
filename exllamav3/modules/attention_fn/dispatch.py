@@ -257,7 +257,8 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         # (one launch, was ~5 dispatches + the pe temporary). The mask
         # lives inside the kernel now (same exrev array the serve kernel
         # reads: torch owns exrev<0 rows, airtight by construction).
-        Qh = Q.reshape(kvh, qpk, hd).float()  # head-grouped like the loop
+        Qh = Qf.reshape(kvh, qpk, hd)  # view of Qf (was a second
+        # fp32 copy of Q: identical values, saves 16 _to_copy/step)
         st = torch.bmm(Qh, Kt.permute(1, 2, 0)) * scale  # (kvh, qpk, R)
         tail_m, tail_den, tail_num = kvarn_triton_online_tail_reduce(
             st, Vt, tg, layer._exact_rev)
