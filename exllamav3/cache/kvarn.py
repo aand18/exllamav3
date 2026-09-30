@@ -1879,6 +1879,8 @@ class CacheLayer_kvarn(CacheLayer):
             _T = int(rows_k.shape[0])
             defer = {"spills": [], "p0": n_new - _T, "p1": n_new,
                      "g": g, "s": s, "rk": rk, "rv": rv}
+        # Touched exact slots for the batched eref refresh below.
+        _eref_slots: list = []
         for gi in torch.unique(g).tolist():
             gi = int(gi)
             m = (g == gi)
@@ -1894,8 +1896,13 @@ class CacheLayer_kvarn(CacheLayer):
                 # The exact slot is released (valid ⟺ assigned invariant).
                 self.sealed[gi] = False
                 self.present[gi] = False
-                self.stage_k[slot].zero_()
-                self.stage_v[slot].zero_()
+                # Full-group overwrite (128/128 rows this call) needs no
+                # zero: every slot element is written below. Partial
+                # groups keep the explicit zero (freed slots hold stale
+                # rows; seals read full slots). numel is shape-only.
+                if int(slots.numel()) < KVAR_N_GROUP:
+                    self.stage_k[slot].zero_()
+                    self.stage_v[slot].zero_()
                 self.exact_valid[gi] = False
                 self._exact_release(gi)
                 self.group_base[gi] = bnew
@@ -1930,8 +1937,24 @@ class CacheLayer_kvarn(CacheLayer):
                 es = int(self._exact_rev[gi])
                 self.exact_k[es, s[km]] = ek[km]
                 self.exact_v[es, s[km]] = ev[km]
-                # Incremental eref: WHT only this touched slot.
-                self._eref_refresh_slot(es)
+                # Incremental eref, batched below (per-slot WHT is
+                # row-independent: one kernel over all touched slots
+                # instead of one per group).
+                if es >= 0:
+                    _eref_slots.append(es)
+        # Batched touched-slot eref refresh (bit-identical to per-group
+        # _eref_refresh_slot: same slots, same per-row math; no-op when
+        # the cache is unbuilt, matching the per-slot guard). Runs
+        # BEFORE _evict_exact_all below (evict zeroes released eref
+        # slots; refresh-then-evict order preserved).
+        if _eref_slots and self._ov_eref_w is not None:
+            _ess = torch.tensor(_eref_slots, device=self.device,
+                                dtype=torch.long)
+            # Indexed ASSIGNMENT (not .copy_ on w[_ess]: advanced
+            # indexing returns a copy, so copy_ would write into a
+            # discarded temporary and silently lose the refresh).
+            self._ov_eref_w[_ess] = \
+                _eref_wht(self.exact_v[_ess].float(), self.head_dim)
         # Every touched group changed content (stage write, reset or
         # unseal): refresh it on next materialization (idea 2).
         gm = g.to(device=self.device, dtype=torch.long)
