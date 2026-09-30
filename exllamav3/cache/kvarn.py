@@ -391,6 +391,17 @@ def _kvarn_defer_seal_enabled() -> bool:
     return os.environ.get("EXL3_KVARN_DEFER_SEAL", "1") != "0"
 
 
+def _kvarn_faststore_enabled() -> bool:
+    """
+    Opt-out gate for the seal-direct-from-rows prefill fast path
+    (multi-row store path only). Default ON: complete fresh non-sink
+    groups seal straight from call rows (no staging slots, no per-group
+    Python loop) -- bit-identical to the legacy loop (twin-tested).
+    EXL3_KVARN_FASTSTORE=0 restores the legacy per-group behavior.
+    """
+    return os.environ.get("EXL3_KVARN_FASTSTORE", "1") != "0"
+
+
 def _kvarn_imageless() -> bool:
     """
     Opt-in gate for imageless serve (match-bee track): the persistent
@@ -1735,6 +1746,97 @@ class CacheLayer_kvarn(CacheLayer):
         return True
 
     @torch.inference_mode()
+    @torch.inference_mode()
+    def _store_rows_fast(self, pos, rk, rv, ek, ev, g, s, keep, base,
+                         n_new) -> bool:
+        """Seal-direct-from-rows fast path for complete fresh non-sink groups.
+
+        Handles the call ENTIRELY (returns True) or declines (False,
+        legacy loop owns it). Fast only when ALL hold: kill switch on,
+        non-SWA, non-native-exact layers; T >= 128 with T % 128 == 0;
+        positions strictly ascending; touched groups consecutive,
+        complete (128/128 rows), and virgin (base -1, untouched
+        present/sealed/valid/slots); no padding groups; no sink-base
+        group on sink layers (sink never seals). All checks fuse into
+        ONE bool sync; n_new materialization + exact-slot assign cost
+        two more small syncs (vs ~250 in the loop). Complete groups seal
+        straight from call rows (reshape view into the shared batched
+        seal core: no staging slots, no pressure); exact/eref/owner/
+        pinned/base/present bookkeeping mirrors the legacy reset-branch
+        semantics (twin-tested bit-identical).
+        """
+        self._last_store_fast = False
+        if not _kvarn_faststore_enabled():
+            return False
+        if self.is_swa or self.tail_native_exact:
+            return False
+        dev = self.device
+        T = int(pos.numel())
+        if T < KVAR_N_GROUP or T % KVAR_N_GROUP:
+            return False
+        gd = g.to(device=dev, dtype=torch.long)
+        gs, inv = torch.unique(gd, return_inverse=True)
+        G = int(gs.numel())
+        if G * KVAR_N_GROUP != T:
+            return False
+        counts = torch.bincount(inv, minlength=G)
+        first = torch.zeros((G,), dtype=torch.long, device=dev) \
+            .scatter_reduce_(0, inv, torch.arange(T, device=dev),
+                             reduce="amin", include_self=False)
+        bnew = base[first]
+        bad = ((self.group_base[gs] != -1)
+               | self.sealed[gs]
+               | self.present[gs].any(dim=1)
+               | self.exact_valid[gs]
+               | (self._stage_rev[gs] >= 0)
+               | (self._exact_rev[gs] >= 0)
+               | (counts != KVAR_N_GROUP)
+               | (gs < 0)
+               | ((gs[-1] - gs[0] + 1) != G)
+               | (~(pos[1:] > pos[:-1]).all()))
+        if self.has_sink:
+            bad = bad | (bnew == 0)
+        if bool(bad.any()):
+            return False
+        # --- commit (checks green; legacy loop skipped) ---
+        nn = n_new if isinstance(n_new, int) else int(n_new)
+        self.present[gs] = True
+        self.group_base[gs] = bnew
+        pg = gs // (PAGE_SIZE // KVAR_N_GROUP)
+        self.page_pinned[pg] = False
+        own = self.page_owner_n[pg]
+        self.page_owner_n[pg] = torch.where(
+            own < 0, nn, torch.clamp_max(own, nn))
+        bk = rk.reshape(G, KVAR_N_GROUP, self.num_kv_heads,
+                        self.head_dim).float()
+        bv = rv.reshape(G, KVAR_N_GROUP, self.num_kv_heads,
+                        self.head_dim).float()
+        km = keep
+        kidx = torch.nonzero(km).flatten()
+        if kidx.numel():
+            kany = km.reshape(G, KVAR_N_GROUP).any(dim=1)
+            needy = gs[kany]
+            NE = int(needy.numel())
+            free = (self._exact_slots < 0).nonzero().flatten()
+            if free.numel() < NE:
+                return False
+            chosen = free[:NE].tolist()
+            chosen_t = torch.tensor(chosen, device=dev, dtype=torch.long)
+            self._exact_slots[chosen_t] = needy
+            self._exact_rev[needy] = chosen_t
+            self.exact_valid[needy] = True
+            self.exact_k.index_fill_(0, chosen_t, 0)
+            self.exact_v.index_fill_(0, chosen_t, 0)
+            es_row = self._exact_rev[gd[kidx]]
+            self.exact_k[es_row, s[kidx]] = ek[kidx]
+            self.exact_v[es_row, s[kidx]] = ev[kidx]
+            if self._ov_eref_w is not None:
+                self._ov_eref_w[chosen_t] = _eref_wht(
+                    self.exact_v[chosen_t].float(), self.head_dim)
+        self._seal_staged_blocks(gs, bk, bv)
+        self._last_store_fast = True
+        return True
+
     def _store_rows(self, rows_k: torch.Tensor, rows_v: torch.Tensor,
                     pages: torch.Tensor, offs: torch.Tensor,
                     pos: torch.Tensor, n_new: int, bt_row=None):
@@ -1759,6 +1861,10 @@ class CacheLayer_kvarn(CacheLayer):
         if rows_k.numel() == 0:
             return
         dev = self.device
+        # Instrumentation for the fast-path twin test (fresh layers
+        # default False via getattr; reset per call so a legacy call
+        # after a fast call does not report stale True).
+        self._last_store_fast = False
         # Callers pass long already (same-tensor no-op .to() would
         # return, minus three dispatches per layer per step -- same
         # pattern as the fused store_row's input guards).
@@ -1879,9 +1985,16 @@ class CacheLayer_kvarn(CacheLayer):
             _T = int(rows_k.shape[0])
             defer = {"spills": [], "p0": n_new - _T, "p1": n_new,
                      "g": g, "s": s, "rk": rk, "rv": rv}
+        # Prefill fast path (seal-direct-from-rows for complete fresh
+        # non-sink groups): on True the legacy loop below runs over an
+        # empty group list (skipped with zero reindent); the shared tail
+        # (dirty/evict/pages/seals) still runs for both paths.
+        _fast = self._store_rows_fast(pos, rk, rv, ek, ev, g, s, keep,
+                                      base, n_new)
+        self._last_store_fast = _fast
         # Touched exact slots for the batched eref refresh below.
         _eref_slots: list = []
-        for gi in torch.unique(g).tolist():
+        for gi in (torch.unique(g).tolist() if not _fast else []):
             gi = int(gi)
             m = (g == gi)
             slots = s[m]

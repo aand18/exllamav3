@@ -125,3 +125,66 @@ def test_eref_incremental_over_evict_copy_reset():
     reset_pos = torch.full((4,), 768, dtype=torch.long) + torch.arange(4)
     layer._store_rows(rk, rv, pages, offs, reset_pos, 772, bt[0])
     _assert_eref_matches_full(layer)
+
+
+@torch.inference_mode()
+def test_store_fast_matches_legacy():
+    # Prefill fast-path twin: seal-direct-from-rows for complete fresh
+    # non-sink groups must match the legacy per-group loop bit-exact
+    # (records, sealed, present, group_base, exact blocks, eref,
+    # owners, pinned). Kill switch EXL3_KVARN_FASTSTORE=0 forces legacy
+    # on the twin. Aligned chunks take the fast path; sink/partial/
+    # reset chunks stay legacy (asserted via _last_store_fast).
+    import os as _os
+    torch.manual_seed(7)
+    kvh, hd, ntok = 2, 128, 1024
+    bt = _ids(ntok)
+    G = kvarn.KVAR_N_GROUP
+    assert ntok // G >= 6, "need room for aligned chunks past sink"
+
+    def run(env_on):
+        _os.environ["EXL3_KVARN_FASTSTORE"] = "1" if env_on else "0"
+        layer = _layer(kvh, hd, ntok)
+        took = []
+        pos = 0
+        for chunk in (G, G, G, 40):
+            k = torch.randn(1, chunk, kvh, hd).half()
+            v = torch.randn(1, chunk, kvh, hd).half()
+            layer.update_kv_direct(torch.tensor([pos], dtype=torch.int32),
+                                   bt, k, v, chunk)
+            pos += chunk
+            took.append(bool(getattr(layer, "_last_store_fast", False)))
+        return layer, took
+
+    torch.manual_seed(7)
+    fast, took_fast = run(True)
+    torch.manual_seed(7)
+    slow, took_slow = run(False)
+    # Chunk 1 touches the sink group (base 0) -> legacy; chunk 2..3 are
+    # complete fresh non-sink groups -> fast; the 40-row tail is partial
+    # (2 full + 1 partial group... all fresh but incomplete) -> legacy.
+    assert took_fast == [False, True, True, False], took_fast
+    assert took_slow == [False, False, False, False], took_slow
+    for name in ("records", "sealed", "present", "group_base",
+                 "exact_k", "exact_v", "page_owner_n", "page_pinned"):
+        a, b = getattr(fast, name), getattr(slow, name)
+        assert torch.equal(a, b), name
+    _assert_eref_matches_full(fast)
+    # Reset case stays legacy on both and still matches.
+    torch.manual_seed(11)
+    rk = torch.randn(4, kvh, hd).half()
+    rv = torch.randn(4, kvh, hd).half()
+    pages = torch.zeros(4, dtype=torch.long)
+    offs = torch.arange(4, dtype=torch.long)
+    reset_pos = torch.full((4,), 768, dtype=torch.long) + torch.arange(4)
+    _os.environ["EXL3_KVARN_FASTSTORE"] = "1"
+    fast._store_rows(rk, rv, pages, offs, reset_pos, 772, bt[0])
+    _os.environ["EXL3_KVARN_FASTSTORE"] = "0"
+    slow._store_rows(rk, rv, pages, offs, reset_pos, 772, bt[0])
+    assert not fast._last_store_fast and not slow._last_store_fast
+    for name in ("records", "sealed", "present", "group_base",
+                 "exact_k", "exact_v", "page_owner_n", "page_pinned"):
+        a, b = getattr(fast, name), getattr(slow, name)
+        assert torch.equal(a, b), name
+    _assert_eref_matches_full(fast)
+    _os.environ.pop("EXL3_KVARN_FASTSTORE", None)
