@@ -1839,4 +1839,8 @@ def kvarn_triton_online_serve(layer, qw, Qf, exact_k, exact_v_w, exrev,
               f"flag={int(flag[0])}", flush=True)
     if sync_flag:
         return out, int(flag[0])
-    return out, flag
+    # Unchecked (production periodic-check path): int 0, no DtoH sync.
+    # The kernel still zeroes/sets the sticky device flag; the caller
+    # reads it every Kth call (a real trip fires every step, so
+    # periodic catches it; PARITY=1 tests check every call).
+    return out, 0
