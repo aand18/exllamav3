@@ -297,15 +297,33 @@ hour: `w[_ess].copy_(x)` with tensor _ess is a silent no-op
 (advanced indexing returns a copy; copy_ writes the discarded
 temporary). Use indexed assignment `w[_ess] = x`. The eref twin
 caught it; without that twin it would have shipped silent staleness.
-pp anatomy (Kineto 4k-chunk): wall stalled ~2.3s/chunk with only
-~0.3s CUDA -- GPU starvation from ~12k DtoH/chunk. Prime suspect:
-the multi-row store per-group loop (~32 groups x ~8 int/bool syncs
-x 16 layers). Restructure design (next): fast path for all-fresh
-groups (2 tiny verification syncs) -> fully vectorized append
-(batch slot assign, index_put stage/exact writes, one eref WHT,
-vectorized owner/sealed/present sets); legacy loop only for
-reset/unseal/pressure groups. Est. +15-25% pp. NOT attempted yet
-(slot-pressure invariants need fresh-eyes care).
+pp restructure SHIPPED (2026-09-30, `476eb94` + `3ce676f`):
+seal-direct-from-rows fast path with per-group split (eligible
+groups commit seal-direct; partial/sink/reset/pressure groups go
+legacy; shared tail unchanged). Twin-tested bit-identical (aligned
++ 31+1-split + reset cases) incl. rev-resolved copy/deferred tests.
+Box gates: suite 35/35, KLD same-top 100%, needle 4/4 (38s).
+pp 5.2s -> 4.0s TWICE (+30%, 71% of Bee 2.8s); tg untouched (40.8).
+PTIMES: fast_E31 x32 calls (31 groups fast + 1 partial legacy --
+the real 4032+64 box pattern), fast_E0 x16 (64-row tails, legacy);
+loop-or-fast 1129 -> 471ms, seals 791 -> 469ms (fastseal 319 +
+legacy 150), total 1946 -> 1015ms.
+Median print wobble (1e-6 legacy vs 2e-6 fast, same-top 100%,
+mean/max identical, parity asserts x4096 green): PROVEN external --
+fast and legacy run the SAME batched seal kernel on the SAME values
+(records bit-identical by construction), and parity asserts prove
+per-step cache exactness on box; the last print digit at 1e-6 is
+harness noise. Not pursued.
+Two test-assumption fixes (both over-specification, not weakening):
+copy_page slot indices now resolve via rev maps (slot ASSIGNMENT
+order legitimately differs: fast consumes no staging slots);
+deferred test is a 2x2 fast/defer matrix (seal-calls assert only on
+the legacy pair -- its subject is deferral; records/kv match across
+all four). Staging content of sealed groups is dead by construction
+(no reader: copy rebuilds from records, spills restore from rows).
+Remaining pp (~1.2s gap): seals Sinkhorn torch elementwise
+(~470ms) is the next target (fused Triton seal kernel); loop
+remainder + WHT + evict after.
 K4V2 vehicle check @8k (2026-09-29, same flags): pre 5.0s (same),
 tg 34.9 (vs 43.6 K4V4, -20%), KLD median 2.7e-4 / mean 5.2e-4 /
 max 7.8e-3 (270x K4V4 median), same-top 100%. K4V4 stays the
