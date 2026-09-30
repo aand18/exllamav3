@@ -218,9 +218,19 @@ config has ZERO discriminative power (0-baseline gate decides
 nothing) — do not cite it as a quality gate. What it does prove:
 end-to-end stability (3× up-to-16k-token generations, no crash/
 hang/OOM, slot windows hold). Quality gate stays KLD (same-top
-100% + digits). Real reasoning calibration (run fp16 over more
-items, lock solvable ones as the regression set) is queued work;
-use -mt 2048 for fast smokes until then.
+100% + digits). Reasoning calibration MINED 2026-09-30 (fp16,
+greedy `-temp 0 -topp 1`, `-mt 2048 -fresh`, mini items 0-60,
+`fp16_mine.jsonl` on box): 0/60 solved -- all ramble-to-cap
+(4-9KB answers, no judgeable output). Mini-first-N is barren for
+calibration (floor effect on fp16 too, not a cache signal); do NOT
+extend blindly. Next pond if ever needed: full-BBEH task-split
+stratification (some tasks are easier) or a different bench, never
+more first-N. Needle stays the long-context gate; bbeh_mini stays
+stability-smoke only.
+Scope directive (2026-09-30, user): K4V4 ONLY from now on. No new
+K4V2 runs (KLD/twins/needles); K4V2 stays parked (was co-vehicle
+on speed 39-40 tok/s tied, deficit KLD-only). Existing k4v2 twin
+stays as regression cover; all future gates `-cq kvarn4`.
 Needle gate (2026-09-29, eval/kvarn_needle.py from prior session —
 smoke + passcode at 5/50/95% depths, greedy, substring check):
 fp16 4/4 (25s), q4 4/4 (36s), kvarn4 4/4 (44s), all depths HIT.
