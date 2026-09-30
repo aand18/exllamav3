@@ -99,6 +99,41 @@ def _print_no_attn_match_report(args: AttnArgs):
     )
 
 
+def _kvarn_check_flag(layer) -> bool:
+    # Sticky-flag tripwire cadence: a real trip fires every serve, so
+    # checking every 128 serves per layer still catches systematic
+    # trips within any KLD gate (256+ steps); PARITY=1 tests check
+    # every call. Skipping the int(flag) read saves a DtoH sync per
+    # layer per step (64/step); zero math change (flag is a tripwire,
+    # not data). Plain-Python counter, no syncs.
+    import os as _os
+    if _os.environ.get("EXL3_KVARN_TRITON_PARITY", "0") == "1":
+        return True
+    n = getattr(layer, "_serve_flag_tick", 0) + 1
+    layer._serve_flag_tick = n
+    return (n % 128) == 0
+
+
+# Tail-position memo: tpos depends only on (dev, n, tail_eff, sink)
+# (identical for all same-type layers in a step); building it once
+# saves 64 x (2 aranges + cat + long) per step. Values are read-only
+# downstream (gather indices + mask). Bounded (cleared past 8 keys).
+_tpos_memo: dict = {}
+
+
+def _kvarn_tpos(dev, n: int, tail_eff: int, sn_: int):
+    key = (str(dev), n, tail_eff, sn_)
+    tpos = _tpos_memo.get(key)
+    if tpos is None:
+        tpos = torch.cat([torch.arange(sn_, device=dev),
+                          torch.arange(max(0, n - tail_eff), n,
+                                       device=dev)]).long()
+        if len(_tpos_memo) > 8:
+            _tpos_memo.clear()
+        _tpos_memo[key] = tpos
+    return tpos
+
+
 def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
                              block_table, cache_seqlens, q_len, sm_scale,
                              causal, window_size, softcap, sinks,
@@ -182,9 +217,11 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
     # Incremental eref (Spec A): serve reads the per-layer cached Ew
     # (slot-wise WHT maintained by the kvarn.py store/evict/copy hooks;
     # _eref_ensure full-refreshes once on first build). No per-step full
-    # remat. Seqlens/flag/status stay synchronous (conservative per the
-    # spec's KLD-8k-green gate: fail-closed :191 keeps its sync until
-    # green; this cut only removes the Ew remat).
+    # remat. The serve sticky flag is now periodic-check (every 128
+    # serves/layer; PARITY=1 checks every call): KLD-green since Spec A,
+    # so the every-step fail-closed sync is retired. Status code stays
+    # synchronous (drives control flow: 0 append / 2 seal / 1 torch
+    # fallback -- cannot speculate).
     Ew = layer.kvarn_eref_cached()
     if os.environ.get("EXL3_KVARN_TRITON_PARITY", "0") == "1":
         Ew_ref = kvarn_triton_wht_rows(layer.exact_v.float(), hd)
@@ -195,7 +232,7 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
     out_b, flag_b = kvarn_triton_online_serve(
         layer, qw, Qf, layer.exact_k, Ew, layer._exact_rev, layer.sealed,
         block_table[0], n_0d, qpk, scale, sink_n, tail_eff, gps,
-        gc=gc_eff)
+        gc=gc_eff, sync_flag=_kvarn_check_flag(layer))
     if flag_b:
         # Fail-closed: sticky flag means open-body rows reached the
         # kernel (argued impossible for dense); the get_kv path serves.
@@ -205,9 +242,9 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         # (passed in so kvarn_online_tail skips rebuilding it) and the
         # assignment mask below -- one cat, consistent by construction.
         sn_ = min(KVAR_N_SINK_TOKENS, n) if layer.has_sink else 0
-        t0_ = max(0, n - tail_eff)
-        tpos = torch.cat([torch.arange(sn_, device=dev),
-                          torch.arange(t0_, n, device=dev)]).long()
+        # Memoized across layers (same key per step): saves 64 x
+        # (2 aranges + cat + long) per step. Read-only downstream.
+        tpos = _kvarn_tpos(dev, n, tail_eff, sn_)
         # Tail block (exact-first + staging fallback, original domain),
         # UNASSIGNED rows only: assigned tail rows are already inside
         # out_b (exact-direct); counting them again would corrupt the

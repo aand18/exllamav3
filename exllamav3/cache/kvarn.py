@@ -1759,9 +1759,15 @@ class CacheLayer_kvarn(CacheLayer):
         if rows_k.numel() == 0:
             return
         dev = self.device
-        pages = pages.to(torch.long)
-        offs = offs.to(torch.long)
-        pos = pos.to(torch.long)
+        # Callers pass long already (same-tensor no-op .to() would
+        # return, minus three dispatches per layer per step -- same
+        # pattern as the fused store_row's input guards).
+        if pages.dtype != torch.int64:
+            pages = pages.to(torch.long)
+        if offs.dtype != torch.int64:
+            offs = offs.to(torch.long)
+        if pos.dtype != torch.int64:
+            pos = pos.to(torch.long)
         # Fused single-row store (decode appends): 2 launches + 1 status
         # sync instead of ~50 launches + ~10 syncs. Policy events bail
         # (code 1) into the torch paths below; completed groups come back
