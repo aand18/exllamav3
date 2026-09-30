@@ -250,6 +250,14 @@ K4V2 vehicle check @8k (2026-09-29, same flags): pre 5.0s (same),
 tg 34.9 (vs 43.6 K4V4, -20%), KLD median 2.7e-4 / mean 5.2e-4 /
 max 7.8e-3 (270x K4V4 median), same-top 100%. K4V4 stays the
 vehicle (confirmed by data, not just policy).
+K4V2 quad fast path (2026-09-29, serve V unpack, twin
+maxabs 9.2e-5 vs torch): correct but NO tg gain (34.7 vs 34.9) --
+serve is compute-bound (SIMT dots), not unpack-bound, so unpack
+traffic is invisible. K4V2's -20% lives elsewhere (not in serve
+unpack; mechanism open, not goal-blocking). Quad path stays
+(correct, exercised by twin; helps if K4V2 revives). K4V2 parked:
+slower AND 270x KLD despite author's pick; its memorandum value
+is VRAM (smaller v payload), not speed.
 | 16384 | 6.5s, ~2532 | 16.4-16.5s, ~997 | **5.8s, 2844** | 35% |
 | 65536 | 32.6-32.7s, ~2008 | 48.2s, ~1359 (deferred seals; was 62.0s) | **28.1s, 2336** | 58% |
 | 131072 | 201.8-203.0s, ~648 (swap; q8: 87.7s, 1494) | 219.4-220.0s, ~596 (q8-ref run: 173.9s, 754; now 148.4s, 883 post-Sinkhorn) | **69.5s, 1887** | 39% |
