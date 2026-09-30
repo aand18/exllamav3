@@ -188,3 +188,40 @@ def test_store_fast_matches_legacy():
         assert torch.equal(a, b), name
     _assert_eref_matches_full(fast)
     _os.environ.pop("EXL3_KVARN_FASTSTORE", None)
+
+
+@torch.inference_mode()
+def test_store_fast_split_matches_legacy():
+    # Split design: one call with complete virgin groups AND a partial
+    # group (the real 4032+64 box pattern in miniature: 128+40 rows).
+    # Eligible groups commit via fast path, the partial goes legacy;
+    # combined state must match all-legacy bit-exact.
+    import os as _os
+    torch.manual_seed(21)
+    kvh, hd, ntok = 2, 128, 1024
+    bt = _ids(ntok)
+    G = kvarn.KVAR_N_GROUP
+
+    def run(env_on):
+        _os.environ["EXL3_KVARN_FASTSTORE"] = "1" if env_on else "0"
+        layer = _layer(kvh, hd, ntok)
+        k = torch.randn(1, G + 40, kvh, hd).half()
+        v = torch.randn(1, G + 40, kvh, hd).half()
+        # Start past the sink group so group 1 is complete+virgin and
+        # group 2 is partial+virgin.
+        layer.update_kv_direct(torch.tensor([G], dtype=torch.int32),
+                               bt, k, v, G + 40)
+        return layer
+
+    torch.manual_seed(21)
+    fast = run(True)
+    assert fast._last_store_fast is False  # partial present -> split
+    torch.manual_seed(21)
+    slow = run(False)
+    for name in ("records", "sealed", "present", "group_base",
+                 "exact_k", "exact_v", "page_owner_n", "page_pinned"):
+        a, b = getattr(fast, name), getattr(slow, name)
+        assert torch.equal(a, b), name
+    assert bool(fast.sealed[1]) and not bool(fast.sealed[2])
+    _assert_eref_matches_full(fast)
+    _os.environ.pop("EXL3_KVARN_FASTSTORE", None)

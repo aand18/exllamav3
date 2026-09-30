@@ -324,9 +324,18 @@ def test_copy_page():
     assert not bool(dst2.sealed[0])
     # M4: compact per-group blocks travel remapped (src page-1 head group
     # is physical group 2, dst page-0 head group is physical group 0).
-    assert torch.equal(dst2.stage_k[0][:44], layer.stage_k[2][:44])
-    assert torch.equal(dst2.stage_v[0][:44], layer.stage_v[2][:44])
-    assert torch.equal(dst2.exact_k[0][:44], layer.exact_k[2][:44])
+    # Slots resolve via the rev maps (slot ASSIGNMENT order legitimately
+    # differs across store paths: the seal-direct fast path consumes no
+    # staging slots, so hardcoded slot indices would over-specify).
+    _ss = int(layer._stage_rev[2])
+    _ds = int(dst2._stage_rev[0])
+    assert _ss >= 0 and _ds >= 0
+    assert torch.equal(dst2.stage_k[_ds][:44], layer.stage_k[_ss][:44])
+    assert torch.equal(dst2.stage_v[_ds][:44], layer.stage_v[_ss][:44])
+    _se = int(layer._exact_rev[2])
+    _de = int(dst2._exact_rev[0])
+    assert _se >= 0 and _de >= 0
+    assert torch.equal(dst2.exact_k[_de][:44], layer.exact_k[_se][:44])
 
 
 def test_storage_size_beats_fp16_and_quant():
@@ -523,44 +532,72 @@ def test_deferred_pressure_seals_match_immediate():
 
     results = {}
     old = os.environ.get("EXL3_KVARN_DEFER_SEAL")
+    oldf = os.environ.get("EXL3_KVARN_FASTSTORE")
     try:
         # Gate defaults ON.
         os.environ.pop("EXL3_KVARN_DEFER_SEAL", None)
         assert kvarn._kvarn_defer_seal_enabled()
-        for defer_on in (True, False):
-            os.environ["EXL3_KVARN_DEFER_SEAL"] = "1" if defer_on else "0"
-            layer = _layer(kvh, hd, ntok)
-            bt = _ids(ntok)
-            calls = {"n": 0}
-            orig = layer._seal_staged_blocks
+        # 2x2: the seal-calls comparison is meaningful only with the
+        # seal-direct fast path OFF (fast consumes no staging slots, so
+        # no pressure arises either way); records/kv must match across
+        # ALL four (fast x defer combined equivalence).
+        for fast_on in (True, False):
+            os.environ["EXL3_KVARN_FASTSTORE"] = "1" if fast_on else "0"
+            for defer_on in (True, False):
+                os.environ["EXL3_KVARN_DEFER_SEAL"] = "1" if defer_on else "0"
+                layer = _layer(kvh, hd, ntok)
+                bt = _ids(ntok)
+                calls = {"n": 0}
+                orig = layer._seal_staged_blocks
 
-            def counting(_self, gs, bk, bv, _orig=orig, _calls=calls):
-                _calls["n"] += 1
-                return _orig(gs, bk, bv)
+                def counting(_self, gs, bk, bv, _orig=orig, _calls=calls):
+                    _calls["n"] += 1
+                    return _orig(gs, bk, bv)
 
-            layer._seal_staged_blocks = counting.__get__(layer, type(layer))
-            layer.update_kv_direct(torch.zeros(1, dtype=torch.int32), bt,
-                                   k.unsqueeze(0), v.unsqueeze(0), T)
-            kk, vv = layer.get_kv(torch.tensor([T], dtype=torch.int32), bt)
-            snap = snapshot(layer)
-            snap["kv"] = (kk.clone(), vv.clone())
-            snap["seal_calls"] = calls["n"]
-            results[defer_on] = snap
+                layer._seal_staged_blocks = counting.__get__(layer, type(layer))
+                layer.update_kv_direct(torch.zeros(1, dtype=torch.int32), bt,
+                                       k.unsqueeze(0), v.unsqueeze(0), T)
+                kk, vv = layer.get_kv(torch.tensor([T], dtype=torch.int32), bt)
+                snap = snapshot(layer)
+                snap["kv"] = (kk.clone(), vv.clone())
+                snap["seal_calls"] = calls["n"]
+                results[(defer_on, fast_on)] = snap
     finally:
         if old is None:
             os.environ.pop("EXL3_KVARN_DEFER_SEAL", None)
         else:
             os.environ["EXL3_KVARN_DEFER_SEAL"] = old
+        if oldf is None:
+            os.environ.pop("EXL3_KVARN_FASTSTORE", None)
+        else:
+            os.environ["EXL3_KVARN_FASTSTORE"] = oldf
 
-    on, off = results[True], results[False]
+    base = results[(False, False)]
+    for key, snap in results.items():
+        if key == (False, False):
+            continue
+        # Load-bearing state matches the legacy baseline across all
+        # four branches (fast x defer combined equivalence).
+        for f in ("records", "sealed", "present", "group_base",
+                  "exact_valid", "page_owner",
+                  "exact_k", "exact_v"):
+            assert torch.equal(snap[f], base[f]), (key, f)
+        assert torch.equal(snap["kv"][0], base["kv"][0]), (key, "get_kv K")
+        assert torch.equal(snap["kv"][1], base["kv"][1]), (key, "get_kv V")
+    # Staging content of sealed groups is an implementation detail, not
+    # a contract (the seal-direct fast path never stages seal-direct
+    # groups; legacy retains rows post-seal; no reader distinguishes:
+    # copy_page rebuilds sealed-group staging from records). Compare
+    # staging only within the same fast-path setting, where deferral
+    # alone must not change it.
+    for fast_on in (True, False):
+        a = results[(True, fast_on)]
+        b = results[(False, fast_on)]
+        assert torch.equal(a["stage_k"], b["stage_k"]), fast_on
+        assert torch.equal(a["stage_v"], b["stage_v"]), fast_on
+    on, off = results[(True, False)], results[(False, False)]
     assert on["seal_calls"] < off["seal_calls"], \
         (on["seal_calls"], off["seal_calls"])
-    for key in ("records", "sealed", "present", "group_base",
-                "exact_valid", "page_owner",
-                "stage_k", "stage_v", "exact_k", "exact_v"):
-        assert torch.equal(on[key], off[key]), key
-    assert torch.equal(on["kv"][0], off["kv"][0]), "get_kv K"
-    assert torch.equal(on["kv"][1], off["kv"][1]), "get_kv V"
 
 
 @torch.inference_mode()
