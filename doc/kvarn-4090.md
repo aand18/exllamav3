@@ -246,6 +246,19 @@ Chunk 8192 (single forward, 2026-09-29): kvarn pre 4.8s, 1718 tok/s
 1e-6 / mean 1.9e-5 / max 5.15e-4 (slightly BETTER than chunk-4096:
 fewer chunk boundaries), same-top 100%. Recipe: biggest chunk
 that fits VRAM (fewer forwards amortize per-call fixed costs).
+MMA floor (2026-09-30, `561588c`): wrapper pads QPAD to >=8
+(QPK=4 gave QPAD=4 -> QK/EV dots SIMT); padded lanes -inf-masked
+in-kernel, stores/combine masked to <QPK (bit-identical layout).
+Twins green (K4V2 twin maxabs 9.2e-5 unchanged), KLD identical,
+same-top 100%. tg +4% (37.8 -> 39.3-39.6). Below the 10-15%
+estimate: dots are only part of serve; occupancy cost of 2x acc
+ate the rest. Keep: genuine step, gates pass.
+Stable A/B protocol (2026-09-30, mandatory henceforth): warmed box
+(first run after idle reads ~20% low: 31.3 -> 38.3 same code),
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, fp16-decode
+anchor must read 87.2-87.5 (else box state suspect), back-to-back
+pairs, anti-bias ordering (control LAST so warm-bias favors it).
+All pre-2026-09-30 tg numbers carry +/-10% box noise.
 K4V2 vehicle check @8k (2026-09-29, same flags): pre 5.0s (same),
 tg 34.9 (vs 43.6 K4V4, -20%), KLD median 2.7e-4 / mean 5.2e-4 /
 max 7.8e-3 (270x K4V4 median), same-top 100%. K4V4 stays the
