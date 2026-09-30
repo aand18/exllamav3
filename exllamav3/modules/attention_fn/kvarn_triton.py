@@ -1533,10 +1533,6 @@ if _have_triton:
         lane = tl.arange(0, HD)  # (HD,)
         sl_c = lane // 128
         dd_c = lane % 128
-        # QPAD>=8 guaranteed by the wrapper (padded to 8 when QPK<8) so
-        # the QK/EV tl.dots meet m16n8k16 minimums (M>=16,N>=8,K>=16)
-        # and lower to MMA Tensor Cores instead of SIMT. Lanes >=QPK
-        # are -inf-masked at sc (below); stores stay masked to <QPK.
         qoff = tl.arange(0, QPAD)  # (QPAD,)
         qmask = qoff < QPK
         qw = tl.load(qw_ptr + (pid_h * QPK) * HD + qoff[:, None] * HD
@@ -1660,11 +1656,7 @@ if _have_triton:
                 sc = tl.where(body[:, None], sb.to(tl.float32),
                               st.to(tl.float32))
                 sc = tl.where(r[:, None], sc, float("-inf"))
-            # Padded lanes (>=QPK, exist when QPK<QPAD) carry q*0=0 scores
-            # -> force -inf so softmax ignores them (e=0, l untouched,
-            # d=0, acc pads accumulate 0 and are never stored).
-            sc = tl.where(qmask[None, :], sc, float("-inf"))
-
+    
             smax = tl.max(sc, axis=0)  # (QPAD,)
             m_new = tl.maximum(m, smax)
             alpha = tl.exp(m - m_new)
@@ -1733,14 +1725,13 @@ if _have_triton:
                          mask=ok_tail[:, None], other=0.0)
             v_tile = tl.where(body[:, None], vv_tile, ev)
             # --- MMA EV via transposed form: (HD,TOK) @ (TOK,QPAD) = (HD,QPAD)
-            # M=HD(>=128),N=QPAD(>=8, wrapper-padded),K=16 hits m16n8k16;
-            # the old QPAD=4 form had N=4 (SIMT fallback). Trans back and
-            # accumulate.
+            # M=256,N=8,K=16 hits m16n8k16; the old (QPAD,TOK) form had M=8
+            # (SIMT fallback suspect). Trans back and accumulate.
             d = tl.dot(tl.trans(v_tile.to(tl.float16)),
                        e.to(tl.float16))  # (HD, QPAD)
             acc = acc * alpha[:, None] + tl.trans(d)
             m = m_new
-
+    
         qoff2 = tl.arange(0, QPAD)
         qmask2 = qoff2 < QPK
         tl.store(m_ptr + (pid_h * QPAD * GMAX) + qoff2 * GMAX + pid_c, m,
@@ -1786,12 +1777,7 @@ def kvarn_triton_online_serve(layer, qw, Qf, exact_k, exact_v_w, exrev,
     if gc is None:
         gc = gmax
     assert gc <= gmax
-    # MMA floor: pad QPAD to >=8 so serve QK/EV dots meet m16n8k16
-    # minimums (M>=16,N>=8,K>=16) and lower to Tensor Cores. QPK=4
-    # (27B GQA ratio) gave QPAD=4 -> SIMT wall. Padded lanes are
-    # -inf-masked in-kernel; stores/combine stay masked to <QPK, so
-    # the wider buffers only cost idle allocation, not traffic.
-    qpad = max(8, 1 << (qpk - 1).bit_length())
+    qpad = 1 << (qpk - 1).bit_length()
     need = (qh, qpad, gc, hd)
     if getattr(layer, "_ov_serve_shape", None) != need or \
             getattr(layer, "_ov_serve_m", None) is None:
