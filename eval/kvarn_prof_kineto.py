@@ -22,6 +22,8 @@ def main():
     ap.add_argument("-cq", "--cache_quant", default="kvarn4")
     ap.add_argument("-ntok", "--ntok", type=int, default=2048)
     ap.add_argument("-chunk", "--chunk", type=int, default=2048)
+    ap.add_argument("--stacks", action="store_true",
+                    help="print top CPU stacks for copy/to overhead")
     args = ap.parse_args()
 
     k_bits, v_bits = kvarn_parse_preset(args.cache_quant)
@@ -54,7 +56,9 @@ def main():
     torch.cuda.synchronize()
 
     acts = [ProfilerActivity.CPU, ProfilerActivity.CUDA]
-    with profile(activities=acts, record_shapes=True, with_stack=False) as prof:
+    _stacks = bool(args.stacks)
+    with profile(activities=acts, record_shapes=True,
+                  with_stack=_stacks) as prof:
         for _ in range(5):
             p = {"cache": cache, "attn_mode": "flash_attn",
                  "batch_shape": (1, bs), "past_len": past}
@@ -67,6 +71,21 @@ def main():
             del logits
     print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=25),
           flush=True)
+    if _stacks:
+        # Attribute host overhead: top CPU stacks for the copy ops
+        # (first stack entry per op key wins).
+        _seen = set()
+        for ev in prof.key_averages(group_by_stack_n=4):
+            if ev.key not in ("aten::copy_", "aten::_to_copy",
+                               "aten::to") or ev.key in _seen:
+                continue
+            _seen.add(ev.key)
+            print(f"=== {ev.key} self_cpu={ev.self_cpu_time_total/1e3:.1f}ms "
+                  f"calls={ev.count} ===", flush=True)
+            for fr in (ev.stack or [])[:8]:
+                print(f"  {fr}", flush=True)
+            if len(_seen) == 3:
+                break
     prof.export_chrome_trace("/tmp/kvarn_step_trace.json")
     print("trace: /tmp/kvarn_step_trace.json", flush=True)
 
