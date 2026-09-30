@@ -601,6 +601,28 @@ syncs); serve dequant+unpack remat per chunk; overlay per-group
 syncs + indexed assigns. Fused `store_row` is T==1-only; prefill
 pays the full torch path.
 
+### Tech watch: TIRx-Harness (2026-09-30, evaluated, NO-GO)
+
+MLC's TIRx-Harness (blog 2026-09-29: thin PTX-level foundation +
+kernel zoo + sync/race/numerical analyses + KCoral benchmark
+server for agentic kernel dev, 2.94x/6.84x on KDA) does not fit
+this project: our bottleneck was never lowering unpredictability
+(the one occurrence, SIMT-vs-MMA, died in one A/B); our
+measurement pain was cold-cache/warmup, not shared-GPU contention
+(solved by protocol v2, no remote queue wanted on a dedicated
+GPU); the zoo is TIRx-specific (nothing transfers to our bespoke
+Triton kernels); our bugs are host-side logic caught by twins in
+seconds (our equivalent of their GPU-less numerical sim).
+Adopting it would mean a new PTX-level toolchain on Windows for
+kernels deeply embedded in exllamav3's torch runtime -- high cost,
+no payoff against the current bottleneck list (host orchestration
++ torch-structured seal math). Revisit only if serve ever needs a
+from-scratch sub-Triton rewrite (nothing on the roadmap requires
+it). Transferable meta-lesson (already our practice): shape the
+environment so agent budget goes to the optimization, not to
+resolving uncertainty around it (protocol v2, PTIMES, twins,
+parity asserts, this ledger).
+
 ### Spec A: incremental eref + sync-kill (implement first)
 
 Current: full exact refresh `dispatch.py:184`
