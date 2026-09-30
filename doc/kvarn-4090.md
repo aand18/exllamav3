@@ -246,19 +246,26 @@ Chunk 8192 (single forward, 2026-09-29): kvarn pre 4.8s, 1718 tok/s
 1e-6 / mean 1.9e-5 / max 5.15e-4 (slightly BETTER than chunk-4096:
 fewer chunk boundaries), same-top 100%. Recipe: biggest chunk
 that fits VRAM (fewer forwards amortize per-call fixed costs).
-MMA floor (2026-09-30, `561588c`): wrapper pads QPAD to >=8
-(QPK=4 gave QPAD=4 -> QK/EV dots SIMT); padded lanes -inf-masked
-in-kernel, stores/combine masked to <QPK (bit-identical layout).
-Twins green (K4V2 twin maxabs 9.2e-5 unchanged), KLD identical,
-same-top 100%. tg +4% (37.8 -> 39.3-39.6). Below the 10-15%
-estimate: dots are only part of serve; occupancy cost of 2x acc
-ate the rest. Keep: genuine step, gates pass.
-Stable A/B protocol (2026-09-30, mandatory henceforth): warmed box
-(first run after idle reads ~20% low: 31.3 -> 38.3 same code),
-`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, fp16-decode
-anchor must read 87.2-87.5 (else box state suspect), back-to-back
-pairs, anti-bias ordering (control LAST so warm-bias favors it).
-All pre-2026-09-30 tg numbers carry +/-10% box noise.
+MMA floor (2026-09-30, `561588c`, REVERTED `2a0b382`): wrapper
+padded QPAD to >=8 (QPK=4 gave QPAD=4 -> QK/EV dots SIMT). Twins
+green, KLD identical, same-top 100% -- but hot-cache A/B shows
+ZERO tg effect (K4V4 39.4->39.4, K4V2 39.3->39.5, noise). The
+apparent +4% was triton-compile contamination (see protocol v2).
+Reverted: neutral cuts don't ship, and it doubled serve-acc
+buffers (idle lanes) against the VRAM axis. Lesson: dots are NOT
+the bottleneck (SIMT->MMA invisible) -- serve is bound elsewhere
+(dequant loads / tail / bubbles). Fusion is next, by profile.
+Stable A/B protocol v2 (2026-09-30, mandatory): warmed box (first
+run after idle reads ~20% low) + `expandable_segments:True` +
+fp16-decode anchor 87.2-87.5 + HOT TRITON CACHE (every code or
+preset change recompiles inside the timed region: 31-32 reads go
+39+ hot; run twice per code version, take the hot number) +
+back-to-back pairs + anti-bias ordering (control LAST). All
+pre-v2 tg numbers (incl. the 43.6-43.8 K4V4 and 34.9 K4V2) carry
+cold-cache/box noise -- the old K4V2 -20% gap is GONE under v2:
+K4V4 39.4 vs K4V2 39.3 (tied). K4V2 un-parked as co-vehicle on
+speed; its deficit is now KLD-only (270x median, same-top 100%
+holds). Bee gap @8k re-measured: 39.4/44 = 90%.
 K4V2 vehicle check @8k (2026-09-29, same flags): pre 5.0s (same),
 tg 34.9 (vs 43.6 K4V4, -20%), KLD median 2.7e-4 / mean 5.2e-4 /
 max 7.8e-3 (270x K4V4 median), same-top 100%. K4V4 stays the
