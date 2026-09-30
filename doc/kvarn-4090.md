@@ -285,8 +285,27 @@ linear). Bee gap anatomy: Bee kvarn4 44 vs Bee f16 46.1 (4.5%
 overhead, C++ engine); ours 40 vs our fp16 87.6 (54% overhead,
 Python engine). Closing tg structurally needs graphs (blocked on
 status.tolist code-branch + seqlens int); parked after trims.
-tg stands ~40 (91% of Bee 44 @8k). pp is the worse axis (55%:
-5.05s vs 2.8s @8k) with more headroom -- pp-front opens next.
+Prefill store trims (2026-09-30, `277efe8`): full-group zero-gate
+(128/128 rows overwrites skip the slot zero_ -- numel is shape-only;
+partial groups keep it) + batched touched-slot eref refresh (one WHT
+over all touched slots vs one per group; per-row independent so
+bit-identical). Twins + suite green, KLD identical, same-top 100%,
+needle 4/4 (44s). pp 5.2 -> 5.2 (NEUTRAL), tg 40.2 -> 40.7-40.9
+(noise; decode path untouched). Kept as foundation (fewer launches
++ less traffic, zero risk), not as a gain. GOTCHA that cost an
+hour: `w[_ess].copy_(x)` with tensor _ess is a silent no-op
+(advanced indexing returns a copy; copy_ writes the discarded
+temporary). Use indexed assignment `w[_ess] = x`. The eref twin
+caught it; without that twin it would have shipped silent staleness.
+pp anatomy (Kineto 4k-chunk): wall stalled ~2.3s/chunk with only
+~0.3s CUDA -- GPU starvation from ~12k DtoH/chunk. Prime suspect:
+the multi-row store per-group loop (~32 groups x ~8 int/bool syncs
+x 16 layers). Restructure design (next): fast path for all-fresh
+groups (2 tiny verification syncs) -> fully vectorized append
+(batch slot assign, index_put stage/exact writes, one eref WHT,
+vectorized owner/sealed/present sets); legacy loop only for
+reset/unseal/pressure groups. Est. +15-25% pp. NOT attempted yet
+(slot-pressure invariants need fresh-eyes care).
 K4V2 vehicle check @8k (2026-09-29, same flags): pre 5.0s (same),
 tg 34.9 (vs 43.6 K4V4, -20%), KLD median 2.7e-4 / mean 5.2e-4 /
 max 7.8e-3 (270x K4V4 median), same-top 100%. K4V4 stays the
