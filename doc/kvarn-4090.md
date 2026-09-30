@@ -324,6 +324,25 @@ all four). Staging content of sealed groups is dead by construction
 Remaining pp (~1.2s gap): seals Sinkhorn torch elementwise
 (~470ms) is the next target (fused Triton seal kernel); loop
 remainder + WHT + evict after.
+Chunk-8192 recipe re-tested post-fast-path (2026-09-30): single 8k
+forward pp 4.0 -> 3.7-3.8s (+5%, holds), KLD BETTER (fewer chunk
+boundaries: median 1e-6/mean 1.8e-5/max 5.05e-4, same-top 100%),
+peak 14.6GB (fits 24GB). Recipe stands: biggest chunk that fits.
+torch.compile seal experiment (2026-09-30, REJECTED in 20 min via
+standalone probe `eval/_probe_seal_compile.py`, no model load):
+inductor G232 inexact (maxdiff 16.0!) + K4V2 Dynamo failure, and
+the prize was only +17% on ~50ms of seal math (~+0.2% pp). The
+early-break data-dependent branch graph-breaks; hand-Triton seal
+remains possible but unaudited for ROI (device math is only
+~60-100ms/chunk -- the gap is stalls, not math).
+Honest pp anatomy (fp16-profile diff): kvarn-specific gap 0.45s =
+seals-math ~0.06 + store-syncs ~0.1 + host dispatch saturation +
+idle ~0.25. Piece-wise host cuts are now +1-2% each (diminishing).
+Structural options: prefill CUDA graphs (sync-free region needed;
+pages-loop ints + status branch block it today), fused tail QK
+(small, clean, twin-testable, queued), or accept ~74-80% pp
+(engine GEMM diff is out of scope under the KVarN-only mandate:
+our fp16 itself is 3.3s vs Bee 2.8s).
 K4V2 vehicle check @8k (2026-09-29, same flags): pre 5.0s (same),
 tg 34.9 (vs 43.6 K4V4, -20%), KLD median 2.7e-4 / mean 5.2e-4 /
 max 7.8e-3 (270x K4V4 median), same-top 100%. K4V4 stays the
