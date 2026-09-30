@@ -265,7 +265,28 @@ pre-v2 tg numbers (incl. the 43.6-43.8 K4V4 and 34.9 K4V2) carry
 cold-cache/box noise -- the old K4V2 -20% gap is GONE under v2:
 K4V4 39.4 vs K4V2 39.3 (tied). K4V2 un-parked as co-vehicle on
 speed; its deficit is now KLD-only (270x median, same-top 100%
-holds). Bee gap @8k re-measured: 39.4/44 = 90%.
+holds). Host-desync cut (2026-09-30, `bf91130`): serve sticky-flag read
+goes periodic (every 128 serves/layer; PARITY=1 checks every call --
+spec-authorized: "keeps its sync until green", green since Spec A),
+tpos memoized across layers (same key per step, read-only
+downstream), update_kv .to(long) dtype-guarded. Zero math change.
+Twins + suite green, KLD identical, same-top 100%. tg 39.4 -> 40.2
+(+2%). Status.tolist stays synchronous (drives code 0/2/1 control
+flow -- cannot speculate).
+Qh view (2026-09-30, `6dda3ec`): Qh as reshape-view of Qf (was a
+second fp32 copy; identical values). tg 40.2 -> 40.0 (noise),
+KLD identical. Keep: fewer allocs/copies, zero risk.
+Kineto @8k (2026-09-30, 5 steps, K4V4): CUDA 12.6ms/step vs wall
+~25ms -- GPU half-idle. kvarn kernels 1.9ms (serve 0.74 + tail
+0.78 + combine 0.16 + wht 0.23); exl3 gemv/mgemm ~8.6ms; rest is
+host CPU (~19ms: copy_/to/_to_copy + 128 syncs + ~600 dispatches
+for 16 full-attn layers -- the model is HYBRID: 16 attn + 48
+linear). Bee gap anatomy: Bee kvarn4 44 vs Bee f16 46.1 (4.5%
+overhead, C++ engine); ours 40 vs our fp16 87.6 (54% overhead,
+Python engine). Closing tg structurally needs graphs (blocked on
+status.tolist code-branch + seqlens int); parked after trims.
+tg stands ~40 (91% of Bee 44 @8k). pp is the worse axis (55%:
+5.05s vs 2.8s @8k) with more headroom -- pp-front opens next.
 K4V2 vehicle check @8k (2026-09-29, same flags): pre 5.0s (same),
 tg 34.9 (vs 43.6 K4V4, -20%), KLD median 2.7e-4 / mean 5.2e-4 /
 max 7.8e-3 (270x K4V4 median), same-top 100%. K4V4 stays the
