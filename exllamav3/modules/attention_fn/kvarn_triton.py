@@ -1675,6 +1675,17 @@ if _have_triton:
                 nbytev = tl.load(nptrv).to(tl.int32)
                 # uint8 (see K side): 4KB live instead of 16KB.
                 qqv = (((nbytev >> ((vv2 % 2) * 4)) & 0xF).to(tl.uint8))
+            elif V_BITS == 2:
+                # Quad fast path (K4V2 vehicle): stream bits [2v,2v+2),
+                # 4 values/byte, LSB-first exactly like the generic
+                # bit loop below (value v lives at bits [2j,2j+2) of
+                # byte j=vv2//4). One byte load per element instead of
+                # 2 predicated bit-loop loads; bit-identical.
+                qbv = vv2 // 4
+                qptrv = (vpay_row[:, None]
+                         + kc[None, :] * B + qbv)
+                qbytev = tl.load(qptrv).to(tl.int32)
+                qqv = (((qbytev >> ((vv2 % 4) * 2)) & 0x3).to(tl.uint8))
             else:
                 qqv = tl.zeros([16, HD], dtype=tl.int32)
                 for i in tl.static_range(8):
