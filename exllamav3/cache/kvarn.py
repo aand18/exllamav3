@@ -1816,41 +1816,34 @@ class CacheLayer_kvarn(CacheLayer):
     @torch.inference_mode()
     @torch.inference_mode()
     def _store_rows_fast(self, pos, rk, rv, ek, ev, g, s, keep, base,
-                         n_new) -> bool:
+                         n_new):
         """Seal-direct-from-rows fast path for complete fresh non-sink groups.
 
-        Handles the call ENTIRELY (returns True) or declines (False,
-        legacy loop owns it). Fast only when ALL hold: kill switch on,
-        non-SWA, non-native-exact layers; T >= 128 with T % 128 == 0;
-        positions strictly ascending; touched groups consecutive,
-        complete (128/128 rows), and virgin (base -1, untouched
-        present/sealed/valid/slots); no padding groups; no sink-base
-        group on sink layers (sink never seals). All checks fuse into
-        ONE bool sync; n_new materialization + exact-slot assign cost
-        two more small syncs (vs ~250 in the loop). Complete groups seal
-        straight from call rows (reshape view into the shared batched
+        Returns the list of group ids the LEGACY loop must still handle
+        (None = decline everything: kill switch off, SWA/native-exact
+        layers, or exact-slot pressure -- legacy owns the whole call
+        with today's exact behavior). Eligible groups (complete,
+        virgin, non-sink, ascending consecutive positions) commit here:
+        seal-direct from call rows (reshape view into the shared batched
         seal core: no staging slots, no pressure); exact/eref/owner/
-        pinned/base/present bookkeeping mirrors the legacy reset-branch
-        semantics (twin-tested bit-identical).
+        pinned/base/present mirror the legacy reset-branch semantics
+        (twin-tested bit-identical). Groups sharing pages/slots with
+        eligible ones are interference-free (disjoint records/slots;
+        min-owner updates commute). The remaining-tolist doubles as the
+        only verify sync (~2-4 syncs total vs ~250 in the loop).
         """
         self._last_store_fast = False
         if not _kvarn_faststore_enabled():
             _ptime_count("decline_off")
-            return False
+            return None
         if self.is_swa or self.tail_native_exact:
             _ptime_count("decline_swa" if self.is_swa else "decline_native")
-            return False
+            return None
         dev = self.device
         T = int(pos.numel())
-        if T < KVAR_N_GROUP or T % KVAR_N_GROUP:
-            _ptime_count(f"decline_shape_T{T}")
-            return False
         gd = g.to(device=dev, dtype=torch.long)
         gs, inv = torch.unique(gd, return_inverse=True)
         G = int(gs.numel())
-        if G * KVAR_N_GROUP != T:
-            _ptime_count("decline_gcount")
-            return False
         counts = torch.bincount(inv, minlength=G)
         first = torch.zeros((G,), dtype=torch.long, device=dev) \
             .scatter_reduce_(0, inv, torch.arange(T, device=dev),
@@ -1868,32 +1861,47 @@ class CacheLayer_kvarn(CacheLayer):
                | (~(pos[1:] > pos[:-1]).all()))
         if self.has_sink:
             bad = bad | (bnew == 0)
-        if bool(bad.any()):
-            _ptime_count("decline_check")
-            return False
-        # --- commit (checks green; legacy loop skipped) ---
+        elig = ~bad
+        emask = elig[inv]
+        # Exact pressure BEFORE any commit (no partial commits: legacy
+        # owns pressure via its full evict/reclaim machinery). Per-group
+        # kept-row counts via bincount (rows need not reshape: partial
+        # groups may be present among the legacy remainder).
+        kany_all = torch.bincount(inv, weights=keep.float(),
+                                  minlength=G) > 0
+        _ne = int(kany_all[elig].sum())
+        if _ne:
+            _free_n = int(((self._exact_slots < 0).nonzero()).numel())
+            if _free_n < _ne:
+                _ptime_count("decline_pressure")
+                return None
+        # Split point (only verify sync): eligible commit below, the
+        # rest return for the legacy loop.
+        rem = gs[bad].tolist()
+        E = G - len(rem)
+        _ptime_count(f"fast_E{E}")
+        if not E:
+            return rem
+        gs_e = gs[elig]
         nn = n_new if isinstance(n_new, int) else int(n_new)
-        self.present[gs] = True
-        self.group_base[gs] = bnew
-        pg = gs // (PAGE_SIZE // KVAR_N_GROUP)
+        self.present[gs_e] = True
+        self.group_base[gs_e] = bnew[elig]
+        pg = gs_e // (PAGE_SIZE // KVAR_N_GROUP)
         self.page_pinned[pg] = False
         own = self.page_owner_n[pg]
         self.page_owner_n[pg] = torch.where(
             own < 0, nn, torch.clamp_max(own, nn))
-        bk = rk.reshape(G, KVAR_N_GROUP, self.num_kv_heads,
-                        self.head_dim).float()
-        bv = rv.reshape(G, KVAR_N_GROUP, self.num_kv_heads,
-                        self.head_dim).float()
-        km = keep
+        bk = rk[emask].reshape(E, KVAR_N_GROUP, self.num_kv_heads,
+                               self.head_dim).float()
+        bv = rv[emask].reshape(E, KVAR_N_GROUP, self.num_kv_heads,
+                               self.head_dim).float()
+        km = keep[emask]
         kidx = torch.nonzero(km).flatten()
         if kidx.numel():
-            kany = km.reshape(G, KVAR_N_GROUP).any(dim=1)
-            needy = gs[kany]
+            kany = km.reshape(E, KVAR_N_GROUP).any(dim=1)
+            needy = gs_e[kany]
             NE = int(needy.numel())
             free = (self._exact_slots < 0).nonzero().flatten()
-            if free.numel() < NE:
-                _ptime_count("decline_pressure")
-                return False
             chosen = free[:NE].tolist()
             chosen_t = torch.tensor(chosen, device=dev, dtype=torch.long)
             self._exact_slots[chosen_t] = needy
@@ -1901,17 +1909,16 @@ class CacheLayer_kvarn(CacheLayer):
             self.exact_valid[needy] = True
             self.exact_k.index_fill_(0, chosen_t, 0)
             self.exact_v.index_fill_(0, chosen_t, 0)
-            es_row = self._exact_rev[gd[kidx]]
-            self.exact_k[es_row, s[kidx]] = ek[kidx]
-            self.exact_v[es_row, s[kidx]] = ev[kidx]
+            es_row = self._exact_rev[gd[emask][kidx]]
+            self.exact_k[es_row, s[emask][kidx]] = ek[emask][kidx]
+            self.exact_v[es_row, s[emask][kidx]] = ev[emask][kidx]
             if self._ov_eref_w is not None:
                 self._ov_eref_w[chosen_t] = _eref_wht(
                     self.exact_v[chosen_t].float(), self.head_dim)
         _tfs = _ptime.start()
-        self._seal_staged_blocks(gs, bk, bv)
+        self._seal_staged_blocks(gs_e, bk, bv)
         _ptime.stop("fastseal", _tfs)
-        self._last_store_fast = True
-        return True
+        return rem
 
     def _store_rows(self, rows_k: torch.Tensor, rows_v: torch.Tensor,
                     pages: torch.Tensor, offs: torch.Tensor,
@@ -2064,17 +2071,18 @@ class CacheLayer_kvarn(CacheLayer):
             _T = int(rows_k.shape[0])
             defer = {"spills": [], "p0": n_new - _T, "p1": n_new,
                      "g": g, "s": s, "rk": rk, "rv": rv}
-        # Prefill fast path (seal-direct-from-rows for complete fresh
-        # non-sink groups): on True the legacy loop below runs over an
-        # empty group list (skipped with zero reindent); the shared tail
-        # (dirty/evict/pages/seals) still runs for both paths.
+        # Prefill fast path (seal-direct-from-rows for eligible groups):
+        # returns the group ids the legacy loop must still handle (None =
+        # decline everything). The shared tail (dirty/evict/pages/seals)
+        # still runs for both paths.
         _tl = _ptime.start()
-        _fast = self._store_rows_fast(pos, rk, rv, ek, ev, g, s, keep,
+        _rem = self._store_rows_fast(pos, rk, rv, ek, ev, g, s, keep,
                                       base, n_new)
-        self._last_store_fast = _fast
+        self._last_store_fast = (_rem is not None and len(_rem) == 0)
         # Touched exact slots for the batched eref refresh below.
         _eref_slots: list = []
-        for gi in (torch.unique(g).tolist() if not _fast else []):
+        for gi in (_rem if _rem is not None
+                   else torch.unique(g).tolist()):
             gi = int(gi)
             m = (g == gi)
             slots = s[m]
