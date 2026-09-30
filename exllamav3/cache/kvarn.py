@@ -402,6 +402,74 @@ def _kvarn_faststore_enabled() -> bool:
     return os.environ.get("EXL3_KVARN_FASTSTORE", "1") != "0"
 
 
+# Undistorted GPU-phase timers (diagnostic only): CUDA events bracket
+# phases inside multi-row _store_rows; elapsed_time syncs, so the wall
+# of a timed run is inflated -- but per-phase DEVICE times stay truthful
+# (unlike the Kineto wall, which profiler overhead distorts 5x against
+# op-heavy paths). Gated by EXL3_KVARN_PTIMES=1 (zero overhead off:
+# one env read per call). Cumulative per process; printed for each
+# multi-row call (prefill chunks).
+_ptimes_acc: dict = {}
+
+
+def _kvarn_ptimes_on() -> bool:
+    return os.environ.get("EXL3_KVARN_PTIMES", "0") == "1"
+
+
+def _ptime_count(name) -> None:
+    # Env-gated decline-reason counter for the fast path (shows in the
+    # PTIMES report; zero overhead off).
+    if _kvarn_ptimes_on():
+        a = _ptimes_acc.get(name)
+        if a is None:
+            _ptimes_acc[name] = [0.0, 1]
+        else:
+            a[1] += 1
+
+
+class _ptime:
+    """Flat GPU-phase timer (no `with` block, so no reindent of the
+    instrumented region): `_t = _ptime.start()` ... `_ptime.stop(name,
+    _t)` records device ms into _ptimes_acc. No-ops (None) when
+    EXL3_KVARN_PTIMES != 1."""
+
+    @staticmethod
+    def start():
+        if _kvarn_ptimes_on():
+            import torch as _t
+            e = _t.cuda.Event(enable_timing=True)
+            e.record()
+            return e
+        return None
+
+    @staticmethod
+    def stop(name, e0):
+        if e0 is not None:
+            import torch as _t
+            e1 = _t.cuda.Event(enable_timing=True)
+            e1.record()
+            # Diagnostic-only serialize: elapsed_time needs both events
+            # completed. Device times stay truthful; wall inflates (the
+            # KLD gates always run with PTIMES off).
+            e1.synchronize()
+            ms = e0.elapsed_time(e1)
+            a = _ptimes_acc.get(name)
+            if a is None:
+                _ptimes_acc[name] = [ms, 1]
+            else:
+                a[0] += ms
+                a[1] += 1
+
+
+def _ptimes_report(tag):
+    if not _kvarn_ptimes_on() or not _ptimes_acc:
+        return
+    tot = sum(v[0] for v in _ptimes_acc.values())
+    parts = " ".join(
+        f"{k}={v[0]:.0f}ms/{v[1]}" for k, v in _ptimes_acc.items())
+    print(f"PTIMES {tag}: {parts} total={tot:.0f}ms", flush=True)
+
+
 def _kvarn_imageless() -> bool:
     """
     Opt-in gate for imageless serve (match-bee track): the persistent
@@ -1767,17 +1835,21 @@ class CacheLayer_kvarn(CacheLayer):
         """
         self._last_store_fast = False
         if not _kvarn_faststore_enabled():
+            _ptime_count("decline_off")
             return False
         if self.is_swa or self.tail_native_exact:
+            _ptime_count("decline_swa" if self.is_swa else "decline_native")
             return False
         dev = self.device
         T = int(pos.numel())
         if T < KVAR_N_GROUP or T % KVAR_N_GROUP:
+            _ptime_count(f"decline_shape_T{T}")
             return False
         gd = g.to(device=dev, dtype=torch.long)
         gs, inv = torch.unique(gd, return_inverse=True)
         G = int(gs.numel())
         if G * KVAR_N_GROUP != T:
+            _ptime_count("decline_gcount")
             return False
         counts = torch.bincount(inv, minlength=G)
         first = torch.zeros((G,), dtype=torch.long, device=dev) \
@@ -1797,6 +1869,7 @@ class CacheLayer_kvarn(CacheLayer):
         if self.has_sink:
             bad = bad | (bnew == 0)
         if bool(bad.any()):
+            _ptime_count("decline_check")
             return False
         # --- commit (checks green; legacy loop skipped) ---
         nn = n_new if isinstance(n_new, int) else int(n_new)
@@ -1819,6 +1892,7 @@ class CacheLayer_kvarn(CacheLayer):
             NE = int(needy.numel())
             free = (self._exact_slots < 0).nonzero().flatten()
             if free.numel() < NE:
+                _ptime_count("decline_pressure")
                 return False
             chosen = free[:NE].tolist()
             chosen_t = torch.tensor(chosen, device=dev, dtype=torch.long)
@@ -1833,7 +1907,9 @@ class CacheLayer_kvarn(CacheLayer):
             if self._ov_eref_w is not None:
                 self._ov_eref_w[chosen_t] = _eref_wht(
                     self.exact_v[chosen_t].float(), self.head_dim)
+        _tfs = _ptime.start()
         self._seal_staged_blocks(gs, bk, bv)
+        _ptime.stop("fastseal", _tfs)
         self._last_store_fast = True
         return True
 
@@ -1925,6 +2001,7 @@ class CacheLayer_kvarn(CacheLayer):
         # PARITY=1 asserts it against the out-of-place torch reference
         # taken on the pre-transform stacked (inplace mutates it).
         # Over-cap grids (>_TRITON_WHT_MAX_ROWS rows) fall back to torch.
+        _tw = None
         if _kvarn_use_triton():
             from ..modules.attention_fn.kvarn_triton import (
                 kvarn_triton_available, kvarn_triton_wht_rows,
@@ -1932,6 +2009,7 @@ class CacheLayer_kvarn(CacheLayer):
             assert kvarn_triton_available(), \
                 "EXL3_KVARN_TRITON=1 but the Triton path is unavailable " \
                 "(needs triton + CUDA); unset it for the torch path."
+            _tw = _ptime.start()
             stacked = torch.stack((rows_k.float(), rows_v.float())).contiguous()
             n = stacked.reshape(-1, self.head_dim).shape[0]
             if stacked.is_cuda and 0 < n <= _TRITON_WHT_MAX_ROWS:
@@ -1950,6 +2028,7 @@ class CacheLayer_kvarn(CacheLayer):
                                  self.head_dim)
         rkv = rkv.half().to(dev)
         rk, rv = rkv[0], rkv[1]
+        _ptime.stop("wht", _tw)
         ek = rows_k.to(self.tail_dtype)
         ev = rows_v.to(self.tail_dtype)
         g = pages * (PAGE_SIZE // KVAR_N_GROUP) + offs // KVAR_N_GROUP
@@ -1989,6 +2068,7 @@ class CacheLayer_kvarn(CacheLayer):
         # non-sink groups): on True the legacy loop below runs over an
         # empty group list (skipped with zero reindent); the shared tail
         # (dirty/evict/pages/seals) still runs for both paths.
+        _tl = _ptime.start()
         _fast = self._store_rows_fast(pos, rk, rv, ek, ev, g, s, keep,
                                       base, n_new)
         self._last_store_fast = _fast
@@ -2068,6 +2148,7 @@ class CacheLayer_kvarn(CacheLayer):
             # discarded temporary and silently lose the refresh).
             self._ov_eref_w[_ess] = \
                 _eref_wht(self.exact_v[_ess].float(), self.head_dim)
+        _ptime.stop("loop-or-fast", _tl)
         # Every touched group changed content (stage write, reset or
         # unseal): refresh it on next materialization (idea 2).
         gm = g.to(device=self.device, dtype=torch.long)
@@ -2077,16 +2158,21 @@ class CacheLayer_kvarn(CacheLayer):
             p = int(p)
             if n_new > int(self.page_owner_n[p]):
                 self.page_owner_n[p] = n_new
+        _te = _ptime.start()
         self._evict_exact_all(int(rows_k.shape[0]))
+        _ptime.stop("evict", _te)
         if self.tail_native_exact:
             return
         # Deferred victims seal first in ONE batched call (they are
         # slotless, so the normal path below must never see them
         # unsealed: it skips rev<0 groups, and they are sealed by the
         # time it runs, hence skipped automatically).
+        _ts = _ptime.start()
         if defer is not None and defer["spills"]:
             self._seal_spilled_batched(defer)
         self._seal_full_groups(torch.unique(g))
+        _ptime.stop("seals", _ts)
+        _ptimes_report(f"store rows={int(rows_k.shape[0])}")
 
     @torch.inference_mode()
     def _evict_exact_all(self, n_rows: int = 0):
