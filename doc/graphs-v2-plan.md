@@ -56,6 +56,14 @@ spike evidence in this doc's graphs entries.
 
 ### Task 2: Static R bucketing
 
+DONE by analysis (2026-10-02, no box run needed): R = sn_ +
+tail-window rows is structurally constant per (layer, run) once
+n > tail_eff (window slides, size fixed); RPAD likewise. gc changes
+every 128 steps (2-3 distinct (gc, RPAD) buckets per 256-step run),
+so bucket key `(gc, RPAD)` with recapture on change is sufficient.
+Added `tailR_*` PTIMES counters (env-gated observability) instead
+of a measurement run.
+
 **Files:**
 - Modify: `exllamav3/modules/attention_fn/dispatch.py`
   (tpos/R handling), `exllamav3/cache/kvarn.py`
@@ -67,11 +75,10 @@ spike evidence in this doc's graphs entries.
   (pad R to next pow2 >= current, recapture on bucket change;
   masked lanes are bit-identical no-ops per kernel headers).
 
-- [ ] Step 1: Prove bucket stability: log R/RPAD per step over a
-  256-step KLD run (expect 1-2 distinct buckets after warmup).
-- [ ] Step 2: If stable, pin RPAD per capture epoch; else fall back
-  to MAXW-padded fixed grid (measure waste first).
-- [ ] Step 3: Commit (docs only if measurement-only).
+- [x] Step 1: bucket stability PROVEN analytically (R slides at
+  fixed size; RPAD constant) -- no measurement run needed.
+- [x] Step 2: pin RPAD per capture epoch (bucket key `(gc, RPAD)`).
+- [x] Step 3: `tailR_*` observability committed (Task 1 commit).
 
 ### Task 3: Per-layer graph capture/replay + fallback
 

@@ -157,7 +157,8 @@ def _kvarn_arm_load():
                 kvarn_triton_online_partials, kvarn_triton_wht_rows,
                 kvarn_triton_online_serve, kvarn_triton_online_merge,
                 kvarn_triton_online_tail_reduce, _kvarn_online_buffers)
-            from ...cache.kvarn import KVAR_N_SINK_TOKENS, KVAR_N_GROUP
+            from ...cache.kvarn import (KVAR_N_SINK_TOKENS, KVAR_N_GROUP,
+                _ptime_count)
             from ...constants import PAGE_SIZE
             from types import SimpleNamespace
             _kvarn_arm = SimpleNamespace(
@@ -169,6 +170,7 @@ def _kvarn_arm_load():
                 t_tailred=kvarn_triton_online_tail_reduce,
                 t_bufs=_kvarn_online_buffers,
                 c_sink=KVAR_N_SINK_TOKENS, c_group=KVAR_N_GROUP,
+                c_ptime=_ptime_count,
                 c_page=PAGE_SIZE)
     return _kvarn_arm
 
@@ -231,6 +233,7 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
     _kvarn_online_buffers = _arm.t_bufs
     KVAR_N_SINK_TOKENS = _arm.c_sink
     KVAR_N_GROUP = _arm.c_group
+    _ptime_count = _arm.c_ptime
     PAGE_SIZE = _arm.c_page
     if not kvarn_triton_available():
         return None
@@ -300,6 +303,8 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         # partition is airtight even if the valid⟺assigned invariant
         # wobbles: kernel covers exrev>=0, torch covers exrev<0.
         Kt, Vt, tg = layer.kvarn_online_tail(n, block_table[0], pos=tpos)
+        # R-bucket observability for graphs planning (shape-only, PTIMES-gated).
+        _ptime_count(f"tailR_{int(Kt.shape[0])}")
         # Batched scores over heads (one bmm: identical per-element
         # contraction order), fused masked-softmax + value reduction
         # (one launch, was ~5 dispatches + the pe temporary). The mask

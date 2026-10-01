@@ -112,6 +112,16 @@ def main():
     for _ in range(10):
         eager()
     torch.cuda.synchronize()
+    # Wrapper-with-bufs validation (Task 1): same outputs as
+    # kernel-direct, and ev/g/s buffers reused in place.
+    _K2, _V2, _ev2, _gg2, _ss2 = kt.kvarn_triton_online_tail_gather(
+        lay, tpos, bt, K, V, gps, (ev, gg, ss))
+    assert _ev2 is ev and _gg2 is gg and _ss2 is ss, "buf reuse"
+    _K3, _V3, _ev3, _gg3, _ss3 = kt.kvarn_triton_online_tail_gather(
+        lay, tpos, bt, K, V, gps)
+    assert torch.equal(_K2, _K3) and torch.equal(_V2, _V3), "gather parity"
+    assert torch.equal(_ev2, _ev3) and torch.equal(_gg2, _gg3), "meta parity"
+    print("GATHER-BUFS: ok", flush=True)
     ref = eager().clone()
     torch.cuda.synchronize()
 
