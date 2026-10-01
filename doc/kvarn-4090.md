@@ -231,12 +231,15 @@ Scope directive (2026-09-30, user): K4V4 ONLY from now on. No new
 K4V2 runs (KLD/twins/needles); K4V2 stays parked (was co-vehicle
 on speed 39-40 tok/s tied, deficit KLD-only). Existing k4v2 twin
 stays as regression cover; all future gates `-cq kvarn4`.
-Needle gate (2026-09-29, eval/kvarn_needle.py from prior session —
-smoke + passcode at 5/50/95% depths, greedy, substring check):
-fp16 4/4 (25s), q4 4/4 (36s), kvarn4 4/4 (44s), all depths HIT.
-THIS is the discriminative long-context gate (baseline solves
-it): any retention regression (evict/slot/seal) shows as MISS.
-Run per cut when touching store/evict/seal/serve paths.
+Needle gate (eval/kvarn_needle.py -- smoke + passcode at 5/50/95%
+depths + multi-conjunction + recency-update, greedy, substring
+check; K4V4 only per scope): fp16 6/6 (39s), kvarn4 6/6 (109s),
+all depths HIT. Multi needed -mt 256 headroom (170 tok: preamble
++ 3 codes; the old 64-cap cut it mid-reasoning --gate bug, not a
+model failure). Update item keys on the NEW code only. THIS stays
+the discriminative long-context gate (baseline solves it): any
+retention regression (evict/slot/seal) shows as MISS. Run per cut
+when touching store/evict/seal/serve paths.
 | 131072 | 47.4-47.5 | 28.1/28.7 | **44.0** | OOM (>24GB) | 65% | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
 
 128k q8-ref (2026-09-29, current code, same box/flags): q8 prefill
