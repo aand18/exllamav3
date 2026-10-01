@@ -1,5 +1,11 @@
 # KVarN: 4090 (sm_89) machine handoff
 
+Workflow knowledge lives in `wiki/` (WikiSkill-lite: `wiki/index.md`
+catalog, `wiki/patterns/` durable rules, `wiki/skill-impact.md`
+accept/reject trail). This doc is the chronological record; reusable
+rules go to the wiki, not here. Check the wiki before proposing
+process/skill changes.
+
 This branch (`wip/kvarn-cache`) is CPU-complete and needs a CUDA box for:
 Triton parity acceptance, micro-KLD numbers, and any perf work. Everything
 below was verified up to the hardware boundary on a GPU-less box.
