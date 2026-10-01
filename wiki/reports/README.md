@@ -20,6 +20,15 @@ A report nobody can find later is the same as no report.
   compaction; chat doesn't.
 - Backfill rule: none. Lost reports stay lost (lesson that created
   this file); do not reconstruct from memory.
+- Known loss (2026-10-01, recorded not reconstructed): every research
+  dispatch before this convention returned chat-only summaries
+  (MMA reshape, fused decode, adaptive bits, graphs x2, benchmark
+  hunt, self-improvement hunt, TIRx fetch). What survives of them:
+  the coordinator's compressed summaries in `doc/kvarn-4090.md` git
+  history and the decisions in `wiki/skill-impact.md`. Full evidence
+  (file:line refs, rejected alternatives, exact numbers) is gone.
+  Anything below that needs re-derivation must be re-run, not
+  recalled.
 
 ## Why not just longer chat summaries
 
