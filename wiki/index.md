@@ -28,3 +28,6 @@ skills and process (gated changes, rollback allowed).
 - `patterns/kld-median-noise-floor.md` -- gate criteria.
 - `patterns/benchmark-fp16-first.md` -- mining + determinism rules.
 - `skill-impact.md` -- accept/reject audit trail + pass log.
+- `reports/` -- full subagent reports (raw layer). Convention:
+  thorough-on-disk, terse-in-chat (see `reports/README.md`);
+  ctx_index each report so it survives compaction.
