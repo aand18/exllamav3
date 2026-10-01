@@ -1,3 +1,4 @@
+import os
 import torch
 from ...cache import CacheLayer, Cache, CacheLayer_quant, CacheLayer_kvarn
 from .common import AttnArgs, AttnFn
@@ -106,8 +107,7 @@ def _kvarn_check_flag(layer) -> bool:
     # every call. Skipping the int(flag) read saves a DtoH sync per
     # layer per step (64/step); zero math change (flag is a tripwire,
     # not data). Plain-Python counter, no syncs.
-    import os as _os
-    if _os.environ.get("EXL3_KVARN_TRITON_PARITY", "0") == "1":
+    if os.environ.get("EXL3_KVARN_TRITON_PARITY", "0") == "1":
         return True
     n = getattr(layer, "_serve_flag_tick", 0) + 1
     layer._serve_flag_tick = n
@@ -134,6 +134,45 @@ def _kvarn_tpos(dev, n: int, tail_eff: int, sn_: int):
     return tpos
 
 
+# Lazy-once process constants for the decode arm: find_spec +
+# cuda-availability + submodule imports cost ~0.5-1ms/step when paid
+# per layer per step (16x). Values cannot change at runtime (module
+# objects, spec probes), so caching is exact. Env-derived flags
+# (IMAGELESS/TRITON/PARITY) are still read live per call (tests flip
+# them). First call pays what today pays every call.
+_kvarn_arm = None
+
+
+def _kvarn_arm_load():
+    global _kvarn_arm
+    if _kvarn_arm is None:
+        import importlib.util
+        ok = torch.cuda.is_available()
+        ok = ok and importlib.util.find_spec("triton") is not None
+        if not ok:
+            _kvarn_arm = False
+        else:
+            from .kvarn_triton import (
+                kvarn_triton_available, kvarn_triton_qwht,
+                kvarn_triton_online_partials, kvarn_triton_wht_rows,
+                kvarn_triton_online_serve, kvarn_triton_online_merge,
+                kvarn_triton_online_tail_reduce, _kvarn_online_buffers)
+            from ...cache.kvarn import KVAR_N_SINK_TOKENS, KVAR_N_GROUP
+            from ...constants import PAGE_SIZE
+            from types import SimpleNamespace
+            _kvarn_arm = SimpleNamespace(
+                t_avail=kvarn_triton_available, t_qwht=kvarn_triton_qwht,
+                t_partials=kvarn_triton_online_partials,
+                t_wht_rows=kvarn_triton_wht_rows,
+                t_serve=kvarn_triton_online_serve,
+                t_merge=kvarn_triton_online_merge,
+                t_tailred=kvarn_triton_online_tail_reduce,
+                t_bufs=_kvarn_online_buffers,
+                c_sink=KVAR_N_SINK_TOKENS, c_group=KVAR_N_GROUP,
+                c_page=PAGE_SIZE)
+    return _kvarn_arm
+
+
 def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
                              block_table, cache_seqlens, q_len, sm_scale,
                              causal, window_size, softcap, sinks,
@@ -149,7 +188,6 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
     combine); tail (unassigned rows only) and merge stay torch.
     Loud paths only: every gate declines with None, never half-runs.
     """
-    import os
     if os.environ.get("EXL3_KVARN_IMAGELESS", "0") != "1":
         return None
     if os.environ.get("EXL3_KVARN_TRITON", "0") != "1":
@@ -180,17 +218,20 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         return None
     if k.shape[3] != hd or v.shape[3] != hd:
         return None
-    import importlib.util
-    if not torch.cuda.is_available() or \
-            importlib.util.find_spec("triton") is None:
+    _arm = _kvarn_arm_load()
+    if not _arm:
         return None
-    from .kvarn_triton import (
-        kvarn_triton_available, kvarn_triton_qwht,
-        kvarn_triton_online_partials, kvarn_triton_wht_rows,
-        kvarn_triton_online_serve, kvarn_triton_online_merge,
-        kvarn_triton_online_tail_reduce, _kvarn_online_buffers)
-    from ...cache.kvarn import KVAR_N_SINK_TOKENS, KVAR_N_GROUP
-    from ...constants import PAGE_SIZE
+    kvarn_triton_available = _arm.t_avail
+    kvarn_triton_qwht = _arm.t_qwht
+    kvarn_triton_online_partials = _arm.t_partials
+    kvarn_triton_wht_rows = _arm.t_wht_rows
+    kvarn_triton_online_serve = _arm.t_serve
+    kvarn_triton_online_merge = _arm.t_merge
+    kvarn_triton_online_tail_reduce = _arm.t_tailred
+    _kvarn_online_buffers = _arm.t_bufs
+    KVAR_N_SINK_TOKENS = _arm.c_sink
+    KVAR_N_GROUP = _arm.c_group
+    PAGE_SIZE = _arm.c_page
     if not kvarn_triton_available():
         return None
     qpk = qh // kvh
@@ -211,7 +252,14 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         layer, qh, qpad, hd, dev)
     sscale = 1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5)
     kvarn_triton_qwht(Q, qs, qw, sl, sscale)
-    Qf = Q.float()
+    # Persistent fp32 Q (saves 1 alloc/layer/step; shape static).
+    # copy_ converts in the same kernel .float() would run.
+    _dq = getattr(layer, "_ov_dec_qf", None)
+    if _dq is None or tuple(_dq.shape) != (qh, hd):
+        _dq = torch.empty((qh, hd), dtype=torch.float32, device=dev)
+        layer._ov_dec_qf = _dq
+    _dq.copy_(Q)
+    Qf = _dq
     # Body via promoted single-kernel serve (in-kernel online partials +
     # production combine, ORIGINAL-domain normalized body out).
     # Incremental eref (Spec A): serve reads the per-layer cached Ew
@@ -259,9 +307,33 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         # reads: torch owns exrev<0 rows, airtight by construction).
         Qh = Qf.reshape(kvh, qpk, hd)  # view of Qf (was a second
         # fp32 copy of Q: identical values, saves 16 _to_copy/step)
-        st = torch.bmm(Qh, Kt.permute(1, 2, 0)) * scale  # (kvh, qpk, R)
+        # Persistent bmm out, R-keyed (R takes few values; cap 4).
+        # bmm out= + mul out= : zero allocs, identical values.
+        R = int(Kt.shape[0])  # shape only, no sync
+        _std = getattr(layer, "_ov_dec_st_cache", None)
+        if _std is None:
+            layer._ov_dec_st_cache = _std = {}
+        st_buf = _std.get(R)
+        if st_buf is None:
+            st_buf = torch.empty((kvh, qpk, R), dtype=torch.float32,
+                                 device=dev)
+            if len(_std) >= 4:
+                _std.pop(next(iter(_std)))
+            _std[R] = st_buf
+        st = torch.bmm(Qh, Kt.permute(1, 2, 0), out=st_buf)
+        torch.mul(st, scale, out=st)  # (kvh, qpk, R)
+        # Persistent tail outs (shapes static per layer).
+        _tb = getattr(layer, "_ov_dec_tail", None)
+        if _tb is None or tuple(_tb[0].shape) != (kvh, qpk):
+            _tb = (torch.empty((kvh, qpk), dtype=torch.float32,
+                               device=dev),
+                   torch.empty((kvh, qpk), dtype=torch.float32,
+                               device=dev),
+                   torch.empty((kvh, qpk, hd), dtype=torch.float32,
+                               device=dev))
+            layer._ov_dec_tail = _tb
         tail_m, tail_den, tail_num = kvarn_triton_online_tail_reduce(
-            st, Vt, tg, layer._exact_rev)
+            st, Vt, tg, layer._exact_rev, _tb)
         tail_m = tail_m.reshape(qh)
         tail_den = tail_den.reshape(qh)
         tail_num = tail_num.reshape(qh, hd)
@@ -271,10 +343,15 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         # un-normalizes by den with NO extra WHT (cacd7af). Groups (not
         # gc_eff): serve partials are groups-strided under hierarchical
         # subgroups; read the stride from the buffer itself.
+        # Persistent merge out (shape static per layer).
+        _mo = getattr(layer, "_ov_dec_out", None)
+        if _mo is None or tuple(_mo.shape) != (qh, hd):
+            _mo = torch.empty((qh, hd), dtype=torch.float16, device=dev)
+            layer._ov_dec_out = _mo
         out = kvarn_triton_online_merge(
             layer._ov_serve_m, layer._ov_serve_l, out_b,
             tail_m, tail_den, tail_num, qpk,
-            int(layer._ov_serve_m.shape[2]))
+            int(layer._ov_serve_m.shape[2]), _mo)
     return out.reshape(bsz, q_len, qh, hd)
 
 

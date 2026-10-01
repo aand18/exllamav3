@@ -1120,7 +1120,7 @@ if _have_triton:
 
 
 def kvarn_triton_online_merge(m, l, out_b, tail_m, tail_den, tail_num,
-                              qpk, gc):
+                              qpk, gc, _out=None):
     """Fused body-stats + original-domain merge for the imageless arm.
 
     m/l: (kvh, qpad, gc) fp32 serve partials; out_b: (qh, hd) fp32 body
@@ -1138,7 +1138,10 @@ def kvarn_triton_online_merge(m, l, out_b, tail_m, tail_den, tail_num,
             "KVarN Triton online merge requires CUDA tensors, got "
             f"{out_b.device}.")
     qh, hd = out_b.shape
-    out = torch.empty((qh, hd), dtype=torch.float16, device=dev)
+    # Optional persistent out (dispatch passes a layer buffer: same
+    # values, minus 1 alloc/layer/step; shape static per layer).
+    out = _out if _out is not None else torch.empty(
+        (qh, hd), dtype=torch.float16, device=dev)
     gcpad = 1 << (gc - 1).bit_length()
     _kvarn_online_merge_kernel[(qh,)](
         m, l, out_b, tail_m, tail_den, tail_num, out,
@@ -1194,7 +1197,7 @@ if _have_triton:
         tl.store(tail_num_ptr + (pid * HD) + lane, num)
 
 
-def kvarn_triton_online_tail_reduce(st, vt, tg, exrev):
+def kvarn_triton_online_tail_reduce(st, vt, tg, exrev, _bufs=None):
     """Fused tail softmax + value reduction for the imageless arm.
 
     st: (kvh, qpk, R) fp32 scaled scores (torch bmm, already includes the
@@ -1214,9 +1217,14 @@ def kvarn_triton_online_tail_reduce(st, vt, tg, exrev):
             f"{st.device}.")
     kvh, qpk, R = st.shape
     hd = vt.shape[2]
-    tail_m = torch.empty((kvh, qpk), dtype=torch.float32, device=dev)
-    tail_den = torch.empty((kvh, qpk), dtype=torch.float32, device=dev)
-    tail_num = torch.empty((kvh, qpk, hd), dtype=torch.float32, device=dev)
+    # Optional persistent outs (dispatch passes layer buffers: same
+    # values, minus 3 allocs/layer/step; shapes are static per layer).
+    if _bufs is None:
+        tail_m = torch.empty((kvh, qpk), dtype=torch.float32, device=dev)
+        tail_den = torch.empty((kvh, qpk), dtype=torch.float32, device=dev)
+        tail_num = torch.empty((kvh, qpk, hd), dtype=torch.float32, device=dev)
+    else:
+        tail_m, tail_den, tail_num = _bufs
     rpad = 1 << (R - 1).bit_length()
     _kvarn_online_tail_kernel[(kvh * qpk,)](
         st, vt, tg, exrev, tail_m, tail_den, tail_num,
