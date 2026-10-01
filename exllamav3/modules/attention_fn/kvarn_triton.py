@@ -1278,7 +1278,7 @@ if _have_triton:
             tl.store(s_out_ptr + r, s)
 
 
-def kvarn_triton_online_tail_gather(layer, tpos, bt_row, K, V, gps):
+def kvarn_triton_online_tail_gather(layer, tpos, bt_row, K, V, gps, _bufs=None):
     """Fused tail exact-gather for the imageless arm.
 
     tpos: (R,) int64 positions (built once by the caller, shared with the
@@ -1299,9 +1299,14 @@ def kvarn_triton_online_tail_gather(layer, tpos, bt_row, K, V, gps):
     kvh = int(layer.num_kv_heads)
     hd = int(layer.head_dim)
     R = int(tpos.numel())
-    ev = torch.empty((R,), dtype=torch.bool, device=dev)
-    g = torch.empty((R,), dtype=torch.int64, device=dev)
-    s = torch.empty((R,), dtype=torch.int64, device=dev)
+    # Optional persistent outs (caller passes R-sized buffers or
+    # [:R] views of MAXW buffers: same values, minus 3 allocs).
+    if _bufs is None:
+        ev = torch.empty((R,), dtype=torch.bool, device=dev)
+        g = torch.empty((R,), dtype=torch.int64, device=dev)
+        s = torch.empty((R,), dtype=torch.int64, device=dev)
+    else:
+        ev, g, s = _bufs
     _kvarn_online_tail_gather_kernel[(R, kvh)](
         tpos, bt_row, layer.exact_k, layer.exact_v, layer._exact_rev,
         layer.exact_valid, K, V, ev, g, s, gps, kvh, hd, num_warps=4)
