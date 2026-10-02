@@ -1021,11 +1021,16 @@ if _have_triton:
         KVH: tl.constexpr, QPK: tl.constexpr, QPAD: tl.constexpr,
         NB: tl.constexpr, NBPAD: tl.constexpr,
         HD: tl.constexpr, SL: tl.constexpr, SSCALE: tl.constexpr,
+        DO_WHT: tl.constexpr = 1,
     ):
         """One program = one q-head: online-reduce NB block partials, then
         full head WHT in place (per-slice FWHT + cross-slice + scale, same
-        order as _kvarn_wht_hd_kernel). num_warps=1 REQUIRED. NB pads to
-        NBPAD (pow2); scalar block weights come from one-hot selects."""
+        order as _kvarn_wht_hd_kernel). num_warps=1 REQUIRED when the
+        folded WHT runs (DO_WHT=1: _fwht128_block is single-warp-only).
+        DO_WHT=0 skips the WHT (out stays normalized-domain); the
+        caller then runs _kvarn_wht_hd_kernel separately, which frees
+        the reduce to num_warps=4. NB pads to NBPAD (pow2); scalar
+        block weights come from one-hot selects."""
         pid = tl.program_id(0)
         ph = pid // QPK
         pq = pid % QPK
@@ -1055,23 +1060,50 @@ if _have_triton:
         row = tl.where(den > 0, num / den, 0.0)
         base = out_ptr + pid * HD
         tl.store(base + lane, row)
-        for _sl in tl.static_range(4):
-            if _sl < SL:
-                _fwht128_block(base + _sl * 128, tl.arange(0, 128))
-        tl.debug_barrier()
-        if SL > 1:
-            cur = tl.load(base + lane)
-            prt = tl.load(base + (lane ^ 128))
-            tl.store(base + lane,
-                     tl.where((lane & 128) == 0, cur + prt, prt - cur))
+        if DO_WHT:
+            for _sl in tl.static_range(4):
+                if _sl < SL:
+                    _fwht128_block(base + _sl * 128, tl.arange(0, 128))
             tl.debug_barrier()
-        if SL > 2:
-            cur = tl.load(base + lane)
-            prt = tl.load(base + (lane ^ 256))
-            tl.store(base + lane,
-                     tl.where((lane & 256) == 0, cur + prt, prt - cur))
-            tl.debug_barrier()
-        tl.store(base + lane, tl.load(base + lane) * SSCALE)
+            if SL > 1:
+                cur = tl.load(base + lane)
+                prt = tl.load(base + (lane ^ 128))
+                tl.store(base + lane,
+                         tl.where((lane & 128) == 0, cur + prt, prt - cur))
+                tl.debug_barrier()
+            if SL > 2:
+                cur = tl.load(base + lane)
+                prt = tl.load(base + (lane ^ 256))
+                tl.store(base + lane,
+                         tl.where((lane & 256) == 0, cur + prt, prt - cur))
+                tl.debug_barrier()
+            tl.store(base + lane, tl.load(base + lane) * SSCALE)
+
+    def _kvarn_launch_combine(m, l, acc, out, kvh, qpk, qpad, nb, nbpad,
+                              hd, sl, sscale):
+        """Combine reduce + out-WHT with the WHT split into its own
+        launch (EXL3_KVARN_COMBINE_SPLIT=1, default): reduce-only
+        combine at num_warps=4 (the serial b-loop is unchanged, only
+        the independent HD/NB lanes spread over warps) followed by
+        the proven _kvarn_wht_hd_kernel. =0 restores the legacy
+        single-launch folded path (num_warps=1). Fail-closed: any
+        throw in the split path falls back to the legacy launch,
+        loudly (never half-runs: the fallback rewrites out fully)."""
+        import os as _os
+        qh = int(out.shape[0])
+        if _os.environ.get("EXL3_KVARN_COMBINE_SPLIT", "1") == "1":
+            try:
+                _kvarn_online_combine_kernel[(qh,)](
+                    m, l, acc, out, kvh, qpk, qpad, nb, nbpad, hd, sl,
+                    sscale, 0, num_warps=4)
+                _kvarn_wht_hd_kernel[(qh,)](out, hd, sl, sscale)
+                return
+            except Exception as _e:
+                print("KVARN-COMBINE split failed, legacy fallback: "
+                      f"{_e}", flush=True)
+        _kvarn_online_combine_kernel[(qh,)](
+            m, l, acc, out, kvh, qpk, qpad, nb, nbpad, hd, sl,
+            sscale, 1, num_warps=1)
 
 
 if _have_triton:
@@ -1511,10 +1543,9 @@ def kvarn_triton_online_decode(layer, qw, ids, qpk, scale, n_new,
         kvh, qpk, qpad, hd, nb, scale,
         n_new, int(sink_n), int(tail_eff),
         num_warps=4)
-    _kvarn_online_combine_kernel[(qh,)](
+    _kvarn_launch_combine(
         m, l, acc, out, kvh, qpk, qpad, nb, nbpad, hd, sl,
-        1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5),
-        num_warps=1)
+        1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5))
     return out
 
 
@@ -1869,9 +1900,8 @@ def kvarn_triton_online_serve(layer, qw, Qf, exact_k, exact_v_w, exrev,
         num_warps=4, num_stages=1)
     sscale = 1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5)
     nbpad = 1 << (groups - 1).bit_length()
-    _kvarn_online_combine_kernel[(qh,)](
-        m, l, acc, out, kvh, qpk, qpad, groups, nbpad, hd, sl, sscale,
-        num_warps=1)
+    _kvarn_launch_combine(
+        m, l, acc, out, kvh, qpk, qpad, groups, nbpad, hd, sl, sscale)
     import os as _os2
     if _os2.environ.get("EXL3_KVARN_DEBUG_HASH") == "1":
         print(f"SERVE-OUT m={float(m.double().sum()):.6e} "
