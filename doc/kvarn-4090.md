@@ -227,6 +227,12 @@ audit: combine is 0.28ms/step (not 1.2ms), so the +3-5% estimate is
 retired to ~+1% ceiling; serve 4.5ms is the top kvarn item, MoE ~8ms
 dominates device. Twin maxabs <1e-5, KLD digits identical @64k,
 PARITY=1 @8k clean (29.5 tok/s, asserts green).
+n-mirror (2026-10-02, `c50905e`, default ON, kill-switch
+`EXL3_KVARN_N_MIRROR=0`): host mirror of int(cache_seqlens[0]),
+kills ~16 DtoH syncs/step; tg@64k graph 47.9 hot vs 47.8 (neutral,
+syncs were hidden). Fail-closed: q_len!=1/PARITY/128-cadence
+resync, eager-rest + legacy paths always real-sync. KLD identical,
+PARITY=1 @8k clean (42.7 tok/s, asserts green).
 Note: KLD divergence trend across approximation cuts (mean
 1.7e-5 base -> 2.3e-5 Sinkhorn -> 3.2e-5 deferred seals @64k;
 max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,
