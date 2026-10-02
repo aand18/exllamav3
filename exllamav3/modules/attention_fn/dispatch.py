@@ -141,6 +141,7 @@ def _kvarn_tpos(dev, n: int, tail_eff: int, sn_: int):
 # (IMAGELESS/TRITON/PARITY) are still read live per call (tests flip
 # them). First call pays what today pays every call.
 _kvarn_arm = None
+_g_calls = 0
 
 
 def _kvarn_arm_load():
@@ -216,7 +217,8 @@ def _graph_tail_bufs(layer, dev, kvh, hd, maxw):
     """Ensure tail temps + ev/g/s (K/V reuse the method temp attr
     names so eager-fallback and graph paths share them)."""
     K = getattr(layer, "_ov_online_tail_k", None)
-    if K is None or K.shape[0] != maxw:
+    V = getattr(layer, "_ov_online_tail_v", None)
+    if K is None or V is None or K.shape[0] != maxw:
         K = torch.zeros((maxw, kvh, hd), dtype=torch.float32, device=dev)
         V = torch.zeros((maxw, kvh, hd), dtype=torch.float32, device=dev)
         layer._ov_online_tail_k = K
@@ -242,9 +244,15 @@ def _try_kvarn_graph_decode(layer, q, k, v, cache_seqlens,
         return (False, None)
     if not arm:
         return (False, None)
+    from ...cache.kvarn import _ptime_count as _pgc, _kvarn_ptimes_on, _ptimes_report
+    global _g_calls
+    _g_calls += 1
+    if _kvarn_ptimes_on() and _g_calls % 2048 == 0:
+        _ptimes_report("graph-engagement")
     code = layer.update_kv_direct(cache_seqlens, block_table, k, v,
                                  q_len)
     if code is None or code != 0:
+        _pgc("g_fb_code")
         return (True, None)
     n = int(cache_seqlens[0]) + q_len
     tail_eff = int(layer.tail_effective)
@@ -255,13 +263,17 @@ def _try_kvarn_graph_decode(layer, q, k, v, cache_seqlens,
     _t0 = max(0, n - tail_eff)
     _R = _sn + (n - _t0)
     if _R <= 0:
+        _pgc("g_fb_shape")
         return (True, None)
     maxw = int(layer.kvarn_online_maxw())
     if _R > maxw:
+        _pgc("g_fb_shape")
         return (True, None)
     if not bool(getattr(layer, "_tail_exact_certain", False)):
+        _pgc("g_fb_cert")
         return (True, None)
     if _kvarn_check_flag(layer):
+        _pgc("g_fb_flag")
         return (True, None)
     if os.environ.get("EXL3_KVARN_TRITON_PARITY", "0") == "1":
         Ew = layer.kvarn_eref_cached()
@@ -290,8 +302,10 @@ def _try_kvarn_graph_decode(layer, q, k, v, cache_seqlens,
             "gc": _gc, "R": _R, "scale": scale, "sscale": sscale,
             "qh": qh, "kvh": kvh, "hd": hd, "qpk": qpk, "sl": sl,
             "sink_n": sink_n, "tail_eff": tail_eff, "gps": gps}
+        _pgc("g_miss")
         return (True, None)
     gb[key]["graph"].replay()
+    _pgc("g_replay")
     return (True, layer._ov_dec_out)
 
 
@@ -548,13 +562,17 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         layer._ov_dec_pending_capture = None
         try:
             _graph_capture(layer, _cap)
+            _ptime_count("g_captured")
         except Exception as _e:
+            _ptime_count("g_capfail")
             _bad = getattr(layer, "_ov_dec_bad", None)
             if _bad is None:
                 layer._ov_dec_bad = _bad = set()
             _bad.add((_cap["gc"], _cap["R"]))
+            import traceback as _tb
             print(f"KVARN-GRAPH capture failed, eager pinned: {_e}",
                   flush=True)
+            print("".join(_tb.format_exc(limit=12)), flush=True)
     return out.reshape(bsz, q_len, qh, hd)
 
 
