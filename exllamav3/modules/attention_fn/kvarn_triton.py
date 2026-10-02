@@ -1765,6 +1765,15 @@ if _have_triton:
                  mask=qmask2[:, None])
 
 
+def _kvarn_serve_groups(gc):
+    """Hierarchical subgroup count shared by serve and its callers.
+
+    Direct (one chunk per program) while gc <= 64; capped at 128
+    beyond (16k: direct-equivalent; 64k: 128 x CPG=4). Single source
+    so kernel strides and merge/combine counts cannot drift apart.
+    """
+    return gc if gc <= 64 else min(gc, 128)
+
 def kvarn_triton_online_serve(layer, qw, Qf, exact_k, exact_v_w, exrev,
                               sealed, bt, n_0d, qpk, scale, sink_n,
                               tail_eff, gps, gc=None, rec_f16=None,
@@ -1809,7 +1818,7 @@ def kvarn_triton_online_serve(layer, qw, Qf, exact_k, exact_v_w, exrev,
     # 144 SMs, so 128 groups keep full occupancy AND cut partials
     # traffic 4x at 64k. Combine/merge read GROUPS partials with
     # matching strides (stride == count invariant holds, both UNCHANGED).
-    groups = gc if gc <= 64 else min(gc, 128)
+    groups = _kvarn_serve_groups(gc)
     cpg = (gc + groups - 1) // groups
     need = (qh, qpad, groups, hd)
     if getattr(layer, "_ov_serve_shape", None) != need or \
