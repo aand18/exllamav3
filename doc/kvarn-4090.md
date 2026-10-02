@@ -219,6 +219,14 @@ perf runs PARITY=0 (+ GRAPH default), validation runs PARITY=1
 | 16384 | 82.2 | 46.8 eager / 54.0 graph (was 39.4 parity-taxed) | **44.0** | 46.2 | 106% / 123% | 1e-6 / 1.1e-5 / 2.96e-4 / n/a | 100.00% |
 | 65536 | 62.1 | 43.4 eager / 47.0 graph (was 34 parity-taxed) | **44.0** | 46.1 | 99% / 107% | 1e-6 / 2.8e-5 / 1.36e-3 / n/a | 100.00% |
 | 131072 | 47.1 | 35.2 graph (first measurement; Bee tg@128k unknown) | n/a | n/a | n/a | 1e-6 / 5e-6 / 6.9e-5 / 4.9e-5 | 100.00% |
+Combine WHT-split (2026-10-02, `90074b7`, default ON, kill-switch
+`EXL3_KVARN_COMBINE_SPLIT=0`): tg@64k graph 47.5 hot vs 47.8 pre-cut
+(neutral within noise; run1 34.9 was one-time triton recompile of the
+two new specializations). Fresh online-path Kineto re-ranks the
+audit: combine is 0.28ms/step (not 1.2ms), so the +3-5% estimate is
+retired to ~+1% ceiling; serve 4.5ms is the top kvarn item, MoE ~8ms
+dominates device. Twin maxabs <1e-5, KLD digits identical @64k,
+PARITY=1 @8k clean (29.5 tok/s, asserts green).
 Note: KLD divergence trend across approximation cuts (mean
 1.7e-5 base -> 2.3e-5 Sinkhorn -> 3.2e-5 deferred seals @64k;
 max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,
