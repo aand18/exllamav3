@@ -25,6 +25,7 @@ skills and process (gated changes, rollback allowed).
 - `patterns/serve-parallelism-bound.md` -- CTA math before traffic.
 - `patterns/slot-order-not-contract.md` -- rev maps, not indices.
 - `patterns/dont-fuse-mma-into-simt.md` -- arithmetic before code.
+- `patterns/cuda-graphs-decode.md` -- replay sublattice, fallback rest.
 - `patterns/kld-median-noise-floor.md` -- gate criteria.
 - `patterns/benchmark-fp16-first.md` -- mining + determinism rules.
 - `skill-impact.md` -- accept/reject audit trail + pass log.

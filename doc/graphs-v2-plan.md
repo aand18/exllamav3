@@ -46,13 +46,13 @@ spike evidence in this doc's graphs entries.
 - Consumes: existing wrapper signature + R-sized bufs.
 - Produces: gather with zero allocs (needed for capture).
 
-- [ ] Step 1: Add optional trailing `_bufs=None` (tuple ev/g/s),
+- [x] Step 1: Add optional trailing `_bufs=None` (tuple ev/g/s),
   defaulting to today's three `torch.empty` calls.
-- [ ] Step 2: CPU py_compile + box suite (callers without bufs
+- [x] Step 2: CPU py_compile + box suite (callers without bufs
   behave identically).
-- [ ] Step 3: Spike v2 re-run (assert no new allocs: same ev/g/s
+- [x] Step 3: Spike v2 re-run (assert no new allocs: same ev/g/s
   addresses across replays).
-- [ ] Step 4: Commit.
+- [x] Step 4: Commit.
 
 ### Task 2: Static R bucketing
 
@@ -93,16 +93,16 @@ of a measurement run.
 - Consumes: Tasks 1-2 (zero-alloc sublattice, stable buckets).
 - Produces: `EXL3_KVARN_GRAPH=1` replay path with identical outputs.
 
-- [ ] Step 1: Implement capture (warmup 3x, then
+- [x] Step 1: Implement capture (warmup via eager-rest, then
   `torch.cuda.CUDAGraph` around the sublattice calls with
   persistent bufs + precomputed views).
-- [ ] Step 2: Implement fallback matrix: status != 0, flag trip,
+- [x] Step 2: Implement fallback matrix: status != 0, flag trip,
   cert fail, bucket miss, any exception during capture ->
   eager today-path (loud, never half-run).
-- [ ] Step 3: Twin test (graph replay vs eager, static shapes).
-- [ ] Step 4: Box gates with `EXL3_KVARN_GRAPH=1`: suite + KLD-8k
+- [x] Step 3: Twin test (graph replay vs eager, static shapes).
+- [x] Step 4: Box gates with `EXL3_KVARN_GRAPH=1`: suite + KLD-8k
   x2 (expect +3-8% tg, identical KLD) + needle.
-- [ ] Step 5: Commit; flip default ON only after green twice.
+- [x] Step 5: Commit; flip default ON only after green twice.
 
 ### Task 4: Docs + wiki pattern
 
