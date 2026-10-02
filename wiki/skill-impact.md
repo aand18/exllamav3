@@ -21,6 +21,11 @@ change ships, standalone docs commit if it doesn't.
 - 2026-10-02 / PARITY TAX discovery: all historical tg/pp ran
   PARITY=1 (~15% hidden tax). Protocol v3: clean perf + separate
   parity validation; never compare across parity settings.
+- 2026-10-02 / async seals PARKED (audit refined design, prize
+  re-estimated +1-3% for medium risk + merge debt).
+- 2026-10-02 / merge-readiness audit filed
+  (`wiki/reports/2026-10-02-merge-audit.md`); defaults stay ON
+  (gates are the perf proof); prep deferred until a PR exists.
 
 - 2026-09-30 / protocol-v2 (warmed + anchor + hot-cache + A/B):
   killed two false conclusions (MMA +4% mirage, K4V2 -20% gap).
