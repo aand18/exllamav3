@@ -1984,13 +1984,13 @@ class CacheLayer_kvarn(CacheLayer):
                 # refresh launch. Seals keep exact content, so the
                 # cache stays valid through them too.
                 self._evict_exact_all(1)
-                return
+                return code
             if code == 2:
                 self._evict_exact_all(1)
                 self._seal_group(gg)
                 self._dirty_mask[gg] = True
                 self._dirty_any = True
-                return
+                return code
             # code == 1: fall through to the torch paths below (fresh,
             # sealed, or unassigned groups assign/reset host-side).
         # Any torch store below may reset/release exact blocks (fresh
@@ -2927,14 +2927,21 @@ class CacheLayer_kvarn(CacheLayer):
         bt = block_table.long()
         seqlens = cache_seqlens.long()
         self._touch_batch(seqlens, bt, length)
+        # Fused-store status codes for the graphs fast path (decode reads
+        # the single code to decide replay vs eager fallback; prefill and
+        # multi-batch callers ignore the return, as before). None = torch
+        # path taken (no fresh status: fail-safe to eager).
+        codes = []
         for b in range(bsz):
             # Length-1 (every decode step) is a slice, not an alloc+add.
             pos = seqlens[b:b + 1] if length == 1 else \
                 seqlens[b] + torch.arange(length, device=bt.device)
             pages = bt[b, pos // PAGE_SIZE]
             offs = pos % PAGE_SIZE
-            self._store_rows(k[b], v[b], pages, offs, pos, seqlens[b] + length,
-                             bt[b])
+            codes.append(self._store_rows(k[b], v[b], pages, offs, pos,
+                                         seqlens[b] + length, bt[b]))
+        if len(codes) == 1:
+            return codes[0]
 
     @override
     def copy_page(self, source: CacheLayer_kvarn, from_page: int, to_page: int,
