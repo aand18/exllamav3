@@ -614,3 +614,16 @@ def test_promoted_serve_matches_eval_spike():
         0.0625, 128, 128, 2)
     assert flag_e == flag_p == 0
     assert torch.equal(out_e, out_p)
+
+
+@pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
+def test_graph_wrap_matches_eager():
+    # Graphs v2 twin: wrapper-level capture replay vs eager, static
+    # synthetic setup. Replay must be bit-exact (maxabs 0.0): same
+    # kernels, same addresses, no math change -- any nonzero diff is a
+    # capture bug (stale pointer, missed input copy), not numerics.
+    sys.path.insert(0, str(ROOT / "eval"))
+    from _spike_graph_wrap import run_spike
+    maxabs, speedup = run_spike()
+    print(f"graph twin: maxabs={maxabs:.3e} speedup={speedup:.2f}x")
+    assert maxabs == 0.0, maxabs

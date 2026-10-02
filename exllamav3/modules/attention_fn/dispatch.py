@@ -244,6 +244,9 @@ def _try_kvarn_graph_decode(layer, q, k, v, cache_seqlens,
         return (False, None)
     if not arm:
         return (False, None)
+    if q.shape[0] != 1 or int(cache_seqlens.numel()) != 1:
+        return (False, None)
+    layer._ov_dec_pending_capture = None
     from ...cache.kvarn import _ptime_count as _pgc, _kvarn_ptimes_on, _ptimes_report
     global _g_calls
     _g_calls += 1
@@ -272,41 +275,69 @@ def _try_kvarn_graph_decode(layer, q, k, v, cache_seqlens,
     if not bool(getattr(layer, "_tail_exact_certain", False)):
         _pgc("g_fb_cert")
         return (True, None)
-    if _kvarn_check_flag(layer):
-        _pgc("g_fb_flag")
-        return (True, None)
+    # NOTE: no serve-tick probe here (review #1): PARITY=1 must
+    # still replay (the assert above validates eref); the sticky
+    # tripwire is covered by the post-replay due read below, at the
+    # same every-128 cadence as eager.
     if os.environ.get("EXL3_KVARN_TRITON_PARITY", "0") == "1":
         Ew = layer.kvarn_eref_cached()
         Ew_ref = arm.t_wht_rows(layer.exact_v.float(), hd)
         assert torch.equal(Ew, Ew_ref), "eref diverged (graph run)"
-    Qbuf, Qfbuf, nbuf, tbuf, btbuf = _graph_bufs(
-        layer, dev, qh, kvh, hd, qpk, maxw,
-        int(block_table.shape[1]), cache_seqlens.dtype,
-        block_table.dtype)
-    Qbuf.copy_(q[0, 0])
-    Qfbuf.copy_(q[0, 0])
-    nbuf.copy_(cache_seqlens[:1])
-    nbuf += q_len
-    torch.arange(_sn, device=dev, out=tbuf[:_sn])
-    torch.arange(_t0, n, device=dev, out=tbuf[_sn:_R])
-    btbuf.copy_(block_table[0])
-    gb = getattr(layer, "_ov_dec_graphs", None)
-    if gb is None:
-        layer._ov_dec_graphs = gb = {}
-    key = (_gc, _R)
-    bad = getattr(layer, "_ov_dec_bad", None)
-    if bad is not None and key in bad:
+    try:
+        Qbuf, Qfbuf, nbuf, tbuf, btbuf = _graph_bufs(
+            layer, dev, qh, kvh, hd, qpk, maxw,
+            int(block_table.shape[1]), cache_seqlens.dtype,
+            block_table.dtype)
+        Qbuf.copy_(q[0, 0])
+        Qfbuf.copy_(q[0, 0])
+        nbuf.copy_(cache_seqlens[:1])
+        nbuf += q_len
+        torch.arange(_sn, device=dev, out=tbuf[:_sn])
+        torch.arange(_t0, n, device=dev, out=tbuf[_sn:_R])
+        btbuf.copy_(block_table[0])
+        gb = getattr(layer, "_ov_dec_graphs", None)
+        if gb is None:
+            layer._ov_dec_graphs = gb = {}
+        key = (_gc, _R)
+        bad = getattr(layer, "_ov_dec_bad", None)
+        if bad is not None and key in bad:
+            return (True, None)
+        if key not in gb:
+            layer._ov_dec_pending_capture = {
+                "gc": _gc, "R": _R, "scale": scale, "sscale": sscale,
+                "qh": qh, "kvh": kvh, "hd": hd, "qpk": qpk, "sl": sl,
+                "sink_n": sink_n, "tail_eff": tail_eff, "gps": gps}
+            _pgc("g_miss")
+            return (True, None)
+        _ent = gb[key]
+        # Buffer-identity verify (review #3/#6): serve realloc on gc
+        # change or st-cache eviction orphans baked addresses. Mismatch
+        # drops the bucket (recapture next miss); never replays stale.
+        _st_now = getattr(layer, "_ov_dec_st_cache", {}).get(_R)
+        if (_ent["m"] is not layer._ov_serve_m
+                or _ent["acc"] is not layer._ov_serve_acc
+                or _st_now is not _ent["st"]):
+            del gb[key]
+            _pgc("g_stale")
+            return (True, None)
+        _ent["graph"].replay()
+        _pgc("g_replay")
+        # Post-replay sticky-flag due read (review #2): same every-128
+        # cadence as eager; trip discards outputs + clears graphs.
+        _rn = int(getattr(layer, "_ov_dec_replays", 0)) + 1
+        layer._ov_dec_replays = _rn
+        if _rn % 128 == 0:
+            if int(layer._ov_serve_flag[0]) != 0:
+                gb.clear()
+                print("KVARN-GRAPH sticky trip during replay: graphs cleared, eager fallback", flush=True)
+                return (True, None)
+        return (True, layer._ov_dec_out)
+    except Exception as _e:
+        print(f"KVARN-GRAPH unexpected, eager fallback: {_e}", flush=True)
+        import traceback as _tb
+        print("".join(_tb.format_exc(limit=8)), flush=True)
         return (True, None)
-    if key not in gb:
-        layer._ov_dec_pending_capture = {
-            "gc": _gc, "R": _R, "scale": scale, "sscale": sscale,
-            "qh": qh, "kvh": kvh, "hd": hd, "qpk": qpk, "sl": sl,
-            "sink_n": sink_n, "tail_eff": tail_eff, "gps": gps}
-        _pgc("g_miss")
-        return (True, None)
-    gb[key]["graph"].replay()
-    _pgc("g_replay")
-    return (True, layer._ov_dec_out)
+
 
 
 def _graph_capture(layer, cap):
@@ -360,7 +391,10 @@ def _graph_capture(layer, cap):
     layer._ov_dec_graphs[(gc, R)] = {"graph": g, "Kt": Kt,
                                         "Vt": Vt, "gg": ggb,
                                         "Qh": Qh, "tm_v": tm_v,
-                                        "td_v": td_v, "tn_v": tn_v}
+                                        "td_v": td_v, "tn_v": tn_v,
+                                        "m": layer._ov_serve_m,
+                                        "acc": layer._ov_serve_acc,
+                                        "st": st}
 
 
 def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
