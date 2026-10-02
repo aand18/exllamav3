@@ -156,7 +156,8 @@ def _kvarn_arm_load():
                 kvarn_triton_available, kvarn_triton_qwht,
                 kvarn_triton_online_partials, kvarn_triton_wht_rows,
                 kvarn_triton_online_serve, kvarn_triton_online_merge,
-                kvarn_triton_online_tail_reduce, _kvarn_online_buffers)
+                kvarn_triton_online_tail_reduce, _kvarn_online_buffers,
+                _kvarn_serve_groups, kvarn_triton_online_tail_gather)
             from ...cache.kvarn import (KVAR_N_SINK_TOKENS, KVAR_N_GROUP,
                 _ptime_count)
             from ...constants import PAGE_SIZE
@@ -168,11 +169,184 @@ def _kvarn_arm_load():
                 t_serve=kvarn_triton_online_serve,
                 t_merge=kvarn_triton_online_merge,
                 t_tailred=kvarn_triton_online_tail_reduce,
-                t_bufs=_kvarn_online_buffers,
+                t_bufs=_kvarn_online_buffers, t_groups=_kvarn_serve_groups,
+                t_tailgather=kvarn_triton_online_tail_gather,
                 c_sink=KVAR_N_SINK_TOKENS, c_group=KVAR_N_GROUP,
                 c_ptime=_ptime_count,
                 c_page=PAGE_SIZE)
     return _kvarn_arm
+
+
+# Graphs v2: per-layer decode sublattice replay (Task 3).
+# Store (ungraphed, status-gated) -> static input copies -> bucket
+# (gc, R) lookup -> replay, else eager-rest + capture-after. Kill
+# switch EXL3_KVARN_GRAPH=1 (default off). PARITY=1 runs the eref
+# assert but still graphs (validates both). Fallback (status 1/2,
+# cert fail, flag-due, bucket miss/bad, shape change) runs eager.
+def _graph_bufs(layer, dev, qh, kvh, hd, qpk, maxw, npages, sledtype,
+                btdtype):
+    """Ensure the static input buffers for graph capture/replay.
+    Idempotent (allocates once, reallocs only on shape/dtype
+    change). All addresses stable afterwards, which is what makes
+    replay valid. Returns (Qbuf, Qfbuf, nbuf, tbuf, btbuf)."""
+    Qbuf = getattr(layer, "_ov_dec_g_q", None)
+    if Qbuf is None or tuple(Qbuf.shape) != (qh, hd):
+        Qbuf = torch.empty((qh, hd), dtype=torch.float16, device=dev)
+        layer._ov_dec_g_q = Qbuf
+    Qfbuf = getattr(layer, "_ov_dec_qf", None)
+    if Qfbuf is None or tuple(Qfbuf.shape) != (qh, hd):
+        Qfbuf = torch.empty((qh, hd), dtype=torch.float32, device=dev)
+        layer._ov_dec_qf = Qfbuf
+    nbuf = getattr(layer, "_ov_dec_g_n", None)
+    if nbuf is None or tuple(nbuf.shape) != (1,) or nbuf.dtype != sledtype:
+        nbuf = torch.empty((1,), dtype=sledtype, device=dev)
+        layer._ov_dec_g_n = nbuf
+    tbuf = getattr(layer, "_ov_dec_g_t", None)
+    if tbuf is None or tuple(tbuf.shape) != (maxw,):
+        tbuf = torch.empty((maxw,), dtype=torch.int64, device=dev)
+        layer._ov_dec_g_t = tbuf
+    btbuf = getattr(layer, "_ov_dec_g_b", None)
+    if btbuf is None or tuple(btbuf.shape) != (npages,) or btbuf.dtype != btdtype:
+        btbuf = torch.empty((npages,), dtype=btdtype, device=dev)
+        layer._ov_dec_g_b = btbuf
+    return Qbuf, Qfbuf, nbuf, tbuf, btbuf
+
+
+def _graph_tail_bufs(layer, dev, kvh, hd, maxw):
+    """Ensure tail temps + ev/g/s (K/V reuse the method temp attr
+    names so eager-fallback and graph paths share them)."""
+    K = getattr(layer, "_ov_online_tail_k", None)
+    if K is None or K.shape[0] != maxw:
+        K = torch.zeros((maxw, kvh, hd), dtype=torch.float32, device=dev)
+        V = torch.zeros((maxw, kvh, hd), dtype=torch.float32, device=dev)
+        layer._ov_online_tail_k = K
+        layer._ov_online_tail_v = V
+    for _an, _ad in (("_ov_dec_ev", torch.bool),
+                     ("_ov_dec_gg", torch.int64),
+                     ("_ov_dec_ss", torch.int64)):
+        _t = getattr(layer, _an, None)
+        if _t is None or _t.shape[0] != maxw:
+            _t = torch.empty((maxw,), dtype=_ad, device=dev)
+            setattr(layer, _an, _t)
+    return K, V
+
+
+def _try_kvarn_graph_decode(layer, q, k, v, cache_seqlens,
+                            block_table, q_len, qh, kvh, hd, qpk,
+                            sl, scale, sscale, dev, arm):
+    """Graph fast path: returns (stored, out|None). stored False =
+    decline before store (run full eager); (True, None) = stored,
+    run eager rest (skip store); (True, out) = replayed. Never
+    half-runs (loud fallback to eager on any trip)."""
+    if os.environ.get("EXL3_KVARN_GRAPH", "0") != "1":
+        return (False, None)
+    if not arm:
+        return (False, None)
+    code = layer.update_kv_direct(cache_seqlens, block_table, k, v,
+                                 q_len)
+    if code is None or code != 0:
+        return (True, None)
+    n = int(cache_seqlens[0]) + q_len
+    tail_eff = int(layer.tail_effective)
+    sink_n = arm.c_sink if layer.has_sink else 0
+    gps = arm.c_page // arm.c_group
+    _gc = min((n + 127) // 128, int(layer.records.shape[0]))
+    _sn = min(arm.c_sink, n) if layer.has_sink else 0
+    _t0 = max(0, n - tail_eff)
+    _R = _sn + (n - _t0)
+    if _R <= 0:
+        return (True, None)
+    maxw = int(layer.kvarn_online_maxw())
+    if _R > maxw:
+        return (True, None)
+    if not bool(getattr(layer, "_tail_exact_certain", False)):
+        return (True, None)
+    if _kvarn_check_flag(layer):
+        return (True, None)
+    if os.environ.get("EXL3_KVARN_TRITON_PARITY", "0") == "1":
+        Ew = layer.kvarn_eref_cached()
+        Ew_ref = arm.t_wht_rows(layer.exact_v.float(), hd)
+        assert torch.equal(Ew, Ew_ref), "eref diverged (graph run)"
+    Qbuf, Qfbuf, nbuf, tbuf, btbuf = _graph_bufs(
+        layer, dev, qh, kvh, hd, qpk, maxw,
+        int(block_table.shape[1]), cache_seqlens.dtype,
+        block_table.dtype)
+    Qbuf.copy_(q[0, 0])
+    Qfbuf.copy_(q[0, 0])
+    nbuf.copy_(cache_seqlens[:1])
+    nbuf += q_len
+    torch.arange(_sn, device=dev, out=tbuf[:_sn])
+    torch.arange(_t0, n, device=dev, out=tbuf[_sn:_R])
+    btbuf.copy_(block_table[0])
+    gb = getattr(layer, "_ov_dec_graphs", None)
+    if gb is None:
+        layer._ov_dec_graphs = gb = {}
+    key = (_gc, _R)
+    bad = getattr(layer, "_ov_dec_bad", None)
+    if bad is not None and key in bad:
+        return (True, None)
+    if key not in gb:
+        layer._ov_dec_pending_capture = {
+            "gc": _gc, "R": _R, "scale": scale, "sscale": sscale,
+            "qh": qh, "kvh": kvh, "hd": hd, "qpk": qpk, "sl": sl,
+            "sink_n": sink_n, "tail_eff": tail_eff, "gps": gps}
+        return (True, None)
+    gb[key]["graph"].replay()
+    return (True, layer._ov_dec_out)
+
+
+def _graph_capture(layer, cap):
+    """Record the sublattice graph for one bucket (called after an
+    eager-rest warmed kernels; inputs already in static bufs).
+    Raises on failure (caller marks bucket bad, stays eager)."""
+    arm = _kvarn_arm_load()
+    dev = layer.device
+    gc, R = cap["gc"], cap["R"]
+    qh, kvh, hd, qpk, sl = (cap["qh"], cap["kvh"], cap["hd"],
+                             cap["qpk"], cap["sl"])
+    groups = arm.t_groups(gc)
+    Qbuf = layer._ov_dec_g_q
+    Qfbuf = layer._ov_dec_qf
+    nbuf = layer._ov_dec_g_n
+    tbuf = layer._ov_dec_g_t
+    btbuf = layer._ov_dec_g_b
+    _mb, _lb, _ab, qw, qs, _o = arm.t_bufs(
+        layer, qh, 1 << (qpk - 1).bit_length(), hd, dev)
+    Qh = Qfbuf.reshape(kvh, qpk, hd)
+    maxw = int(layer.kvarn_online_maxw())
+    K, V = _graph_tail_bufs(layer, dev, kvh, hd, maxw)
+    Kt = K[:R].permute(1, 2, 0)
+    Vt = V[:R]
+    st = layer._ov_dec_st_cache[R]
+    tm, td, tn = layer._ov_dec_tail
+    tm_v = tm.reshape(qh)
+    td_v = td.reshape(qh)
+    tn_v = tn.reshape(qh, hd)
+    evb = layer._ov_dec_ev[:R]
+    ggb = layer._ov_dec_gg[:R]
+    ssb = layer._ov_dec_ss[:R]
+    m_out = layer._ov_dec_out
+    Ew = layer.kvarn_eref_cached()
+    g = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(g):
+        arm.t_qwht(Qbuf, qs, qw, sl, cap["sscale"])
+        _ob, _fb = arm.t_serve(
+            layer, qw, Qfbuf, layer.exact_k, Ew, layer._exact_rev,
+            layer.sealed, btbuf, nbuf, qpk, cap["scale"],
+            cap["sink_n"], cap["tail_eff"], cap["gps"], gc=gc,
+            sync_flag=False)
+        arm.t_tailgather(
+            layer, tbuf, btbuf, K, V, cap["gps"],
+            (evb, ggb, ssb))
+        torch.bmm(Qh, Kt, out=st)
+        torch.mul(st, cap["scale"], out=st)
+        arm.t_tailred(st, Vt, ggb, layer._exact_rev, (tm, td, tn))
+        arm.t_merge(layer._ov_serve_m, layer._ov_serve_l, _ob,
+                    tm_v, td_v, tn_v, qpk, groups, m_out)
+    layer._ov_dec_graphs[(gc, R)] = {"graph": g, "Kt": Kt,
+                                        "Vt": Vt, "gg": ggb,
+                                        "Qh": Qh, "tm_v": tm_v,
+                                        "td_v": td_v, "tn_v": tn_v}
 
 
 def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
@@ -231,6 +405,7 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
     kvarn_triton_online_merge = _arm.t_merge
     kvarn_triton_online_tail_reduce = _arm.t_tailred
     _kvarn_online_buffers = _arm.t_bufs
+    _kvarn_serve_groups = _arm.t_groups
     KVAR_N_SINK_TOKENS = _arm.c_sink
     KVAR_N_GROUP = _arm.c_group
     _ptime_count = _arm.c_ptime
@@ -240,9 +415,19 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
     qpk = qh // kvh
     sl = hd // 128
     scale = sm_scale if sm_scale is not None else dim ** (-0.5)
+    sscale = 1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5)
     dev = q.device
+    # Graph attempt (includes store; kill-switched inside, default off).
+    # Returns (stored, out): stored False -> full eager below; (True,
+    # None) -> stored, eager rest skips store; (True, out) -> replayed.
+    _g_stored, _g_out = _try_kvarn_graph_decode(
+        layer, q, k, v, cache_seqlens, block_table, q_len,
+        qh, kvh, hd, qpk, sl, scale, sscale, dev, _arm)
+    if _g_out is not None:
+        return _g_out.reshape(bsz, q_len, qh, hd)
     # Store first (write-back already done on this path).
-    layer.update_kv_direct(cache_seqlens, block_table, k, v, q_len)
+    if not _g_stored:
+        layer.update_kv_direct(cache_seqlens, block_table, k, v, q_len)
     n = int(cache_seqlens[0]) + q_len
     n_0d = cache_seqlens[:1] + q_len
     sink_n = KVAR_N_SINK_TOKENS if layer.has_sink else 0
@@ -253,7 +438,6 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
     qpad = 1 << (qpk - 1).bit_length()
     _mb, _lb, _ab, qw, qs, _o = _kvarn_online_buffers(
         layer, qh, qpad, hd, dev)
-    sscale = 1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5)
     kvarn_triton_qwht(Q, qs, qw, sl, sscale)
     # Persistent fp32 Q (saves 1 alloc/layer/step; shape static).
     # copy_ converts in the same kernel .float() would run.
@@ -357,6 +541,20 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
             layer._ov_serve_m, layer._ov_serve_l, out_b,
             tail_m, tail_den, tail_num, qpk,
             int(layer._ov_serve_m.shape[2]), _mo)
+    # Graph capture-after (miss path set pending above; kernels warm
+    # from this eager rest). Failure pins the bucket eager (loud).
+    _cap = getattr(layer, "_ov_dec_pending_capture", None)
+    if _cap is not None:
+        layer._ov_dec_pending_capture = None
+        try:
+            _graph_capture(layer, _cap)
+        except Exception as _e:
+            _bad = getattr(layer, "_ov_dec_bad", None)
+            if _bad is None:
+                layer._ov_dec_bad = _bad = set()
+            _bad.add((_cap["gc"], _cap["R"]))
+            print(f"KVARN-GRAPH capture failed, eager pinned: {_e}",
+                  flush=True)
     return out.reshape(bsz, q_len, qh, hd)
 
 
