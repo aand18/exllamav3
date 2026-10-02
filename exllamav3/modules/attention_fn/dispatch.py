@@ -249,17 +249,20 @@ def _try_kvarn_graph_decode(layer, q, k, v, cache_seqlens,
     if q.shape[0] != 1 or int(cache_seqlens.numel()) != 1:
         return (False, None)
     layer._ov_dec_pending_capture = None
-    from ...cache.kvarn import _ptime_count as _pgc, _kvarn_ptimes_on, _ptimes_report
+    from ...cache.kvarn import _ptime_count as _pgc, _kvarn_ptimes_on, _ptimes_report, _kvarn_past_cached, _kvarn_past_commit
     global _g_calls
     _g_calls += 1
     if _kvarn_ptimes_on() and _g_calls % 2048 == 0:
         _ptimes_report("graph-engagement")
+    _past, _hit = _kvarn_past_cached(layer, cache_seqlens, q_len)
+    n = _past + q_len
     code = layer.update_kv_direct(cache_seqlens, block_table, k, v,
                                  q_len)
     if code is None or code != 0:
         _pgc("g_fb_code")
+        _kvarn_past_commit(layer, n, False)
         return (True, None)
-    n = int(cache_seqlens[0]) + q_len
+    _kvarn_past_commit(layer, n, True)
     tail_eff = int(layer.tail_effective)
     sink_n = arm.c_sink if layer.has_sink else 0
     gps = arm.c_page // arm.c_group
@@ -475,10 +478,18 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
         qh, kvh, hd, qpk, sl, scale, sscale, dev, _arm)
     if _g_out is not None:
         return _g_out.reshape(bsz, q_len, qh, hd)
-    # Store first (write-back already done on this path).
+    # Store first (write-back already done on this path). Eager-rest
+    # runs only on graph decline/fallback/miss: always take the real
+    # sync here (rare path) so a stale mirror self-corrects before
+    # doing math; the mirror refreshes below for the next step.
+    from ...cache.kvarn import _kvarn_past_commit as _pc2
     if not _g_stored:
-        layer.update_kv_direct(cache_seqlens, block_table, k, v, q_len)
+        _code = layer.update_kv_direct(cache_seqlens, block_table, k, v,
+                                       q_len)
+    else:
+        _code = 0
     n = int(cache_seqlens[0]) + q_len
+    _pc2(layer, n, _code == 0)
     n_0d = cache_seqlens[:1] + q_len
     sink_n = KVAR_N_SINK_TOKENS if layer.has_sink else 0
     tail_eff = int(layer.tail_effective)
@@ -739,6 +750,12 @@ def attn_dispatch(
 
     # Update cache (quant-direct mode already wrote the new K/V before the attention call)
     if cache is not None and q_cache is None:
+        if isinstance(layer, CacheLayer_kvarn):
+            # Legacy/get_kv path doesn't track the n-mirror (only the
+            # online arm commits it): invalidate so the next online
+            # step resyncs once instead of trusting a stale total.
+            # Unreachable on the online path (it returns early above).
+            layer._ov_dec_n_mirror = None
         if isinstance(cache, CacheLayer):
             cache.update_kv(cache_seqlens, block_table, k_cache, v_cache, q_len)
         elif isinstance(cache, Cache):

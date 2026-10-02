@@ -666,3 +666,50 @@ def test_combine_split_matches_folded():
           f"meanabs={float(d.mean()):.3e} "
           f"exact={bool(torch.equal(out_old, out_new))}")
     assert float(d.max()) < 1e-5, float(d.max())
+
+
+def test_past_mirror_contract_cpu(monkeypatch):
+    # n-mirror logic (no CUDA): miss-then-hit steady state, hit does
+    # not re-read the tensor (mutate between calls), q_len!=1 /
+    # PARITY=1 / kill-switch / every-128th force a real sync, commit
+    # False clears. Uses CPU tensors (int() never syncs there; the
+    # hit flag is the observable contract).
+    from types import SimpleNamespace
+    monkeypatch.delenv("EXL3_KVARN_N_MIRROR", raising=False)
+    monkeypatch.delenv("EXL3_KVARN_TRITON_PARITY", raising=False)
+    lay = SimpleNamespace()
+    seql = torch.tensor([100], dtype=torch.int32)
+    past, hit = kvarn._kvarn_past_cached(lay, seql, 1)
+    assert (past, hit) == (100, False)
+    kvarn._kvarn_past_commit(lay, 101, True)
+    seql[0] = 999  # mirror must NOT re-read
+    past, hit = kvarn._kvarn_past_cached(lay, seql, 1)
+    assert (past, hit) == (101, True)
+    # q_len != 1 invalidates and syncs
+    past, hit = kvarn._kvarn_past_cached(lay, torch.tensor([50]), 8)
+    assert (past, hit) == (50, False)
+    assert lay._ov_dec_n_mirror is None
+    # commit False clears
+    kvarn._kvarn_past_commit(lay, 51, True)
+    kvarn._kvarn_past_commit(lay, 51, False)
+    assert lay._ov_dec_n_mirror is None
+    # PARITY=1 always syncs
+    kvarn._kvarn_past_commit(lay, 60, True)
+    monkeypatch.setenv("EXL3_KVARN_TRITON_PARITY", "1")
+    past, hit = kvarn._kvarn_past_cached(lay, torch.tensor([60]), 1)
+    assert (past, hit) == (60, False)
+    monkeypatch.delenv("EXL3_KVARN_TRITON_PARITY")
+    # kill-switch always syncs
+    monkeypatch.setenv("EXL3_KVARN_N_MIRROR", "0")
+    past, hit = kvarn._kvarn_past_cached(lay, torch.tensor([61]), 1)
+    assert (past, hit) == (61, False)
+    monkeypatch.delenv("EXL3_KVARN_N_MIRROR")
+    # every 128th step resyncs
+    lay2 = SimpleNamespace()
+    s = torch.tensor([7], dtype=torch.int32)
+    hits = 0
+    for _ in range(128):
+        _, h = kvarn._kvarn_past_cached(lay2, s, 1)
+        hits += h
+        kvarn._kvarn_past_commit(lay2, 8, True)
+    assert hits == 126, hits  # steps 1 (cold) and 128 (periodic) miss

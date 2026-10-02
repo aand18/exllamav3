@@ -470,6 +470,41 @@ def _ptimes_report(tag):
     print(f"PTIMES {tag}: {parts} total={tot:.0f}ms", flush=True)
 
 
+def _kvarn_past_cached(layer, cache_seqlens, q_len):
+    """Host mirror of int(cache_seqlens[0]) for steady decode.
+
+    Returns (past, hit): hit True means past came from the mirror
+    (no DtoH sync); hit False means a real sync just happened. After
+    the single-row store commits, the caller records the new total
+    via _kvarn_past_commit (or clears on any other outcome).
+
+    Fail-closed contract (same precedent as _tail_exact_certain):
+    q_len != 1 invalidates (prefill/interleaved appends); PARITY=1
+    always syncs; every 128th call resyncs; EXL3_KVARN_N_MIRROR=0
+    disables (always syncs). Residual hole: a stale mirror survives
+    only a same-buffer seqlens reset fed with q_len==1-only steps
+    AND landing in the same (gc,R) bucket -- fallback/periodic
+    paths bound it; parity validates the audit on-box.
+    """
+    if q_len != 1 or os.environ.get("EXL3_KVARN_N_MIRROR", "1") != "1" \
+            or os.environ.get("EXL3_KVARN_TRITON_PARITY", "0") == "1":
+        layer._ov_dec_n_mirror = None
+        return int(cache_seqlens[0]), False
+    step = int(getattr(layer, "_ov_dec_n_step", 0)) + 1
+    layer._ov_dec_n_step = step
+    m = getattr(layer, "_ov_dec_n_mirror", None)
+    if m is None or step % 128 == 0:
+        return int(cache_seqlens[0]), False
+    return m, True
+
+
+def _kvarn_past_commit(layer, n, committed: bool):
+    """Record the post-store total (committed = the fused code-0
+    single-row store ran). Anything else clears the mirror so the
+    next step resyncs once instead of trusting a stale total."""
+    layer._ov_dec_n_mirror = n if committed else None
+
+
 def _kvarn_imageless() -> bool:
     """
     Opt-in gate for imageless serve (match-bee track): the persistent
