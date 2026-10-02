@@ -202,15 +202,22 @@ throughout; ARMATTN PASS @8k. Bold = winner.)
 
 tg baseline (tok/s, 256 greedy decode):
 
-Code version for ours columns: `f73271f` (2026-09-30; seal-direct
-fast path, protocol v2 hot-cache). Bee columns are external
+Code version for ours columns: post-graphs-v2 (2026-10-02;
+seal-direct fast path + hierarchical serve + graphs, protocol v3:
+clean perf + parity validation separate). Bee columns are external
 (beellama.cpp). Untagged older numbers predate versioning.
+PARITY TAX (2026-10-02): every tg/pp number below was measured
+with PARITY=1, whose full-refresh asserts cost ~15% throughput.
+CleanPerf (no parity) in the v3 rows; parity runs remain the
+correctness validation (asserts must stay green there). Protocol v3:
+perf runs PARITY=0 (+ GRAPH default), validation runs PARITY=1
+(either GRAPH setting); never compare across parity settings.
 
 | ctx (tok) | tg ours fp16 (tok/s) | tg ours kvarn4 (tok/s) | tg Bee kvarn4 (tok/s) | tg Bee f16 (tok/s) | ours/Bee (%) | KLD med/mean/max/p99 (unitless) | same-top (%) |
 |-----|--------------|----------------|---------------|------------|----------|----------------------|----------|
-| 8192 | 87.5-88.1 | 40.2-40.9 (was 43.6-43.8 pre-v2: cold-cache inflation) | **44.0** | 46.1 | 93% | 1e-6 / 2.3e-5 / 6.45e-4 / n/a | 100.00% |
-| 16384 | 82.2-82.4 | 39.4 (first run 31.8 cold: nbpad recompile) | **44.0** | 46.2 | 90% | 1e-6 / 1.1e-5 / 2.96e-4 / n/a | 100.00% |
-| 65536 | 62.2-62.3 | 35.1 (was 34 pre-hierarchical; 28.4 cold -> 33.7 -> 34.2 -> 35.1) | **44.0** | 46.1 | 80% | 1e-6 / 2.8e-5 / 1.36e-3 / n/a | 100.00% |
+| 8192 | 87.6 | 48.2 eager / 55.8 graph (was 40.8 parity-taxed) | **44.0** | 46.1 | 110% / 127% | 1e-6 / 1.8e-5 / 5.05e-4 / n/a | 100.00% |
+| 16384 | 82.2 | 46.8 eager / 54.0 graph (was 39.4 parity-taxed) | **44.0** | 46.2 | 106% / 123% | 1e-6 / 1.1e-5 / 2.96e-4 / n/a | 100.00% |
+| 65536 | 62.1 | 43.4 eager / 47.0 graph (was 34 parity-taxed) | **44.0** | 46.1 | 99% / 107% | 1e-6 / 2.8e-5 / 1.36e-3 / n/a | 100.00% |
 Note: KLD divergence trend across approximation cuts (mean
 1.7e-5 base -> 2.3e-5 Sinkhorn -> 3.2e-5 deferred seals @64k;
 max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,
@@ -268,9 +275,9 @@ versioning.
 
 | ctx (tok) | pp ours fp16 (s, tok/s) | pp ours kvarn4 (s, tok/s) | pp Bee kvarn4 (s, tok/s) | ours/Bee (%) |
 |-----|--------------|----------------|---------------|----------|
-| 8192 | 3.2-3.3s, ~2525 | 3.7-3.8s, ~2180 (was 5.0-5.1s pre-fast-path) | **2.8s, 2946** | 75% |
-| 16384 | 6.4s, ~2565 | 7.5-7.6s, ~2175 (was 16.4s pre-v2: stale) | **5.8s, 2844** | 77% |
-| 65536 | 32.1s, ~2044 | 40.0s, ~1637 (was 48.2s pre-fast-path) | **28.1s, 2336** | 70% |
+| 8192 | 3.2s, ~2560 | 3.6s, ~2280 (was 3.75 parity-taxed) | **2.8s, 2946** | 78% |
+| 16384 | 6.3s, ~2586 | 7.1s, ~2300 (was 7.55 parity-taxed) | **5.8s, 2844** | 82% |
+| 65536 | 32.1s, ~2044 | 35.5s, ~1844 (was 40.0 parity-taxed) | **28.1s, 2336** | 79% |
 
 Long-context degradation verdict (2026-09-30, code `f73271f`,
 chunk 8192, protocol v2): NO kvarn cliff. pp kvarn/fp16 slips

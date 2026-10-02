@@ -11,6 +11,17 @@ change ships, standalone docs commit if it doesn't.
 
 ## Accepted
 
+- 2026-10-02 / decode graphs v2 (per-layer sublattice replay):
+  tg 48.2 -> 57.8 @8k, 46.8 -> 54.0 @16k, 43.4 -> 47.0 @64k
+  (clean). Gates: graph twin (maxabs 0.0), suite, KLD x5
+  (parity asserts green while replaying), needle 6/6, fresh-eyes
+  subagent review (caught parity-decline, flag-never-read,
+  realloc-UAF, unwrapped post-store throw -- all fixed).
+  Default flipped ON (kill switch kept).
+- 2026-10-02 / PARITY TAX discovery: all historical tg/pp ran
+  PARITY=1 (~15% hidden tax). Protocol v3: clean perf + separate
+  parity validation; never compare across parity settings.
+
 - 2026-09-30 / protocol-v2 (warmed + anchor + hot-cache + A/B):
   killed two false conclusions (MMA +4% mirage, K4V2 -20% gap).
   Validated by: re-measurement under v2. Status: mandatory.

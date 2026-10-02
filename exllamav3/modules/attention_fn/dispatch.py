@@ -240,7 +240,9 @@ def _try_kvarn_graph_decode(layer, q, k, v, cache_seqlens,
     decline before store (run full eager); (True, None) = stored,
     run eager rest (skip store); (True, out) = replayed. Never
     half-runs (loud fallback to eager on any trip)."""
-    if os.environ.get("EXL3_KVARN_GRAPH", "0") != "1":
+    # Default ON (green twice at 8k/16k/64k + review fixes; kill with
+    # EXL3_KVARN_GRAPH=0 to restore pure eager).
+    if os.environ.get("EXL3_KVARN_GRAPH", "1") != "1":
         return (False, None)
     if not arm:
         return (False, None)
