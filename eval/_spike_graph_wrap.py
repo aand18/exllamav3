@@ -24,7 +24,7 @@ from exllamav3.cache import kvarn
 from _spike2_online import _make_records
 
 
-def main():
+def run_spike():
     assert torch.cuda.is_available()
     dev = torch.device("cuda:0")
     torch.manual_seed(15)
@@ -133,6 +133,12 @@ def main():
     print(f"maxabs={float(d.max()):.3e} meanabs={float(d.mean()):.3e}",
           flush=True)
     print("SURVIVED", flush=True)
+    return float(d.max()), t_eager / t_graph
+
+
+def main():
+    maxabs, speedup = run_spike()
+    assert maxabs == 0.0, maxabs
 
 
 if __name__ == "__main__":
