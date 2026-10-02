@@ -200,7 +200,7 @@ EXL3_KVARN_IMAGELESS=1`, kvarn4; 8k rows reuse 2026-09-28 same-code
 runs; CPU suite 90 passed 7 skipped; fused-kernel parity maxdiff 0.0
 throughout; ARMATTN PASS @8k. Bold = winner.)
 
-tg baseline (tok/s, 256 greedy decode):
+tg baseline (tok/s, 256 greedy decode; 128k: 256-step decode):
 
 Code version for ours columns: post-graphs-v2 (2026-10-02;
 seal-direct fast path + hierarchical serve + graphs, protocol v3:
@@ -218,6 +218,7 @@ perf runs PARITY=0 (+ GRAPH default), validation runs PARITY=1
 | 8192 | 87.6 | 48.2 eager / 55.8 graph (was 40.8 parity-taxed) | **44.0** | 46.1 | 110% / 127% | 1e-6 / 1.8e-5 / 5.05e-4 / n/a | 100.00% |
 | 16384 | 82.2 | 46.8 eager / 54.0 graph (was 39.4 parity-taxed) | **44.0** | 46.2 | 106% / 123% | 1e-6 / 1.1e-5 / 2.96e-4 / n/a | 100.00% |
 | 65536 | 62.1 | 43.4 eager / 47.0 graph (was 34 parity-taxed) | **44.0** | 46.1 | 99% / 107% | 1e-6 / 2.8e-5 / 1.36e-3 / n/a | 100.00% |
+| 131072 | 47.1 | 35.2 graph (first measurement; Bee tg@128k unknown) | n/a | n/a | n/a | 1e-6 / 5e-6 / 6.9e-5 / 4.9e-5 | 100.00% |
 Note: KLD divergence trend across approximation cuts (mean
 1.7e-5 base -> 2.3e-5 Sinkhorn -> 3.2e-5 deferred seals @64k;
 max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,
@@ -278,6 +279,7 @@ versioning.
 | 8192 | 3.2s, ~2560 | 3.6s, ~2280 (was 3.75 parity-taxed) | **2.8s, 2946** | 78% |
 | 16384 | 6.3s, ~2586 | 7.1s, ~2300 (was 7.55 parity-taxed) | **5.8s, 2844** | 82% |
 | 65536 | 32.1s, ~2044 | 35.5s, ~1844 (was 40.0 parity-taxed) | **28.1s, 2336** | 79% |
+| 131072 | 198.1s, ~662 (chunk 4096; swap pressure) | 157.9s, ~830 (chunk 4096, warm-restart) | **69.5s, 1887** | 44% |
 
 Long-context degradation verdict (2026-09-30, code `f73271f`,
 chunk 8192, protocol v2): NO kvarn cliff. pp kvarn/fp16 slips
@@ -416,7 +418,16 @@ slower AND 270x KLD despite author's pick; its memorandum value
 is VRAM (smaller v payload), not speed.
 (The 16k/64k pp rows that lived here are superseded by the versioned
 pp baseline table above; 128k below is the latest available.)
-| 131072 | 201.8-203.0s, ~648 (swap; q8: 87.7s, 1494) | 219.4-220.0s, ~596 (q8-ref run: 173.9s, 754; now 148.4s, 883 post-Sinkhorn) | **69.5s, 1887** | 39% |
+| 131072 | 198.1s, ~662 (chunk 4096; swap pressure) | 157.9s, ~830 (chunk 4096, warm-restart; faster than fp16: 4-bit cache stays resident while fp16 swaps) | **69.5s, 1887** | 44% |
+
+128k protocol (2026-10-02): full KLD twice is too slow AND the
+guard kills valid runs (transient dips under min-free at 20GB+).
+Warm-restart instead: short run (`-dec 32`, compiles everything)
+then restart + ONE measured run. Chunk 4096 (8192-chunk OOMs:
+activations + 20GB cache don't fit 24GB). Peak 23.1GB -- 0.9GB
+headroom (K4V2's memorandum VRAM value lives here, parked).
+KLD@128k: median 1e-6 / mean 5e-6 / max 6.9e-5, same-top 100%.
+tg slope 64k->128k: 47.0 -> 35.2 (-25% for 2x ctx, O(n) serve).
 
 Probe-arm per-layer (us, imageless): store 245.8, qwht 11.6, eref
 44.7, serve 97.2, stats 68.6, mask 26.8, tail 412.4, merge 112.9,
