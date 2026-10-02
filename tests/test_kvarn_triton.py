@@ -627,3 +627,42 @@ def test_graph_wrap_matches_eager():
     maxabs, speedup = run_spike()
     print(f"graph twin: maxabs={maxabs:.3e} speedup={speedup:.2f}x")
     assert maxabs == 0.0, maxabs
+
+
+@pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
+def test_combine_split_matches_folded():
+    # Combine WHT-split twin: reduce-only combine (DO_WHT=0,
+    # num_warps=4) + _kvarn_wht_hd_kernel vs the legacy folded
+    # single launch (DO_WHT=1, num_warps=1). Same accumulation
+    # order (serial b-loop untouched, only lane partitioning
+    # changes) and identical WHT code, so expect bit-exact; gate
+    # on tight allclose with maxabs printed. Covers non-pow2 NB
+    # (pad lanes) and a fully-masked row (den==0 NaN guard).
+    torch.manual_seed(7)
+    kvh, qpk, qpad, hd, sl = 2, 2, 2, 128, 1
+    qh = kvh * qpk
+    nb, nbpad = 100, 128
+    sscale = 1.0
+    m = torch.randn(kvh, qpad, nbpad, dtype=torch.float32, device="cuda")
+    m[:, :, nb:] = float("-inf")
+    m[0, 0, :] = float("-inf")  # fully-masked row: den==0 -> zeros
+    l = torch.rand(kvh, qpad, nbpad, dtype=torch.float32, device="cuda")
+    l[:, :, nb:] = 0.0
+    l[0, 0, :] = 0.0
+    acc = torch.randn(kvh, qpad, nbpad, hd, dtype=torch.float32,
+                      device="cuda")
+    out_old = torch.empty(qh, hd, dtype=torch.float32, device="cuda")
+    out_new = torch.empty(qh, hd, dtype=torch.float32, device="cuda")
+    kt._kvarn_online_combine_kernel[(qh,)](
+        m, l, acc, out_old, kvh, qpk, qpad, nb, nbpad, hd, sl,
+        sscale, 1, num_warps=1)
+    kt._kvarn_online_combine_kernel[(qh,)](
+        m, l, acc, out_new, kvh, qpk, qpad, nb, nbpad, hd, sl,
+        sscale, 0, num_warps=4)
+    kt._kvarn_wht_hd_kernel[(qh,)](out_new, hd, sl, sscale)
+    torch.cuda.synchronize()
+    d = (out_old - out_new).abs()
+    print(f"combine split: maxabs={float(d.max()):.3e} "
+          f"meanabs={float(d.mean()):.3e} "
+          f"exact={bool(torch.equal(out_old, out_new))}")
+    assert float(d.max()) < 1e-5, float(d.max())
