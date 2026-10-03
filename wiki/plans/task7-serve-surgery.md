@@ -243,27 +243,45 @@ bound the spread. Both arms also show one ~25ms outlier window at the
 same step count (w3 of 6) — a periodic event, pre-existing, and the
 only run that ever crashed did so at exactly that window.
 
-### 8.5 Next lever, and one negative to not re-propose
+### 8.5 The largest remaining section is CLOSED -- four negatives
 
-Post-v2 bill (base 163.5us/layer): payload 35.8% (record format, off
-limits), per-slot metadata 31.0%, tail 13.5%, dequant ALU 12.0%,
-partials 5.2%, exp 4.4%, MMA 2.3%.
+Post-v2 bill (base 155.9us/layer, i.e. 2.49ms/step for 16 layers, down
+from 4.474ms at the start of this task). The top attackable section is
+the six per-slot `(16,)` metadata loads (K oth, V sc, V zp x SL=2):
+`nopermeta` says 43.4us/layer = 0.70ms/step = **27.9%**, the largest
+item left. Five mechanisms tried, all measured in one interleaved
+process against the same base:
 
-**Negative**: replacing the three per-slot metadata expansions (K oth,
-V sc, V zp) — SL `tl.where` selects each — with a `(16,2,128)`
-broadcast of a `tl.join`ed pair is NOT faster (165.3 vs 163.7us/layer,
-regs 254 → 243). Same tensor, same values. The 31% that removing those
-loads exposes is mostly the *register* drop they enable (254 → 168, so
-2 → 3 CTA/SM), not the select ALU.
+| mechanism | us/layer | vs base | regs | spills |
+|---|---|---|---|---|
+| base | 155.9 | -- | 254 | 0 |
+| `nopermeta` (loads deleted; the size of the prize) | 112.5 | **-43.4** | 168 | 4 |
+| `permeta` (loads KEPT, expansion deleted) | 157.5 | +1.8 | 251 | 0 |
+| `bcast` (selects -> `(16,2,128)` broadcast) | 160.3 | +4.4 | 243 | 0 |
+| `static8` (unroll the tile loop, let the compiler merge the 8 adjacent loads) | 244.4 | +88.7 | 255 | 124 |
+| `prefetch` (issue the 6 loads one tile ahead by hand) | 173.4 | +17.4 | 255 | 10 |
+| `num_stages=2` (let the compiler pipeline them) | 185.0 | +29.1 | 254 | 0 |
 
-**So the live prize is occupancy, not traffic**: 3 CTA/SM needs
-≤170 regs/thread and the kernel is at 254. The concrete route is
-folding K sc/zp into `qwT` once per group (a rank-1 correction term
-for the zp half) and splitting the QK dot per slice so `k_ot` never
-materialises in the (16, HD) domain — both reassociate, so they need
-allclose + KLD gates, not `torch.equal`, and they are a bigger change
-than anything attempted here. Ranked second: `nodeq` (12.0%, the
-per-element scale math) rides along with the same fold.
+`permeta` is the load-bearing one: it keeps all six loads and deletes
+only the `(16, HD)` expansions, and it changes **nothing** (251 regs,
++1.8us). So the 27.9% is the loads' own issue/latency, not the select
+ALU and not the registers the expansions hold. That **refutes** the
+occupancy theory this section previously carried: 3 CTA/SM needs <=170
+regs, but the expansions are not what sits on the register budget, and
+every attempt to relieve it (bcast -11 regs, prefetch +1 reg + 10
+spills, static8 + 124 spills) loses more than the occupancy would buy.
+num_stages>=2, num_warps 2 and 8, and CPG 2 / CPG 1 are all slower too.
+
+**Verdict: the serve kernel is at a local optimum for this tile shape
+on this GPU.** The remaining prize needs a structural change that
+removes live (16, HD) fp32 tensors rather than tuning the launch:
+folding K sc/zp into `qwT` once per group and splitting the QK dot per
+slice so `k_ot` never reaches that domain, and rewriting the V side as
+`dot(trans(qqv), (v_sc*e))` + a rank-1 `v_zp` term so `v_sc`/`v_zp`
+never materialise either. Both reassociate (allclose + KLD gates, not
+`torch.equal`), both are a much larger change than anything in this
+task, and neither is guaranteed to clear 170 regs. Recorded as the
+next candidate, not attempted.
 
 ### 8.6 Collateral finding
 
