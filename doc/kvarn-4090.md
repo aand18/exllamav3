@@ -409,12 +409,31 @@ status readback), terminal `torch.cuda.synchronize` at
 spin at the step boundary (where the device is provably idle, the
 previous step having ended in a full sync) costs 5.01 ms of step time,
 not one microsecond absorbed. Therefore no host-side cut can recover host
-time. The plan's own ceiling settles it: deleting the terminal sync
-outright (illegal -- it feeds stale tokens) is worth **-0.283 ms/step =
-+1.63%** (17.344 -> 17.061, 58.61 tok/s, consistent across all 6
-windows), and that is only reachable by the "LAST, hardest" attack
-(argmax in the graph + device-side input staging). Two ranked attacks
-are already closed: (a) "batch the `.item()` reads" EXISTS upstream at
+time. Confirmed directly by a **device-floor loop** (phase F: same
+forward, same pinned staging and the same block_table params the
+generator passes, but the sampled token stays on the device and there is
+one `torch.cuda.synchronize` per *window* instead of per step, run on its
+own cache and its own prefill in the same process): floor **17.160 ms =
+58.28 tok/s** vs base 17.366 = 57.58, with the control `floor_sync`
+(identical loop plus the per-step terminal sync and a `.cpu().item()`
+readback) landing within 0.25% of base, which is what makes the floor
+usable. **So the entire host cost of the server decode loop -- every
+staging byte, every bookkeeping call, the terminal sync, all the
+readbacks -- is 0.21-0.25 ms/step (1.2-1.5%), and that is the hard
+ceiling for this whole task.** A second full run reproduced it (base
+17.394 / floor 17.141 / floor_sync 17.436, control -0.24%), so the
+ceiling is 0.252 ms/step = +1.45%, best case 58.34 tok/s. Deleting the terminal sync (incorrect: it feeds stale
+tokens) measures 17.109 = 58.45 tok/s, i.e. it already reaches the floor
+within 0.3% -- there is nothing beyond it for a correct implementation to
+find. A perfect sample-in-graph (device-side input staging, static
+Philox, no host stall) buys 58.3 tok/s instead of 57.6, and the plan's
+own ranked attacks cannot do better: deleting the terminal sync outright
+(illegal -- it feeds stale tokens) is worth **-0.257 ms/step = +1.48%**
+(17.366 -> 17.109, 58.45 tok/s, consistent across all 6 windows, i.e.
+already at the floor), and the "LAST, hardest" attack (argmax in the
+graph + device-side input staging) is bounded by the same 0.21-0.25 ms. Two
+ranked attacks are already closed: (a) "batch the `.item()` reads"
+EXISTS upstream at
 `generator.py:1102-1128` -- one pinned buffer, one synchronize per
 step -- and the 4 remaining token readbacks (`job.py:620/621/809/826`)
 cost 3.8 us/step total; (b) replacing the full sync with a stream-event
@@ -423,13 +442,15 @@ wait is worth ~0, because the wait primitive is not the cost:
 kernel+sync round trip is 11.8 us on this box, so the 0.667 ms is the
 device still owing ~0.65 ms of real work -- the token is produced by
 kernels queued behind the forward on the same stream, so waiting for the
-token IS waiting for the forward. +1.63% is inside this box's own
-window-to-window spread (-22% seen in the same run) and only reachable
-behind a static-Philox RNG problem: the sampler seed is a host int
+token IS waiting for the forward. +1.2-1.5% (the measured ceiling) is inside this box's own
+window-to-window spread (-23% seen in the same run, in every arm and
+every phase) and only reachable behind a static-Philox RNG problem: the sampler seed is a host int
 (`job.py:578` -> `sampler/custom.py:1185-1190`). Do NOT re-propose
 sample-in-graph / terminal-sync removal. Premise corrections to the
 plan: the "~1.7 ms loop overhead above the model" pool is really 0.9 ms
-of which 0.283 ms is recoverable; `generator.py:670` is the DRAFT path,
+of which **0.21-0.25 ms** is recoverable (the device-floor
+measurement);
+`generator.py:670` is the DRAFT path,
 not the main greedy sample (that is `job.receive_logits`,
 `job.py:571-583`); `DefaultSampler` is at `sampler/presets.py:3`, not
 `job.py:166-168`. Two findings worth keeping, neither chased here: the
