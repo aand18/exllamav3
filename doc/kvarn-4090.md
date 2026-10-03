@@ -1548,6 +1548,13 @@ The plan's "~36GB on CPU RAM at production offload" is pessimistic for this
 model: the CPU MoE arena is slot-bounded (`EXL3_MOE_CPU_SLOTS=4`), so 44
 offloaded layers cost ~27GB, not 36GB.
 
+Plan §4.4 also asks for **0-used before/after every run** (warmed box, no
+carried-over allocation). The guard prints `memory.free` at launch and at
+exit, and it is the same full-card value both times on all 38 runs (38/38
+`START` and 31/31 `DONE` at 24138MiB free; the 7-run gap is the killed cells,
+where the process was killed rather than exiting). So every peak below starts
+from an idle card and leaves one.
+
 #### Deviations from the bring-up plan (all recorded, none blocking)
 
 1. **§3.2 `mean < 1e-4` is unmeasurable here** — see the noise-floor table.
