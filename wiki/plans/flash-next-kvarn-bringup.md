@@ -65,16 +65,40 @@ gates are binding (see per phase).
    is the test working; fix-forward only trivially, else STOP).
 3. No tg/pp quoting beyond "completed in Ns" (offload-bound).
 
-## 4. Phase 3 — VRAM map (the deliverable)
+## 4. Phase 3 — offload calibration FIRST, then VRAM map
 
-Grid (skip cells that OOM — record OOM, do not fight it):
-ctx {8192, 32768, 65536, 131072} × cache {kvarn4, q8, fp16}
-with offload per `-mcl` as needed. Per cell: peak allocated,
-min-free, OOM Y/N, KLD same-top (parity cells only, not every
-map cell). Present as one table: ctx × cache → peak / fits /
-KLD. Watchdog (`smi_guard.py`, kill under 100MB free) on EVERY
-run; 0-used before/after; warmed box; hot counts for any number
-quoted (peaks are per-run maxima, 1 run suffices + 1 confirm).
+Do the calibration before any KLD/parity run (a wrong offload
+invalidates everything: overflow → swap-thrash slowdown,
+under-use → CPU-bound slowness). Two-sided target: MAXIMIZE GPU
+residency subject to min-free VRAM ≥200MB at every instant.
+
+1. Start from the serving reference (`tabbyAPI/config.yml` model
+   section): `cpu_moe_offload_layers: 38`, `chunk_size: 4096`,
+   rope auto/YaRN, `output_chunking: true`. Mirror every other
+   loop setting from there. MTP EXCLUDED (ignore
+   `mtp_hyper_connection_mixer_patch` + `ngram_embedding`; no
+   draft path this task).
+2. Binary-search the offload count per ctx (8192 first): run the
+   Phase-2 KLD command with watchdog `smi_guard.py` set to kill
+   under **200MB** free (not the usual 100MB — overflow risk on
+   a 33.93GB model is swap-thrash, not just OOM). Record peak +
+   min-free per setting. Too low offload → guard kills (slow);
+   too high offload → everything works but slow (experts on
+   CPU). Pick the lowest offload count that keeps min-free
+   ≥200MB end to end, then confirm with one repeat.
+3. Cache matrix per ctx {8192, 32768, 65536, 131072}:
+   kvarn4 always; fp16-cache ONLY where the calibrated offload
+   leaves it cleanly fitting (fp16 KV at 131072 ≈ 8.6GB-class
+   on top of a full card — expect spill, do not force it);
+   q8 next; **q4 where q8 still crowds** (VRAM-motivated, new
+   vs the ledger: q4 needs its own proxy calibration —
+   kvarn-vs-q4 KLD at ≤32k must hold same-top 100% + mean
+   <1e-4 before any q4 number is quoted, and q4 NEVER replaces
+   fp16/q8 as the parity ref, only as the fit-enabler).
+4. Per cell: peak allocated, min-free, OOM/kill Y/N, KLD
+   same-top (parity cells only). Present as one table: ctx ×
+   cache → peak / fits / KLD. 0-used before/after every run;
+   warmed box. Peaks are per-run maxima: 1 run + 1 confirm.
 
 ## 5. Non-goals + guards (binding, cf. task-6 plan §5/§5b)
 
