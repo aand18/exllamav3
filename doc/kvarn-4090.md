@@ -233,6 +233,11 @@ kills ~16 DtoH syncs/step; tg@64k graph 47.9 hot vs 47.8 (neutral,
 syncs were hidden). Fail-closed: q_len!=1/PARITY/128-cadence
 resync, eager-rest + legacy paths always real-sync. KLD identical,
 PARITY=1 @8k clean (42.7 tok/s, asserts green).
+longskip (2026-10-03, `633660b`): _as_long skip-when-long guards +
+_touch_batch early-out before conversions (~96 .long()/step in
+Kineto); tg@64k graph 47.8 hot vs 47.9 (neutral -- host dispatch
+count is not the binding constraint either). KLD identical,
+PARITY=1 @8k clean (41.3 tok/s, asserts green).
 Note: KLD divergence trend across approximation cuts (mean
 1.7e-5 base -> 2.3e-5 Sinkhorn -> 3.2e-5 deferred seals @64k;
 max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,
