@@ -310,7 +310,7 @@ the "HARD, drives 0/2/1 control flow" item in
 `wiki/reports/2026-10-02-tg64-host-bubbles.md` — but it is a different
 mechanism from this task and out of its scope.)
 
-### 7.5 Why §3.2 is worth ~0 and §3.3 is worth at most +1.2%
+### 7.5 Why §3.2 is worth ~0 and §3.3 is worth at most +1.2-1.5%
 
 - **§3.2 (replace the full `synchronize` with a stream-event wait):
   worth ~0.** The wait primitive is not the cost. Measured on the box:
@@ -324,8 +324,9 @@ mechanism from this task and out of its scope.)
   cross-stream: the token is produced by kernels queued behind the
   forward on the same stream, so waiting for the token *is* waiting for
   the forward.
-- **§3.3 (sample in graph): at most +1.2-1.5%, and only that.** The `nosync`
-  arm is the plan's own ceiling — it removes the terminal wait outright,
+- **§3.3 (sample in graph): at most +1.2-1.5%, and only that.** The `floor`
+  arm (§7.3) is the hard ceiling and `nosync` already sits on it; `nosync`
+  is the plan's own ceiling — it removes the terminal wait outright,
   at the price of correctness (it feeds stale tokens). It recovers
   0.257 ms because the host stops waiting and the device absorbs the
   difference. A legal version of the same mechanism (token stays on
