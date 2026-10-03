@@ -552,13 +552,13 @@ fast path, protocol v2 hot-cache, chunk 8192 unless noted). Bee
 columns are external (beellama.cpp). Untagged older numbers predate
 versioning.
 
-| ctx (tok) | Bee IQ2 pp k4 / f16 (tok/s) | EXL3 fp16 pp (s, tok/s) | EXL3 kvarn4 pp (s, tok/s) |
+| ctx (tok) | Bee IQ2 pp k4 / f16 (tok/s) | EXL3 fp16 pp (tok/s) | EXL3 kvarn4 pp (tok/s) |
 |-----|--------------|---------------|------------|
-| 8192 | 2919.6 / 3089.1 | 3.2s, 2555 | 3.6s, 2260 |
-| 16384 | 2820.6 / 2991.1 | 6.4s, 2574 | 7.1s, 2303 |
-| 32768 | 2628.1 / 2813.1 | 13.7s, 2391 | 15.2s, 2158 |
-| 65536 | 2321.4 / 2510.8 | 32.1s, 2044 | 35.5s, 1844 |
-| 131072 | 1881.7 / 2068.8 | 196.3s, 668 (chunk 4096; swap artifact CONFIRMED 2026-10-03 re-run: 198.1/196.3s, peak 22.1GB both) | 100.2s, 1308 (chunk 4096; was 157.9, 4-run consistent) |
+| 8192 | 2920 (2.8s) / 3089 (2.7s) | 2555 (3.2s) | 2260 (3.6s) |
+| 16384 | 2821 (5.8s) / 2991 (5.5s) | 2574 (6.4s) | 2303 (7.1s) |
+| 32768 | 2628 (12.5s) / 2813 (11.6s) | 2391 (13.7s) | 2158 (15.2s) |
+| 65536 | 2321 (28.2s) / 2511 (26.1s) | 2044 (32.1s) | 1844 (35.5s) |
+| 131072 | 1882 (69.7s) / 2069 (63.4s) | 668 (196.3s; swap artifact CONFIRMED 2026-10-03 re-run, peak 22.1GB both) | 1308 (100.2s; was 157.9, 4-run consistent) |
 
 Long-context degradation verdict (2026-09-30, code `f73271f`,
 chunk 8192, protocol v2): NO kvarn cliff. pp kvarn/fp16 slips
