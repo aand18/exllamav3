@@ -186,3 +186,111 @@ WITHOUT `IMAGELESS=1` you measure the 5.3 tok/s legacy path
 - Ledger entry + twin + CPU suite + KLD/PARITY green, pushed.
 - If hot < 50: report measured number + Kineto split, do NOT
   stack more phases — hand back for re-rank.
+
+## 8. PHASE 0 RESULT (2026-10-03, box `4ff897b`, spike `eval/_spike8_layer.py`,
+##    logs `spike8_bill.log` / `spike8_cap.log` on the mirror) — STOP
+
+Verdict: **whole-layer capture is not achievable as designed, and the
+whole host-side pool is smaller than §0 assumed. Do not start Phase 1
+without a maintainer re-rank.** Numbers, then why.
+
+### 8.1 Plan facts that measurement corrected
+
+- Model is **dense** (no `num_experts` in config.json ->
+  `GatedMLP` 17408, not `BlockSparseMLP`). §0/§6 "MoE exl3
+  GEMV/GEMM ~8ms" is the dense exl3 GEMV/GEMM path; it measures
+  8.20ms/step, so the number stands, the label does not.
+- **64 layers, not ~48**: 16 full-attn kvarn + 48 linear/GDN. §2.6's
+  "x48" projection is really x16 attn + x48 GDN.
+- **GDN and MLP decode are ALREADY graph-captured upstream**:
+  `gated_delta_net.py:1053` runs the whole GDN layer through
+  `bc.run_bszN` (internal CUDA graph, `exllamav3_ext/graph.cu`),
+  `mlp.py:741` does the same for `GatedMLP` via `BC_GatedMLP`. Per
+  layer: 2 `cudaGraphLaunch` + 3 launches + 1 copy, 36 aten ops.
+  `BCAttn` (`bc_attn.py:10`) would graph the whole attn block too, but
+  it **DECLINES on all 16 kvarn layers** (`EXL3_BC_ATTN_TRACE=1`:
+  `BC-attn-kvarn: DECLINED layer 3..63`) because the online-dequant
+  kvarn kernels are out of its scope. Step total: 128 graph launches
+  (48 GDN + 48 MLP + 16 kvarn sublattice + 16 MLP), 467 kernel
+  launches, 4192 aten ops.
+- **The kvarn store's own budget is bigger than the whole bubble**:
+  0.228ms/layer x16 = 3.50ms/step, and it is host-sync bound
+  (`_store_rows_fast` 2-4 DtoH syncs), so it cannot be captured
+  either way.
+- **Host bubble measured for the first time post-graphs** (closes
+  open question 1 of `wiki/reports/2026-10-02-tg64-host-bubbles.md`):
+  device busy **16.51ms/step** (1682 kernels: serve 4.46, exl3
+  GEMV/GEMM 8.20, tail 0.78, combine 0.40, GDN 0.53), wall
+  **19.27ms** in-process (51.9 tok/s, argmax loop) -> bubble
+  **2.77ms/step = 14.4% of wall**. Device ceiling 60.6 tok/s
+  in-process. The §0 "5-7ms host gap" is CPU *work*, most of it
+  hidden under the GPU tail or spent blocked on D2H; **no host-side
+  cut, graphs included, can return more than 2.77ms/step.**
+
+### 8.2 Measured (per layer, steady 64k decode, PARITY=0)
+
+| layer type | eager host issue | wall | ops/call | x count | bill |
+|---|---|---|---|---|---|
+| attn (kvarn, L3) | 0.654ms | 0.701ms | 167 | 16 | 10.47ms/step |
+| — attn half | 0.566ms | | | | 8.96ms/step |
+| — mlp half (BC-GatedMLP) | 0.088ms | | | | 1.51ms/step |
+| — store alone | 0.228ms | 0.231ms | | 16 | 3.50ms/step |
+| gdn (L0) | 0.091ms | 0.160ms | 36 | 48 | 4.39ms/step |
+
+Per-layer "issue" is *not* pure dispatch: the attn layer's top op is
+one blocking `cudaMemcpyAsync` (kvarn status/seqlens DtoH, 1.57ms
+under the profiler with a deep queue), and the GDN layer's top op is
+one `aten::copy_` (60us, BC input staging). Both expose device time.
+So the 14.86ms/step "layer bill" is mostly wait, and the honest
+recoverable pool is the 2.77ms bubble.
+
+### 8.3 Capture attempts (phase `cap`, separate process)
+
+- **attn L3 whole layer (store stubbed, `EXL3_KVARN_GRAPH=0` so the
+  outer graph would subsume the sublattice): FAILED** —
+  `cudaErrorStreamCaptureInvalidated` (context then unusable). Cause
+  is a host read inside the captured region: the eager serve path
+  syncs at `dispatch.py:491` (`n = int(cache_seqlens[0]) + q_len`); the
+  graph path is sync-free only because of the n-mirror
+  (`kvarn.py:473`). With `EXL3_KVARN_GRAPH=1` instead, the capture
+  would hit a nested replay, which is equally illegal.
+- **gdn L0 whole layer: HARD FAIL** — `GPU assert: operation not
+  permitted when stream is capturing ... exllamav3_ext/graph.cu:186`,
+  exit 900. BC's own capture is the nested one. There is nothing left
+  to graph in a GDN layer: it is already one graph launch.
+
+So "equal Y/N" is N/A for both layer types: no whole-layer graph was
+produced, hence no projected wall gain from the plan's design.
+
+### 8.4 The only viable shape (if the maintainer wants it) and its prize
+
+Store + serve + MLP must stay eager/BC-owned, so the capturable
+regions per attn layer are two disjoint graphs, not one:
+
+- **graph A**: `attn_norm` + q/k/v proj + rope + q/k norms, ending in
+  static q/k/v buffers (no store, no host read; ~40 of the layer's
+  167 ops). The eager store then consumes A's static k/v.
+- serve: shipped kvarn sublattice graph, unchanged.
+- **graph B**: `o_proj` + residual + `mlp_norm`, ending in a static
+  buffer the eager `BC_GatedMLP` call consumes (~15 ops). The MLP
+  itself can never be inside a graph (nested BC graph).
+
+That is ~55/167 ops per attn layer, i.e. roughly a third of the
+attn layer's non-blocking dispatch: **order 0.9ms/step** against a
+2.77ms bubble -> ~19.0ms wall, ~52.8 tok/s in-process (+1.8%), and
+in the server harness 47.9 -> ~49-50 at best, with two new graphs per
+layer (32), new bucket/invalidation rules, and a capture that must
+survive exl3 GEMV. **Below the plan's 5% / 50 tok/s bar at the
+midpoint, at the bar in the optimistic corner.** Per §2.6 and §7:
+STOP, do not stack Phase 2/3, re-rank first.
+
+Re-rank candidates the measurement now supports (all inside the 2.77ms
+bubble): sample-in-graph + the terminal sync (`perf-strats.md` §5,
+~0.3-0.8ms by the host-bubbles report), the dispatch wrapper's 5
+static-buffer copies + bucket math per attn layer (`perf-strats.md`
+item (c)), and serve traffic surgery (device 4.46ms — the only prize
+larger than the bubble, but HIGH RISK and its own box loop).
+
+Spike artifacts (never commit): `eval/_spike8_layer.py`,
+`eval/_spike8.bat`, mirror logs `spike8_bill.log` / `spike8_cap.log`.
+
