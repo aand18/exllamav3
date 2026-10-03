@@ -262,35 +262,69 @@ recoverable pool is the 2.77ms bubble.
 So "equal Y/N" is N/A for both layer types: no whole-layer graph was
 produced, hence no projected wall gain from the plan's design.
 
-### 8.4 The only viable shape (if the maintainer wants it) and its prize
+### 8.4 The only viable shape: two disjoint graphs per attn layer
 
 Store + serve + MLP must stay eager/BC-owned, so the capturable
 regions per attn layer are two disjoint graphs, not one:
 
-- **graph A**: `attn_norm` + q/k/v proj + rope + q/k norms, ending in
-  static q/k/v buffers (no store, no host read; ~40 of the layer's
-  167 ops). The eager store then consumes A's static k/v.
-- serve: shipped kvarn sublattice graph, unchanged.
-- **graph B**: `o_proj` + residual + `mlp_norm`, ending in a static
-  buffer the eager `BC_GatedMLP` call consumes (~15 ops). The MLP
-  itself can never be inside a graph (nested BC graph).
+- **graph A**: `project_qkv` + `rope` (attn_norm stays in the block),
+  ending in static q/k/v/g buffers (no store, no host read; ~40 of the
+  layer's 167 ops). The eager store then consumes A's static k/v.
+- eager: kvarn store + serve (shipped sublattice graph, unchanged).
+- **graph B**: gate mul + `project_o` (~15 ops), on a static copy of the
+  serve output. The MLP can never be inside a graph (nested BC graph).
 
-That is ~55/167 ops per attn layer, i.e. roughly a third of the
-attn layer's non-blocking dispatch: **order 0.9ms/step** against a
-2.77ms bubble -> ~19.0ms wall, ~52.8 tok/s in-process (+1.8%), and
-in the server harness 47.9 -> ~49-50 at best, with two new graphs per
-layer (32), new bucket/invalidation rules, and a capture that must
-survive exl3 GEMV. **Below the plan's 5% / 50 tok/s bar at the
-midpoint, at the bar in the optimistic corner.** Per §2.6 and §7:
-STOP, do not stack Phase 2/3, re-rank first.
+### 8.5 That split, MEASURED (spike `eval/_spike8_split.py`, log
+###      `spike8b.log` on the mirror) — works, and is worth +0.21%
+
+Built and measured end to end on all 16 attn layers (real store + real
+serve, everything else replayed):
+
+- **Captured**: 16/16 layers, both graphs, 64.0 MB of graph pools.
+  exl3 GEMV + `ext.rope` capture cleanly — the capturability risk in
+  §8.4 is retired.
+- **Bit-exact**: region check worst maxabs **0.0** across all 16 layers
+  (graph A vs eager `project_qkv`+rope for q/k/v/g, graph B vs eager
+  gate+`project_o`); re-checked over 10 advancing steps x 16 layers at
+  the live position, still **0.0**.
+- **Perf A/B** (best of 3 windows x 40 steps, same cache, no fallbacks):
+  baseline 19.272 ms/step (51.9 tok/s) -> split **19.231 ms/step
+  (52.0 tok/s), delta +0.041 ms/step = +0.21%**. Projected onto the
+  47.9 tok/s server baseline: **48.0 tok/s**.
+
+The estimate in the pre-measurement draft of this section said ~0.9ms
+(+1.8%); the measured value is 22x smaller, because the ops the split
+removes were already overlapped with the GPU: the attn layer's host
+time is dominated by the blocking D2H wait (kvarn status/seqlens), not
+by the ~55 dispatches. This is the same reason the three earlier
+host-side cuts measured neutral.
+
+**Verdict: +0.21% vs a 5% bar. Phase 1 is not justified in any shape**
+-- neither the plan's whole-layer graph (§8.3, impossible) nor the
+two-graph split (§8.5, possible and bit-exact but ~nothing). Per §2.6
+and §7: STOP, do not stack Phase 2/3, re-rank first. Phase 2 is moot
+on its own terms (GDN layers already self-capture via `bc.run_bszN`)
+and Phase 3's whole-step capture inherits every blocker above plus the
+sampler.
+
+One reusable design fact from the spike, if the split is ever revived:
+the rope position must be fed through a **persistent device buffer**,
+not `cache_seqlens` (`prepare_flash_attn` builds a fresh one per step,
+so a capture bakes a frozen position) and not a per-layer `position`
+copy. `cache_seqlens` is also wrong as a source because it is one
+tensor shared by all 16 layers and each layer's store advances it
+(measured: layers 7+ came out with position+1, maxabs 13.4). What works
+is one `(n_attn_layers,)` int32 staging buffer, one row per layer,
+filled once per step from the host `params["position"]` (one launch).
 
 Re-rank candidates the measurement now supports (all inside the 2.77ms
 bubble): sample-in-graph + the terminal sync (`perf-strats.md` §5,
 ~0.3-0.8ms by the host-bubbles report), the dispatch wrapper's 5
 static-buffer copies + bucket math per attn layer (`perf-strats.md`
-item (c)), and serve traffic surgery (device 4.46ms — the only prize
+item (c)), and serve traffic surgery (device 4.46ms -- the only prize
 larger than the bubble, but HIGH RISK and its own box loop).
 
 Spike artifacts (never commit): `eval/_spike8_layer.py`,
-`eval/_spike8.bat`, mirror logs `spike8_bill.log` / `spike8_cap.log`.
+`eval/_spike8.bat`, `eval/_spike8_split.py`, `eval/_spike8b.bat`,
+mirror logs `spike8_bill.log` / `spike8_cap.log` / `spike8b.log`.
 
