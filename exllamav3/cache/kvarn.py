@@ -505,6 +505,14 @@ def _kvarn_past_commit(layer, n, committed: bool):
     layer._ov_dec_n_mirror = n if committed else None
 
 
+def _as_long(t):
+    """block_table / seqlens arrive int32 from the model loop but the
+    kvarn update paths need long: convert once, and no-op (minus the
+    .long() dispatch churn) when already long. Same values either
+    way -- pure dispatch saving on the per-step path."""
+    return t if t.dtype == torch.int64 else t.long()
+
+
 def _kvarn_imageless() -> bool:
     """
     Opt-in gate for imageless serve (match-bee track): the persistent
@@ -1733,9 +1741,7 @@ class CacheLayer_kvarn(CacheLayer):
         ``copy_page``, which pins the shared pages against max-owner
         eviction.
         """
-        bt = block_table.long()
-        seqlens = cache_seqlens.long()
-        bsz = seqlens.numel()  # shape only, no sync
+        bsz = cache_seqlens.numel()  # shape only, no sync
         if bsz == 0:
             return
         # Steady single-row decode appends (bsz 1, length 1) refresh
@@ -1747,8 +1753,12 @@ class CacheLayer_kvarn(CacheLayer):
         # The out-of-range validation still fires within <=128 steps for
         # systematic table bugs (plus the gather bounds-check backstop
         # on every step); prefill/multi-row always validate.
+        # Early-out BEFORE the dtype normalization below: steady steps
+        # used to pay 2 conversions just to reach this return.
         if bsz == 1 and length == 1 and (self._evict_tick & 127):
             return
+        bt = _as_long(block_table)
+        seqlens = _as_long(cache_seqlens)
         if bsz == 1:
             # Steady single-sequence path (decode appends and batch-1
             # prefill): the whole row validates and updates without the
@@ -2931,8 +2941,8 @@ class CacheLayer_kvarn(CacheLayer):
         if length == 0:
             return
         bsz = cache_seqlens.numel()
-        bt = block_table.long()
-        seqlens = cache_seqlens.long()
+        bt = _as_long(block_table)
+        seqlens = _as_long(cache_seqlens)
         self._touch_batch(seqlens, bt, length)
         for b in range(bsz):
             # Length-1 (every decode step) is a slice, not an alloc+add.
@@ -2959,8 +2969,8 @@ class CacheLayer_kvarn(CacheLayer):
         if length == 0:
             return
         bsz = cache_seqlens.numel()
-        bt = block_table.long()
-        seqlens = cache_seqlens.long()
+        bt = _as_long(block_table)
+        seqlens = _as_long(cache_seqlens)
         self._touch_batch(seqlens, bt, length)
         # Fused-store status codes for the graphs fast path (decode reads
         # the single code to decide replay vs eager fallback; prefill and
