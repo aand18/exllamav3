@@ -419,7 +419,7 @@ own cache and its own prefill in the same process): floor **17.160 ms =
 readback) landing within 0.25% of base, which is what makes the floor
 usable. **So the entire host cost of the server decode loop -- every
 staging byte, every bookkeeping call, the terminal sync, all the
-readbacks -- is 0.21-0.25 ms/step (1.2-1.5%), and that is the hard
+readbacks -- is 0.197-0.25 ms/step (1.1-1.5%), and that is the hard
 ceiling for this whole task.** A second full run reproduced it (base
 17.394 / floor 17.141 / floor_sync 17.436, control -0.24%), so the
 ceiling is 0.252 ms/step = +1.45%, best case 58.34 tok/s. The floor
@@ -440,24 +440,32 @@ own ranked attacks cannot do better: deleting the terminal sync outright
 (illegal -- it feeds stale tokens) is worth **-0.257 ms/step = +1.48%**
 (17.366 -> 17.109, 58.45 tok/s, consistent across all 6 windows, i.e.
 already at the floor), and the "LAST, hardest" attack (argmax in the
-graph + device-side input staging) is bounded by the same 0.21-0.25 ms. Two
-ranked attacks are already closed: (a) "batch the `.item()` reads"
-EXISTS upstream at
+graph + device-side input staging) is bounded by the same 0.197-0.25 ms. Two
+ranked attacks were each attacked and measured, not argued: (a) "batch
+the `.item()` reads" EXISTS upstream at
 `generator.py:1102-1128` -- one pinned buffer, one synchronize per
 step -- and the 4 remaining token readbacks (`job.py:620/621/809/826`)
 cost 3.8 us/step total; (b) replacing the full sync with a stream-event
-wait is worth ~0, because the wait primitive is not the cost:
-`torch.cuda.synchronize` on an idle device is 3.9-4.1 us and a full
-kernel+sync round trip is 11.8 us on this box, so the 0.667 ms is the
-device still owing ~0.65 ms of real work -- the token is produced by
-kernels queued behind the forward on the same stream, so waiting for the
-token IS waiting for the forward. +1.2-1.5% (the measured ceiling) is inside this box's own
+wait was IMPLEMENTED as a fourth arm (`evwait`, same loop, same
+interleaving, 6 windows x 40 steps) and is worth **+0.0010 ms/step, i.e.
+zero**: blocked time 0.6725 -> 0.6735 ms. Three supporting facts: the
+wait primitive was never the cost (`torch.cuda.synchronize` idle =
+3.9-4.1 us, kernel+sync round trip = 11.8 us, and the event form is the
+SLOWER of the two at 9.0-9.7 us idle / 17.2 us with work queued); there
+is nothing for a narrower wait to skip, because the decode path creates
+NO side streams (the only `torch.cuda.Stream(...)` sites are
+`model/moe_cpu_host.py:1180`, CPU MoE offload, and this model is dense
+`use_moe=False`, and `modules/quant/exl3_lib/quantize.py:1725`, weight
+quantization at load time); and the sync is not a cross-stream handoff --
+the token is produced by kernels queued behind the forward on the same
+stream, so waiting for the token IS waiting for the forward. +1.2-1.5% (the measured ceiling; three runs give 0.197 / 0.206 / 0.252
+ms) is inside this box's own
 window-to-window spread (-23% seen in the same run, in every arm and
 every phase) and only reachable behind a static-Philox RNG problem: the sampler seed is a host int
 (`job.py:578` -> `sampler/custom.py:1185-1190`). Do NOT re-propose
 sample-in-graph / terminal-sync removal. Premise corrections to the
 plan: the "~1.7 ms loop overhead above the model" pool is really 0.9 ms
-of which **0.21-0.25 ms** is recoverable (the device-floor
+of which **0.197-0.25 ms** is recoverable (the device-floor
 measurement);
 `generator.py:670` is the DRAFT path,
 not the main greedy sample (that is `job.receive_logits`,
