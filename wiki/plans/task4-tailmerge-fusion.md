@@ -22,9 +22,18 @@ fail-closed (project law).
   `:1193-~1230` (num_warps=4, grid `(qh,)` both).
 - Prize shape: kill 1 launch/layer + tail-stat DRAM round-trip
   (`tail_m/den` (qh,) + `tail_num` (qh,hd) fp32 ≈ 65KB/layer) +
-  the torch gap. Expectation: +1-2% EAGER (≈44.1 → ~44.5-45),
-  ~+0% graph. If Phase-0 measurement contradicts this (fused
-  slower than separate under replay), STOP.
+  the torch gap. Expectation: +1-2% EAGER (≈46.8 → ~47.5,
+  re-measured 2026-10-03 after task-7; was 44.1), ~+0% graph.
+  If Phase-0 measurement contradicts this (fused slower than
+  separate under replay), STOP.
+- Eager traffic is REAL (not just warmup): box tabbyAPI
+  `config.yml` sets active `max_batch_size: 2`, so any 2
+  overlapping generation jobs batch into bsz=2 decode, and
+  `_try_kvarn_graph_decode` declines (`q.shape[0] != 1`,
+  `dispatch.py:249`) → the whole contended step runs eager on
+  all kvarn layers at the eager rate. Prefill-mixed batches
+  decline the same way. Single-stream bench never triggers it;
+  under contention it IS the served tg.
 - Merge math dependency: merge reads serve `m/l` + `out_b` +
   tail stats; tail stats derive from `st` (bmm out). Fusion =
   ONE kernel taking `(st, Vt, tg, exrev, m, l, out_b)` → final
