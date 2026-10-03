@@ -191,6 +191,12 @@ every window.
 
 ### 7.2 The bill (median of 6 windows × 40 steps, base arm)
 
+From the first run of the spike. The second run, which added phase F,
+re-measured the base arm at 17.366 and a third at 17.394 ms/step — the
+bill's shape and every line item reproduce; only the base figure moves,
+by 0.15%, well inside this box's window drift. §7.3/§7.4 quote the
+phase-F run so that the floor and the arms come from one process.
+
 ```
 step wall          17.344 ms   57.66 tok/s
   model forward    16.382 ms   94.4% of the step   (host dispatch 11.72
