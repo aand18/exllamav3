@@ -4,7 +4,7 @@
 > there. The server decode step is **device-bound with zero slack**, and a
 > device-floor loop with *no host work in the loop at all* — token stays
 > on the device, one sync per window instead of per step — is only
-> **0.21-0.25 ms/step (+1.2 to +1.5%)** faster than the shipped loop
+> **0.197-0.25 ms/step (+1.1 to +1.5%)** faster than the shipped loop
 > (57.5 -> 58.3 tok/s, reproduced over two runs). That is the hard
 > ceiling for this entire plan, it is
 > below the plan's own 0.5 ms bar, and it is reachable only by the
@@ -72,7 +72,7 @@ corrections to §0's reading are listed there.
 
 **STATUS: RAN. Gate resolved by measurement: the raw sync (0.667 ms) is
 above the 0.5 ms bar, but the step is device-bound with zero slack and
-the total host cost of the whole loop is 0.21-0.25 ms/step — so the
+the total host cost of the whole loop is 0.197-0.25 ms/step — so the
 RECOVERABLE prize is that, below the bar. The bar's purpose ("the
 prize is below the bar and the RNG-in-graph risk is not worth it")
 applies. STOP recorded in §7 and in the ledger. Nothing below §2 was
@@ -91,12 +91,19 @@ host-spin confirmation.
 
 ## 3. Ranked attacks (only after §2 bar passes)
 
-**STATUS: NOT RUN — barred by §2 (ceiling 0.21-0.25 ms < 0.5 ms).
-Ranking below was still scored against the measurement, because §2.3
-asks for it: attack 1 is already shipped, attack 2 is worth ~0 for a
-reason §7.4 gives, attack 3 is the only one with any prize and it is
-the one carrying the RNG risk. No env gate
-(`EXL3_KVARN_SERVER_TRIM`) was added.**
+**STATUS: NOT RUN as production cuts — barred by §2 (ceiling 0.197-0.25
+ms < 0.5 ms). §2.3's "rank the contributors and attack in that order"
+was nevertheless carried out, each with a measured verdict (§7.5), which
+is what closes the gate honestly:
+
+| attack | verdict | evidence |
+|---|---|---|
+| 1 — batch the `.item()` reads | **already shipped upstream**, 3.8 us/step | `generator.py:1102-1128`; §7.2 |
+| 2 — replace the full `synchronize` with a stream-event wait | **0.001 ms/step, i.e. zero** | `evwait` arm implemented and run: 0.6725 -> 0.6735 ms blocked; §7.5 |
+| 3 — argmax/sample inside the model graph | bounded by the device floor at **0.197-0.252 ms**, behind a static-Philox RNG change | §7.3 floor, §7.5 |
+
+No env gate (`EXL3_KVARN_SERVER_TRIM`) was added, and no production file
+was touched.**
 
 1. **Batch the `.item()` reads.** `next_token.item()` + stop-check
    reads per step → one D2H per step max (single-element tensor
@@ -154,7 +161,7 @@ Spikes untracked, atomic commits, ledger lines on landing.
 **STATUS: MET via the second branch — "documented SKIP with the §2
 bill".** Server-harness tok/s at 64k ctx (greedy) is 57.58-57.66 tok/s
 (17.34-17.37 ms/step) and the measured ceiling for the whole plan is
-**+1.2 to +1.5%** (58.3 tok/s), i.e. every host-side cost removed at
+**+1.1 to +1.5%** (58.3 tok/s), i.e. every host-side cost removed at
 once; the
 bill is §7. The twin / PARITY / env-gate gates in §4 gate a cut, and there was
 no cut. Microkld tg was not chased — as the premise warning predicted,
@@ -173,7 +180,7 @@ Microkld tg is not expected to move; do not chase it here.
 
 ## 7. RESULTS (2026-10-03, box mirror `wip/kvarn-cache`, protocol v3,
 ##    spike `eval/_spike11_sampler_bill.py`, log `t5_bill.log`) — STOP.
-##    Step is device-bound; whole-plan ceiling +1.2-1.5% (0.21-0.25 ms).
+##    Step is device-bound; whole-plan ceiling +1.1-1.5% (0.197-0.25 ms).
 
 No production code written. §3 was never started.
 
@@ -253,7 +260,7 @@ Three things follow.
 - **The control passes**: `floor_sync` lands within 0.25% of `base`, so the
   floor loop runs the same device work and the floor number is real.
 - **The entire host cost of the server decode loop is 0.206 ms/step
-  in this run** (1.2%; 0.252 ms / 1.45% in the repeat) — all staging, all
+  in this run** (1.2%; 0.252 / 0.197 ms in the two repeats) — all staging, all
   bookkeeping, the terminal sync, the readbacks, everything. That is the
   hard ceiling on what the whole of task 5 could ever win, and it is
   *below* the plan's own 0.5 ms bar.
@@ -262,10 +269,11 @@ Three things follow.
   host cost, so there is nothing beyond it for a correct implementation
   to find.
 
-Reproduced end-to-end by a second full run (base 17.394 / floor 17.141 /
-floor_sync 17.436, control −0.24%): ceiling **0.252 ms/step = +1.45%**,
-best case 58.34 tok/s. Two runs, ceiling 0.21-0.25 ms/step, control
-passing both times.
+Reproduced end-to-end twice more (base 17.394 / floor 17.141 /
+floor_sync 17.436, control −0.24%, ceiling **0.252 ms = +1.45%**; then
+base 17.576 / floor 17.379 / floor_sync 17.661, control −0.49%, ceiling
+**0.197 ms = +1.12%**). Three runs, ceiling **0.197-0.252 ms/step**, the
+control passing every time.
 
 Two caveats, both of which *shrink* the prize rather than grow it:
 
@@ -316,20 +324,38 @@ the "HARD, drives 0/2/1 control flow" item in
 `wiki/reports/2026-10-02-tg64-host-bubbles.md` — but it is a different
 mechanism from this task and out of its scope.)
 
-### 7.5 Why §3.2 is worth ~0 and §3.3 is worth at most +1.2-1.5%
+### 7.5 §3.2 measured at zero, §3.3 bounded at +1.1-1.5%
 
 - **§3.2 (replace the full `synchronize` with a stream-event wait):
-  worth ~0.** The wait primitive is not the cost. Measured on the box:
-  `torch.cuda.synchronize(dev)` on an idle device is **3.9-4.1 us**, and
-  `tiny.add_(1); torch.cuda.synchronize(dev)` — a full kernel+sync round
-  trip — is **11.8 us**. The terminal sync blocks 0.667 ms because the
-  device still owes ~0.65 ms of real work when the host arrives (device
-  span from end-of-forward to the sampler tail is only 0.024 ms, but the
-  forward's own tail is still in flight). An event wait on the same work
-  blocks the same time. The sync is also not "for timing" and not
-  cross-stream: the token is produced by kernels queued behind the
-  forward on the same stream, so waiting for the token *is* waiting for
-  the forward.
+  worth 0, and this was IMPLEMENTED and measured, not argued.** A fourth
+  arm `evwait` does exactly what the plan proposes — `Event.record()` +
+  `Event.synchronize()` on the default stream in place of
+  `torch.cuda.synchronize(device)` at `generator.py:1128` — same loop,
+  same interleaving, 6 windows × 40 steps. Blocked time per step:
+
+  | arm | blocked in the terminal wait |
+  |---|---|
+  | base — `torch.cuda.synchronize(device)` | **0.6725 ms** |
+  | evwait — `Event.record()` + `Event.synchronize()` | **0.6735 ms** |
+
+  **+0.0010 ms/step — the event wait is one microsecond slower, i.e.
+  nothing.** Per-step internal timers are used rather than window wall
+  time because they survive the box drift (see §7.8); the median over 240
+  steps filters out the drifted windows that contaminate any wall-clock
+  median. Supporting facts, all measured or read:
+  - The wait primitive was never the cost: `torch.cuda.synchronize(dev)`
+    on an idle device is 3.9-4.1 us, a full kernel+sync round trip is
+    11.8 us, and `Event.record()+synchronize()` is the *slower* of the two
+    (9.0-9.7 us idle, 17.2 us with a kernel queued).
+  - There is nothing for a narrower wait to skip: the decode path
+    creates **no side streams**. The only `torch.cuda.Stream(...)` sites
+    are `model/moe_cpu_host.py:1180` (CPU MoE offload — this model is
+    dense, `Qwen3_5VLModel` sets `use_moe = False`) and
+    `modules/quant/exl3_lib/quantize.py:1725` (weight quantization, load
+    time). So device-wide and stream-scoped waits cover the same work.
+  - The sync is not "for timing" and not a cross-stream handoff: the
+    token is produced by kernels queued behind the forward on the same
+    stream, so waiting for the token *is* waiting for the forward.
 - **§3.3 (sample in graph): at most +1.2-1.5%, and only that.** The `floor`
   arm (§7.3) is the hard ceiling and `nosync` already sits on it; `nosync`
   is the plan's own ceiling — it removes the terminal wait outright,
@@ -349,14 +375,14 @@ mechanism from this task and out of its scope.)
 in every arm, in every phase), and it is only reachable by the attack the
 plan ranks last and flags as high-risk. The §2.2 rationale — "the prize
 is below the bar and the RNG-in-graph risk is not worth it" — holds on
-the ceiling measured in §7.3 (0.21-0.25 ms).
+the ceiling measured in §7.3 (0.197-0.25 ms).
 
 ### 7.6 Premise corrections
 
 - **"~1.7 ms is loop overhead ABOVE the model — your prize pool ceiling"
   is stale.** Measured host time outside the model forward is 0.245 ms
   of staging/bookkeeping plus a 0.667 ms wait that is device latency:
-  0.9 ms total, of which only 0.21-0.25 ms is recoverable (§7.3).
+  0.9 ms total, of which only 0.197-0.25 ms is recoverable (§7.3).
 - **`generator.py:670` is the draft path**, not the main greedy sample
   (see §0). The main loop samples at `job.receive_logits`
   (`job.py:571-583`).
@@ -370,7 +396,28 @@ the ceiling measured in §7.3 (0.21-0.25 ms).
   now it has one: **4.63 ms/step, 27% of the step's wall time**, spent
   blocked. Worth a task of its own if the store path is ever in scope.
 
-### 7.7 Side finding, not chased
+### 7.7 Methodology: use per-step timers, not window medians
+
+The box drifts by ~5 ms on individual windows (this session saw 22.2 ms
+windows against a 17.3 ms median, and in the 4-arm run **every window had
+at least one arm hit by it**). A median over 6 windows is therefore
+untrustworthy as soon as an arm collects two or three drifted windows,
+and a wall-clock comparison between arms can invert: in the 4-arm run the
+`evwait` wall median came out 14% *worse* than base purely from drift
+while its actual blocked time was identical.
+
+What is drift-robust is the **per-step internal timer**, because the
+drift inflates a whole window rather than shifting an arm, and the median
+over 240 steps filters out the drifted ones. Every verdict in §7.5 is
+stated in those terms. Paired per-window deltas were tried first and are
+useless here — no window is clean once all four arms are in it.
+
+Base step itself also drifts between runs (17.37 / 17.39 / 17.58 ms over
+three runs, whole-process, GPU heating up or external load), while the
+*ceilings* stay put at 0.197-0.252 ms. That is the argument for always
+quoting an interleaved delta and never two runs' absolute numbers.
+
+### 7.8 Side finding, not chased
 
 The server harness measures **57.66 tok/s at 64k** where the ledger's
 microkld harness measures 47.8 for the same model/cache/protocol — the
