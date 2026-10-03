@@ -422,7 +422,16 @@ staging byte, every bookkeeping call, the terminal sync, all the
 readbacks -- is 0.21-0.25 ms/step (1.2-1.5%), and that is the hard
 ceiling for this whole task.** A second full run reproduced it (base
 17.394 / floor 17.141 / floor_sync 17.436, control -0.24%), so the
-ceiling is 0.252 ms/step = +1.45%, best case 58.34 tok/s. Deleting the terminal sync (incorrect: it feeds stale
+ceiling is 0.252 ms/step = +1.45%, best case 58.34 tok/s. The floor
+loop samples with a bare `argmax` rather than the real sampler chain, so
+it also skips the 0.024 ms sampler device tail and the true ceiling is
+nearer 0.23-0.27 ms. Note `torch.profiler` could NOT be used to measure
+device-busy here: its kernel-sum disagreed with itself on identical code
+across the two runs (21.5 ms/step then 14.8 ms/step, neither consistent
+with the 17.3 ms wall) -- CUDA-graph replay plus CUPTI is not a reliable
+kernel-sum. The floor loop's wall time is the measurement that stands,
+and it needs no profiler: with the host out of the loop, wall time per
+step IS the device cost. Deleting the terminal sync (incorrect: it feeds stale
 tokens) measures 17.109 = 58.45 tok/s, i.e. it already reaches the floor
 within 0.3% -- there is nothing beyond it for a correct implementation to
 find. A perfect sample-in-graph (device-side input staging, static
