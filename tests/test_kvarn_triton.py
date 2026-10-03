@@ -713,3 +713,25 @@ def test_past_mirror_contract_cpu(monkeypatch):
         hits += h
         kvarn._kvarn_past_commit(lay2, 8, True)
     assert hits == 126, hits  # steps 1 (cold) and 128 (periodic) miss
+
+
+def test_as_long_skips_convert_when_long():
+    # _as_long: identity (same object) for long, equal values for
+    # int32. Guards the per-step .long() dispatch saving: behavior
+    # identical, fewer dispatches.
+    a = torch.tensor([1, 2, 3], dtype=torch.int64)
+    assert kvarn._as_long(a) is a
+    b = torch.tensor([1, 2, 3], dtype=torch.int32)
+    c = kvarn._as_long(b)
+    assert c.dtype == torch.int64 and torch.equal(c, a)
+
+
+def test_touch_batch_early_out_needs_no_convert():
+    # Steady-state _touch_batch (bsz 1, length 1, off-tick) returns
+    # before any dtype normalization: int32 inputs accepted, no
+    # conversion performed (would raise on a strict fake).
+    from types import SimpleNamespace
+    lay = SimpleNamespace(_evict_tick=1)
+    seql = torch.tensor([10], dtype=torch.int32)
+    bt = torch.tensor([[0, 1]], dtype=torch.int32)
+    assert kvarn.CacheLayer_kvarn._touch_batch(lay, seql, bt, 1) is None
