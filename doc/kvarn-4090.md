@@ -558,7 +558,7 @@ versioning.
 | 16384 | 2820.6 / 2991.1 | 6.4s, 2574 | 7.1s, 2303 |
 | 32768 | 2628.1 / 2813.1 | 13.7s, 2391 | 15.2s, 2158 |
 | 65536 | 2321.4 / 2510.8 | 32.1s, 2044 | 35.5s, 1844 |
-| 131072 | 1881.7 / 2068.8 | 198.1s, ~662 (chunk 4096; swap pressure, artifact) | 100.2s, 1308 (chunk 4096; was 157.9, 4-run consistent) |
+| 131072 | 1881.7 / 2068.8 | 196.3s, 668 (chunk 4096; swap artifact CONFIRMED 2026-10-03 re-run: 198.1/196.3s, peak 22.1GB both) | 100.2s, 1308 (chunk 4096; was 157.9, 4-run consistent) |
 
 Long-context degradation verdict (2026-09-30, code `f73271f`,
 chunk 8192, protocol v2): NO kvarn cliff. pp kvarn/fp16 slips
