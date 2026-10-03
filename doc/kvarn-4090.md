@@ -366,10 +366,12 @@ us/layer cheaper to ISSUE from python (two wrappers + three reshapes
 become one launch). And it is SLOWER end to end: in-process
 interleaved eager A/B at 64k, 10 windows of 16 steps, split 19.737
 ms/step (50.67 tok/s, range 19.43-20.40) vs fused 20.638 ms/step
-(48.45 tok/s, range 20.29-31.09) = **-4.5%**, with 8 of 10 fused
-windows above every split window. Plan §0's guard fires ("fused slower
-than separate -> STOP"). Why the two disagree: the pair is only
-52.4us x 16 = 0.84ms of a 19.7ms eager step (4.2%), so even the full
+(48.45 tok/s, range 20.29-31.09) = **-4.5%**. All 10 fused windows beat
+the split median and 7 of 10 beat EVERY split window; even the fused
+arm's fastest window (20.29) beat 9 of the 10 split windows. Plan §0's
+guard fires ("fused slower than separate -> STOP"). Why the two
+disagree: the pair is only 52.4us x 16 = 0.84ms of a 19.7ms eager step
+(4.2%), so even the full
 device win is +0.15% -- the plan's "+1-2%" premise was ~10x optimistic
 -- while fusing turns two independent 24-CTA kernels per layer into one
 longer dependent chain, which plausibly costs the cross-layer overlap
@@ -379,8 +381,8 @@ overlap loss is ~60x the 15us the removed launch actually saved.
 Mechanism inferred from the timings, not separately profiled -- but the
 verdict does not depend on it: the cut loses on every end-to-end
 metric. Do NOT re-propose this fusion; the prize is not there in
-either direction. Premise correction for
-the plan: the EAGER baseline is 46.8 / 46.7 tok/s @64k and 47.7 @8k
+either direction. Premise correction for the plan: the EAGER
+baseline is 46.8 / 46.7 tok/s @64k and 47.7 @8k
 (`EXL3_KVARN_GRAPH=0`, protocol v3, this run), not the 44.1 written
 down -- the task-7 serve work moved eager too, so a +2% cut would have
 been 46.8 -> 47.7, not 44.1 -> 45. Eager traffic is real (tabbyAPI

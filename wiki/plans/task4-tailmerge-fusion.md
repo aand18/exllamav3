@@ -113,8 +113,9 @@ from this task.
 eager baseline was 44.1; it is now 46.8, so the bar should have read
 ≥47.7. Moot either way: §6 closed this as a STOP.)*
 
-## 6. RESULTS (2026-10-03, box `4ff897b`, commit `ab94d74`) — STOP,
-##    fused kernel is 4.5% SLOWER eager. No kernel written.
+## 6. RESULTS (2026-10-03, box `4ff897b`, commits `ab94d74` ledger /
+##    `ab61c98` this section) — STOP, fused kernel is 4.5% SLOWER
+##    eager. No kernel written.
 
 No code change. §3 Phase 1 was never started: the §2.3 bar failed and
 §0's guard ("fused slower than separate → STOP") fired. Ledger entry
@@ -155,9 +156,11 @@ register residency *cannot* change the result. Device and host-issue
 numbers reproduced to ±0.15us across three interleaved runs; the
 end-to-end A/B ran twice (8 and 10 windows of 16 steps, in-process,
 order alternated per window — task-7 §8.4: between-process deltas on
-this box are ±25% and worthless). In the 10-window run **8 of 10 fused
-windows sat above every split window** (fused 20.29–20.86 excluding two
-outliers; split 19.43–20.40).
+this box are ±25% and worthless). In the 10-window run **all 10 fused
+windows beat the split median and 7 of 10 beat EVERY split window**;
+even the fused arm's fastest window (20.29ms) beat 9 of the 10 split
+windows. Fused 20.29–20.86 excluding two outliers (30.92, 31.09 — the
+periodic box event task-7 §8.4 recorded); split 19.43–20.39.
 
 ### 6.3 Why both microbenchmarks won and the step still lost
 
