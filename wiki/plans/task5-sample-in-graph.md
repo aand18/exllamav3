@@ -261,6 +261,21 @@ floor_sync 17.436, control −0.24%): ceiling **0.252 ms/step = +1.45%**,
 best case 58.34 tok/s. Two runs, ceiling 0.21-0.25 ms/step, control
 passing both times.
 
+Two caveats, both of which *shrink* the prize rather than grow it:
+
+- The floor loop samples with a bare `torch.argmax`, so it does not run
+  the real sampler chain. That skips the 0.024 ms/step sampler device tail
+  (§7.2), so the true ceiling is nearer 0.23-0.27 ms — the number above
+  is, if anything, generous.
+- `torch.profiler`'s kernel-sum was **not** used for the device-busy
+  number, because it disagreed with itself on identical code across the
+  two runs: **21.5 ms/step** in the first, **14.8 ms/step** in the second,
+  neither consistent with the 17.3 ms wall and both far off it. CUDA-graph
+  replay plus CUPTI does not give a trustworthy kernel-sum here. The floor
+  loop's *wall* time is the measurement that stands, and it needs no
+  profiler: with the host out of the loop, wall time per step is the
+  device's cost by construction.
+
 A perfect sample-in-graph — device-side input staging, static Philox,
 no host stall — buys at most **58.3 tok/s instead of 57.6**.
 
