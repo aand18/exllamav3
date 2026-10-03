@@ -128,6 +128,27 @@ loud `print(..., flush=True)` on fallback (grep-able on box).
 - Touching `master`, rebasing, force-pushing, `git config`
   changes, committing `eval/_spike*` or `_probe*` files.
 
+## 5b. Hands-off + self-verification (read twice, follow always)
+
+- HANDS-OFF, read-only unless your phase explicitly requires it:
+  `eval/_probe_geom.py`, every `wiki/reports/*` file, every
+  `doc/*.md` except the ledger lines §6 tells you to append,
+  `BRANCHES.md`, `AGENTS.md`, workflow files. Spikes live ONLY in
+  new `eval/_spike8_*.py` files; tests ONLY in the one twin file
+  your phase names. Never rename, move, or reformat files outside
+  your phase scope ("cleanup" is not your task).
+- Before EVERY commit: run `git status --short` + `git diff
+  --stat`. Every listed path must be one you intentionally edited
+  for this phase. Anything else (modified file you don't
+  recognize, unexpected deletion) = STOP, report, do not commit.
+  Stage with explicit `git add <path>` per file, never `git add -A`
+  / `git add .`.
+- Recovery (if the tree looks wrong): committed work is safe on
+  `origin/wip/kvarn-cache` (pushed through `6f51f35` at plan
+  time). `git stash -u` parks YOUR mess including untracked;
+  `git checkout -- <path>` reverts a tracked file to HEAD. Never
+  `reset --hard`, never touch another process's files.
+
 ## 6. Box validation protocol (every perf commit, no exceptions)
 
 Protocol v3 + env (copy EXACTLY into every `.bat`):
