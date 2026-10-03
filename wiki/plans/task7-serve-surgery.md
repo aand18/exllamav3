@@ -149,7 +149,7 @@ watchdog on every run. Gates: twin + KLD same-top 100% (mean
   each attempt lands (or reverts) independently.
 
 ## 8. RESULTS (2026-10-03, branch `wip/kvarn-cache`, commits `3ccc7e8`
-##    `fc24102` `4ab5caf` `ad7612a`) — two cuts landed, +9.5% tg@64k
+##    `fc24102` `4ab5caf` `ad7612a`) — two cuts landed, +9.0% tg@64k
 
 `EXL3_KVARN_SERVE_V2=1` (default) + serve-groups cap 64 (default).
 tg@64k graph **47.9 → 52.2 tok/s (+9.0%)**. Occupancy never dropped:
