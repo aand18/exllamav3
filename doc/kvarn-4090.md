@@ -354,6 +354,44 @@ domain, rewrite the V side as `dot(trans(qqv), (v_sc*e))` plus a rank-1
 `v_zp` term). Those reassociate -> allclose + KLD gates, not bit-exact,
 and are a much larger change; not attempted. Serve device time is now
 ~2.49ms/step for 16 layers, down from 4.474ms at the start of task 7.
+Tail+merge fusion -- STOP (2026-10-03, `wiki/plans/task4-tailmerge-fusion.md`,
+no code change; spike `eval/_spike10_tailmerge.py`, log `t4_spike10.log`).
+The hand-fused kernel is BIT-EXACT against the two separate launches
+(`torch.equal` True, maxabs 0.0, 0/6144 differing elements: same op
+order, and the fp32 tail-stat DRAM round-trip it removes is
+value-preserving, so register residency cannot change the result). It is
+also FASTER in isolation on the device -- 52.4 -> 50.6 us/layer (-3.5%,
+reproduced to +-0.15us over three interleaved runs) and 16.8-18.2
+us/layer cheaper to ISSUE from python (two wrappers + three reshapes
+become one launch). And it is SLOWER end to end: in-process
+interleaved eager A/B at 64k, 10 windows of 16 steps, split 19.737
+ms/step (50.67 tok/s, range 19.43-20.40) vs fused 20.638 ms/step
+(48.45 tok/s, range 20.29-31.09) = **-4.5%**, with 8 of 10 fused
+windows above every split window. Plan §0's guard fires ("fused slower
+than separate -> STOP"). Why the two disagree: the pair is only
+52.4us x 16 = 0.84ms of a 19.7ms eager step (4.2%), so even the full
+device win is +0.15% -- the plan's "+1-2%" premise was ~10x optimistic
+-- while fusing turns two independent 24-CTA kernels per layer into one
+longer dependent chain, which plausibly costs the cross-layer overlap
+(tail of layer N+1 has no dependency on merge of layer N, so with them
+separate the long tail loop can hide under it; fused, it cannot). That
+overlap loss is ~60x the 15us the removed launch actually saved.
+Mechanism inferred from the timings, not separately profiled -- but the
+verdict does not depend on it: the cut loses on every end-to-end
+metric. Do NOT re-propose this fusion; the prize is not there in
+either direction. Premise correction for
+the plan: the EAGER baseline is 46.8 / 46.7 tok/s @64k and 47.7 @8k
+(`EXL3_KVARN_GRAPH=0`, protocol v3, this run), not the 44.1 written
+down -- the task-7 serve work moved eager too, so a +2% cut would have
+been 46.8 -> 47.7, not 44.1 -> 45. Eager traffic is real (tabbyAPI
+`max_batch_size: 2`, so bsz=2 decode declines the graph at
+`dispatch.py:249` and runs eager every step), which is why the gate
+question was worth asking -- the answer just does not make this cut
+worthwhile. Also note the isolated 52us/layer is ~50x off roofline for
+1.25MB of reads: the cost is the tail kernel's serial R=256-iteration
+reduction chain (`tl.sum(where(roff==r, e, 0))` per r), not the tail
+DRAM round-trip. That loop, not the fusion, is where a future tail-side
+cut would have to aim.
 Note: KLD divergence trend across approximation cuts (mean
 1.7e-5 base -> 2.3e-5 Sinkhorn -> 3.2e-5 deferred seals @64k;
 max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,
