@@ -808,15 +808,21 @@ Min-free record (guard, mandatory with every run): alloc-only
 128k probe hit 23MB -> guard KILL exit 2 on its first day of duty
 (all four totals already captured); q8-ref KLD 2461MB; Bee kvarn4
 @128k 4397MB (18GB weights + 2.4GB KV, never near swap).
-Equal weight footing @128k (tok/s; IQ2_XXS 7.27GB/2.13bpw
+Equal weight footing @64k/@128k (tok/s; IQ2_XXS 7.27GB/2.13bpw
 approximates our EXL3 dir 7.88GB, vs Q4_K_XL 17.9GB/5.14bpw;
-27.32B params):
+27.32B params. Bee-IQ2 protocol 2026-10-03, v3 perf-only:
+`llama-bench -m Qwen3.8-27B-UD-IQ2_XXS.gguf (7266070528 bytes)
+-p <ctx> -n 256 -ctk <k> -ctv <v> -o json --kv-memory`,
+warmed box, 2 runs/ctx quote hot, smi_guard exit 0 every run,
+0 used before/after. Speed/VRAM baseline only -- never quality/KLD.)
 
-| path | pp (tok/s) | tg (tok/s) | KV (GB) | min-free (MB) |
-|------|------------|------------|---------|---------------|
-| Bee Q4_K_XL kvarn4 | 1887 | 44.0 | 2.38 | 4397 |
-| Bee IQ2_XXS kvarn4 | 1882 | **80.9** | 2.38 | 13987 |
-| Bee IQ2_XXS f16 | **2068** | **88.4** | 8.59 | 8069 |
+| path | pp (tok/s, s, cuda_peak GB) | tg256 (tok/s, cuda_peak GB) | KV peak (GB) | min-free (MB) | 2-run spread (pp / tg) |
+|------|------------|------------|---------|---------------|------|
+| Bee Q4_K_XL kvarn4 @128k | 1887 | 44.0 | 2.38 | 4397 | Q4 ref, unchanged |
+| Bee IQ2_XXS kvarn4 @64k | 2321 (28.23s, 10.701) | 80.6 (8.975) | 1.250 / 0.038 | 15125 | pp 2320.64/2321.44, tg 80.46/80.56 |
+| Bee IQ2_XXS f16 @64k | 2511 (26.10s, 13.765) | 88.3 (8.946) | 4.295 / 0.017 | 12203 | pp 2510.82/2510.82, tg 88.21/88.26 |
+| Bee IQ2_XXS kvarn4 @128k | 1882 (69.66s, 11.895) | 80.6 (8.975) | 2.424 / 0.038 | 13987 | pp 1880.91/1881.69 (Sept-28: 1881.71), tg 80.60/80.57 (Sept-28: 80.86) |
+| Bee IQ2_XXS f16 @128k | 2069 (63.36s, 18.100) | 88.3 (8.946) | 8.590 / 0.017 | 8069 | pp 2068.81/2067.90 (Sept-28: 2067.76), tg 88.26/88.29 (Sept-28: 88.40) |
 | ours 1.40bpw kvarn4 | 754 | 28.1 | 2.44 | 2461 |
 | ours 1.40bpw fp16 | 648 (swap) | 47.5 | 8.61 | n/a (old guard) |
 
