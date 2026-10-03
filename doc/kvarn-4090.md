@@ -1472,6 +1472,22 @@ new architecture (`head_dim` 256, 12 QSA layers, 2 kv heads). Note it needs
 real headroom: at `mcl` 34 the parity twins do not fit and the guard killed the
 run at 25MiB.
 
+q8 proxy rule (standing rule: one-time <=32k calibration, kvarn-vs-fp16 AND
+kvarn-vs-q8 + identical needle HIT/MISS). Both KLD halves are the 8192 rows
+above. The needle half, `eval/kvarn_needle.py` @12288 prompt tokens
+(`-cs 16384`, `mcl` 37, min-free 5843-8243MiB across the three runs):
+
+| cache | smoke | needle@0.05 | needle@0.5 | needle@0.95 | multi | update | total |
+|---|---|---|---|---|---|---|---|
+| kvarn4 | HIT | HIT | HIT | HIT | HIT | HIT | 6/6 |
+| fp16 | HIT | HIT | HIT | HIT | HIT | HIT | 6/6 |
+| q8 | HIT | HIT | HIT | HIT | HIT | HIT | 6/6 |
+
+HIT/MISS identity holds across all three caches (including the multi-needle
+conjunction and the recency-update item), so q8 is a sound stand-in for fp16
+on this model. Recorded for completeness — at every ctx measured here fp16
+fits on its own, so the proxy is not load-bearing yet.
+
 #### System-RAM guard (hard rule) — no cell UNSAFE
 
 Every run was gated on Windows free physical RAM >= 2048MB before launch and
@@ -1504,9 +1520,9 @@ offloaded layers cost ~27GB, not 36GB.
    table). Do not carry 38 across ctx.
 
 Raw evidence (all runs, guard min-free + Windows free-RAM before/after per
-run): `C:\Users\yoho\Downloads\exllamav3-kvarn\_fn_evidence\` (70 files).
+run): `C:\Users\yoho\Downloads\exllamav3-kvarn\_fn_evidence\` (72 files).
 Harness used: `eval/kvarn_microkld.py` (committed); spikes
 `eval/_spike12_audit.py` (audit), `_spike13_loadtest.py` (load test),
 `_spike15_kldctl.py` (noise-floor control), `_spike16_collect.py` (log ->
-TSV), plus `_fn_run.sh` / `_fn_calib.sh` / `_spike1{3load,4kld,5ctl}.bat`
-runners -- all untracked.
+TSV), plus `_fn_run.sh` / `_fn_calib.sh` and the
+`_spike1{3load,4kld,5ctl,7needle}.bat` runners -- all untracked.
