@@ -424,9 +424,12 @@ def test_online_serve_grouped_matches_torch():
         lay, Qw, Qf, exact_k, exact_v_w, exrev, sealed, bt, n_0d,
         qpk, scale, 0, 0, gps, gc=G)
     assert flag_b == 0
-    # Subgroup buffers: 128 partials, not 130 (qpad=2 for qpk=2).
-    assert tuple(lay._ov_serve_m.shape) == (kvh, 2, 128), \
-        lay._ov_serve_m.shape
+    # Subgroup buffers: GROUPS partials (the shared _kvarn_serve_groups
+    # cap), not one per group -- qpad=2 for qpk=2. Derived, not
+    # hardcoded, so the serve-groups cap stays the single source.
+    assert tuple(lay._ov_serve_m.shape) == \
+        (kvh, 2, kt._kvarn_serve_groups(G)), lay._ov_serve_m.shape
+    assert kt._kvarn_serve_groups(G) < G
     Ks, Vs = [], []
     for g in range(G):
         for h in range(kvh):

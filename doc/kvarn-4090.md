@@ -308,6 +308,41 @@ identically with `EXL3_KVARN_SERVE_V2=0` (legacy) and `=1` (v2), so
 it predates this task -- the "promoted == eval original" guard has
 been broken by drift and should be re-synced (or the twin relaxed to a
 tight allclose) separately.
+Serve-groups cap 128 -> 64 (2026-10-03, task-7 attempt 2, default 64,
+kill-switch `EXL3_KVARN_SERVE_GROUPS=128`): the hierarchical subgroup
+cap trades CTA count against partials traffic, and at 2 CTA/SM that
+trade is decided by wave quantization, not by partials bytes. At 64k
+this goes from 128 groups x CPG=4 (512 CTAs = 4 exact waves, 4MB/layer
+of partials) to 64 x CPG=8 (256 CTAs = 2 waves, 2MB/layer): HALF the
+partials traffic AND faster. Isolated serve 163.7 -> 154.2 us/layer
+(-5.8%); CPG=2 (cap 256) and CPG=1 (cap 512) both measured slower
+(+8.2, +8.6 us), so the old cap sat past the optimum the other way.
+Occupancy: CTAs 512 -> 256, regs/thread 254 unchanged, spills 0, smem
+16384B unchanged, CTA/SM 2 -> 2 -- the grid halves AND the wall
+improves, the opposite of the flat-32 failure mode.
+Perf, 4 interleaved rounds per arm at 64k graph: cap128 50.7 / 50.8 /
+50.8 / 50.9, cap64 52.1 / 52.2 / 52.3 (one 72.7 outlier process,
+discarded) = **+2.8%**, and 52.2 with the env unset. Also +3.2% @16k
+(56.5 -> 58.3) and +1.8% @32k (38.4 -> 39.1). Gates: KLD same-top
+100.00% and mean 2.8e-5 at 64k/32k, 1.1e-5 at 16k -- identical to the
+cap128 arms to 6 digits (the reduction tree keeps its kind, only its
+depth changes: 4 tiles/CTA -> 8); PARITY=1 @8k green (42.4 tok/s);
+twin suite pass/fail IDENTICAL at cap=64 and cap=128, so the 4
+failures the protocol env causes (EXL3_KVARN_IMAGELESS=1 /
+EXL3_KVARN_GRAPH=1 break four store/image twins that do not set those
+themselves) are pre-existing and not this cut -- run the twin suite
+WITHOUT the protocol env.
+Also negative, recorded so it is not re-proposed: rewriting the three
+per-slot metadata expansions (K oth, V sc, V zp) from SL selects each
+into a (16,2,128) broadcast of a joined pair -- same tensor, same
+values, no selects -- is NOT faster (165.3 vs 163.7 us/layer, regs
+254 -> 243). The 31% the `nopermeta` ablation attributes to those three
+loads is mostly the REGISTER drop they enable (254 -> 168, i.e. 2 ->
+3 CTA/SM), not the select ALU. The live prize is getting the kernel
+under ~170 regs/thread; the candidates are folding K sc/zp into
+`qwT` per group and splitting the QK dot per slice so `k_ot` never
+reaches the (16, HD) domain (both reassociate -> allclose + KLD
+gates, not bit-exact).
 Note: KLD divergence trend across approximation cuts (mean
 1.7e-5 base -> 2.3e-5 Sinkhorn -> 3.2e-5 deferred seals @64k;
 max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,

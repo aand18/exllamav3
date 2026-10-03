@@ -2064,11 +2064,35 @@ if _have_triton:
 def _kvarn_serve_groups(gc):
     """Hierarchical subgroup count shared by serve and its callers.
 
-    Direct (one chunk per program) while gc <= 64; capped at 128
-    beyond (16k: direct-equivalent; 64k: 128 x CPG=4). Single source
-    so kernel strides and merge/combine counts cannot drift apart.
+    Direct (one chunk per program) while gc <= 64; capped at
+    EXL3_KVARN_SERVE_GROUPS beyond (default 64: 64k -> 64 groups x
+    CPG=8; 16k -> 64 x CPG=2). Single source so kernel strides and
+    merge/combine counts cannot drift apart.
+
+    Why the cap came down from 128 (task-7 attempt 2, measured 64k
+    isolated serve, 7 interleaved windows): the cap trades CTA count
+    against partials traffic, and at 2 CTA/SM the trade is dominated by
+    wave quantization, not by the partials bytes. 128 groups x CPG=4
+    = 512 CTAs = 4 exact waves at 16 warps of work per SM; 64 groups x
+    CPG=8 = 256 CTAs = 2 waves, HALF the partials traffic (2MB/layer
+    vs 4MB), and 5.8% faster per layer (163.7 -> 154.2 us/layer) with
+    registers, spills and smem unchanged. CPG=2 (cap 256) and CPG=1
+    (cap 512) both measured slower (+8.2, +8.6 us), so the old cap was
+    past the optimum in the other direction.
+
+    Kill-switch: EXL3_KVARN_SERVE_GROUPS=128 restores the old cap
+    exactly. A malformed value falls back to the default with a loud
+    print (never raises into the decode path).
     """
-    return gc if gc <= 64 else min(gc, 128)
+    cap = 64
+    _v = os.environ.get("EXL3_KVARN_SERVE_GROUPS")
+    if _v is not None:
+        try:
+            cap = max(1, int(_v))
+        except ValueError:
+            print(f"KVARN-SERVE-GROUPS invalid ({_v!r}), using {cap}",
+                  flush=True)
+    return gc if gc <= 64 else min(gc, cap)
 
 def kvarn_triton_online_serve(layer, qw, Qf, exact_k, exact_v_w, exrev,
                               sealed, bt, n_0d, qpk, scale, sink_n,
