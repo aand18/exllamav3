@@ -2162,13 +2162,15 @@ def kvarn_triton_online_serve(layer, qw, Qf, exact_k, exact_v_w, exrev,
         layout.v_s_col_off // 2, v_bits,
         records.shape[1], records.shape[2], sl, gps,
         kvh, qpk, qpad, hd, gc, scale, sink_n, tail_eff, cpg, groups)
-    # Serve v2 (per-group metadata hoist, task-7 attempt 1): default OFF,
-    # kill-switch restores the legacy kernel by unsetting the env. Same
-    # arg tuple, same grid, same partials layout -- only the kernel body
-    # differs, and it is bit-exact. Fail-closed loud fallback on throw
-    # (triton compiles before it launches, so a throw means nothing ran):
-    # copy the _kvarn_launch_combine pattern.
-    if _os.environ.get("EXL3_KVARN_SERVE_V2", "0") == "1":
+    # Serve v2 (per-group metadata hoist, task-7 attempt 1): DEFAULT ON
+    # (box-green 2026-10-03: tg@64k graph 47.9 -> 51.0 tok/s over 3
+    # interleaved rounds, twin bit-exact, KLD identical). Kill-switch
+    # EXL3_KVARN_SERVE_V2=0 restores the legacy kernel. Same arg tuple,
+    # same grid, same partials layout -- only the kernel body differs,
+    # and it is bit-exact. Fail-closed loud fallback on throw (triton
+    # compiles before it launches, so a throw means nothing ran): copy
+    # the _kvarn_launch_combine pattern.
+    if _os.environ.get("EXL3_KVARN_SERVE_V2", "1") == "1":
         try:
             _kvarn_online_serve_kernel_v2[(kvh, groups,)](
                 *_serve_args, num_warps=4, num_stages=1)

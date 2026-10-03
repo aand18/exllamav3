@@ -296,6 +296,18 @@ measured 39.3 tok/s against 50.8 for the same config. Single-process
 alternating A/B is the only reliable protocol here; both arms also
 show one ~25ms outlier window at the same step count (a periodic
 event, pre-existing, not this cut).
+Serve v2 default ON (2026-10-03, follow-up to `3ccc7e8`, kill-switch
+`EXL3_KVARN_SERVE_V2=0` restores the legacy kernel): box-green, so
+the gate now defaults to 1. Re-validated with the env UNSET: PARITY=1
+@8k asserts green (43.3 tok/s, KLD identical), 64k graph 50.9 and
+50.8 tok/s. Full CUDA twin suite green on both arms (20 passed) with
+one PRE-EXISTING failure, `test_promoted_serve_matches_eval_spike`:
+the promoted serve kernel and the eval spike7 original it was copied
+from differ by 4.5e-08 in one q-row, and the failure reproduces
+identically with `EXL3_KVARN_SERVE_V2=0` (legacy) and `=1` (v2), so
+it predates this task -- the "promoted == eval original" guard has
+been broken by drift and should be re-synced (or the twin relaxed to a
+tight allclose) separately.
 Note: KLD divergence trend across approximation cuts (mean
 1.7e-5 base -> 2.3e-5 Sinkhorn -> 3.2e-5 deferred seals @64k;
 max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,
