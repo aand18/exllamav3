@@ -84,8 +84,16 @@ residency subject to min-free VRAM ≥200MB at every instant.
    a 33.93GB model is swap-thrash, not just OOM). Record peak +
    min-free per setting. Too low offload → guard kills (slow);
    too high offload → everything works but slow (experts on
-   CPU). Pick the lowest offload count that keeps min-free
-   ≥200MB end to end, then confirm with one repeat.
+   CPU). Calibrate TWO configs, they serve different purposes:
+   (a) SPEED config: lowest offload count keeping min-free
+   ≥200MB end to end, then confirm with one repeat;
+   (b) PARITY config: deliberately over-offload to buy cache
+   headroom for fp16-KV. Flash-Next fp16 KV is small (12 full
+   layers × ~269MB @131072 ≈ 3.2GB; ~6.4GB @262144), so ~6
+   extra offloaded layers (~4GB) funds full fp16-KV parity.
+   Slower per step (more experts on CPU) but a stronger
+   reference than q8 — use (b) for KLD gates, (a) for any
+   tok/s observation. Record both rows in the map.
 3. Cache matrix per ctx {8192, 32768, 65536, 131072}:
    kvarn4 always; fp16-cache ONLY where the calibrated offload
    leaves it cleanly fitting (fp16 KV at 131072 ≈ 8.6GB-class
