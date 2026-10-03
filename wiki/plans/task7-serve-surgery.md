@@ -147,3 +147,135 @@ watchdog on every run. Gates: twin + KLD same-top 100% (mean
   data: flat-32 lives in the launcher comment for a reason).
 - Stacking a second attempt on an uncommitted first is forbidden;
   each attempt lands (or reverts) independently.
+
+## 8. RESULTS (2026-10-03, branch `wip/kvarn-cache`, commits `3ccc7e8`
+##    `fc24102` `4ab5caf` `ad7612a`) — two cuts landed, +9.5% tg@64k
+
+`EXL3_KVARN_SERVE_V2=1` (default) + serve-groups cap 64 (default).
+tg@64k graph **47.9 → 52.2 tok/s (+9.0%)**. Occupancy never dropped:
+CTAs and CTA/SM are reported per attempt below.
+
+### 8.1 Phase 0 PASSED the STOP gate — the bill inverted the ranking
+
+`eval/_spike9_serve_bill.py`: 18 text-patched variants of the serve
+kernel, one ablation per section, 7 interleaved windows in ONE process
+(interleaving matters — see §8.4), CUDA-event timed, `n_regs` /
+`n_spills` / smem per variant so a work-removal delta can be told
+apart from an occupancy delta. Isolated serve = 222.8us/layer
+(Kineto in-situ 279.7us/call, 4.474ms/step over 16 layers).
+
+| section | us/layer | ms/step | % of serve | regs |
+|---|---|---|---|---|
+| metadata loads (K sc/zp, V oth, block table) | 120.4 | 1.93 | **54.0** | 219→239 |
+| K+V payload reads | 84.3 | 1.35 | 37.8 | 219→200 |
+| dequant ALU (per-element scale math) | 55.4 | 0.89 | 24.8 | 219→207 |
+| exact-direct tail (ek/ev gather + selects) | 29.9 | 0.48 | 13.4 | 219→205 |
+| partials stores | 7.2 | 0.12 | 3.2 | 219→209 |
+| `exp` | 13.2 | 0.21 | 5.9 | 219→213 |
+| one extra MMA dot | −3.3 | −0.05 | **−1.5** | 219→219 |
+
+Occupancy baseline: grid 512 CTAs = 4 waves, **219 regs/thread, 0
+spills, 16KB smem → 2 CTA/SM = 8 warps/SM = 17% of 48**.
+
+Consequences for §3, all measured:
+- **§3.1 (dot narrowing) and §3.5 (tail-dot) are dead**: one extra dot
+  is *negative* (the tensor cores are free; `nbody == 16` skips the
+  second dot already). Do not re-propose.
+- **§3.2 (exp fast path)** ceiling is 0.21ms/step even if `exp` became
+  free — under the +3% bar. Rejected.
+- **§3.3 (partials fp16)** ceiling is 0.12ms/step (the stores are 3.2%,
+  and half of that is 0.06ms). Rejected.
+- **§3.4 (CPG) was the only ranked item with a real prize**, and it is
+  bigger than §3.1-3.3 combined.
+- The **unranked** item the plan did not list — per-tile metadata
+  *hoisting* — is 54% of the kernel. §1.4 (memory id 74, "do not
+  re-propose pure metadata-hoisting without new evidence") is a
+  prefill-path negative; the new evidence is this bill, so it was
+  worth exactly one attempt, taken bit-exactly.
+
+### 8.2 Attempt 1 — per-group metadata hoist (BIT-EXACT, +6.5%)
+
+A TOK=16 tile can never straddle a 128-row group, so `g`, `s` and the
+three per-channel metadata vectors are loop-invariant across the 8
+tiles of a group. The tile loop became a (group, tile) nest: the
+block-table gather and the 3 metadata vectors load once per group
+(CPG times) instead of once per tile (8*CPG times). Groups past `n`
+clamp their page/group index — a no-op for live rows, and the only
+rows that read through the clamp are already masked by `r`.
+
+- **222.8 → 162.7us/layer (−27%)**; regs 219 → **254**, spills 0, smem
+  unchanged, CTA/SM **2 → 2** (254*128 = 32512 ≤ 32768, so it just
+  fits; 255 would drop it to 1 CTA/SM — watch this if the body grows).
+- Twin `test_serve_v2_group_hoist_bit_exact`: 7 shapes (CPG=4
+  production, non-pow2 gc, short-prefix mask rows, sink+tail, CPG=1),
+  `torch.equal` on out AND on the written m/l/acc rows. This caught a
+  real bug of mine: groups past `n` indexed past the block table until
+  the clamps went in.
+- Perf: graph 47.9/47.9/48.0 → 51.0/50.8/51.0 tok/s; eager in-process
+  alternating 21.254 → 19.970 ms/step (−6.0%). KLD identical to 6
+  digits across arms. Flipped default ON in `4ab5caf`.
+
+### 8.3 Attempt 2 — serve-groups cap 128 → 64 (cpg 4 → 8, +2.8%)
+
+At 2 CTA/SM the cap trade is decided by wave quantization, not
+partials bytes: 512 CTAs = 4 exact waves → 256 CTAs = 2 waves, and
+partials traffic *halves* (4MB → 2MB per layer) as a side effect.
+cap 256 and cap 512 both measure slower, so the old cap was past the
+optimum the other way.
+
+- **163.7 → 154.2us/layer (−5.8%)**; CTAs 512 → 256, regs **254
+  unchanged**, spills 0, smem unchanged, CTA/SM 2 → 2.
+- 64k graph 50.8 → 52.2 tok/s (+2.8%, 4 interleaved rounds/arm), 16k
+  56.5 → 58.3 (+3.2%), 32k 38.4 → 39.1 (+1.8%). KLD same-top 100.00%,
+  mean 2.8e-5 @64k, identical to the cap128 arms.
+
+### 8.4 Methodology finding — this box cannot be A/B'd across processes
+
+Identical code, identical command, different process: 39.3 and 50.8
+tok/s for the same v2 graph config; 35.1 and 56.3 for the same 8k
+config; one cap64 run reported 72.7. `expandable_segments` is
+unsupported on this platform (torch warns at every run), so each
+process lays the 64k kvarn cache out differently in DRAM. **Every
+number in this task that is quoted as a delta comes from a
+single-process, gate-flipped, interleaved-window measurement** (the
+bill harness and `eval/_spike9_ab.py`); the cross-process runs only
+bound the spread. Both arms also show one ~25ms outlier window at the
+same step count (w3 of 6) — a periodic event, pre-existing, and the
+only run that ever crashed did so at exactly that window.
+
+### 8.5 Next lever, and one negative to not re-propose
+
+Post-v2 bill (base 163.5us/layer): payload 35.8% (record format, off
+limits), per-slot metadata 31.0%, tail 13.5%, dequant ALU 12.0%,
+partials 5.2%, exp 4.4%, MMA 2.3%.
+
+**Negative**: replacing the three per-slot metadata expansions (K oth,
+V sc, V zp) — SL `tl.where` selects each — with a `(16,2,128)`
+broadcast of a `tl.join`ed pair is NOT faster (165.3 vs 163.7us/layer,
+regs 254 → 243). Same tensor, same values. The 31% that removing those
+loads exposes is mostly the *register* drop they enable (254 → 168, so
+2 → 3 CTA/SM), not the select ALU.
+
+**So the live prize is occupancy, not traffic**: 3 CTA/SM needs
+≤170 regs/thread and the kernel is at 254. The concrete route is
+folding K sc/zp into `qwT` once per group (a rank-1 correction term
+for the zp half) and splitting the QK dot per slice so `k_ot` never
+materialises in the (16, HD) domain — both reassociate, so they need
+allclose + KLD gates, not `torch.equal`, and they are a bigger change
+than anything attempted here. Ranked second: `nodeq` (12.0%, the
+per-element scale math) rides along with the same fold.
+
+### 8.6 Collateral finding
+
+`test_promoted_serve_matches_eval_spike` fails on the box (4.5e-08 in
+one q-row) with the gate forced to legacy AND to v2 — pre-existing
+drift between the promoted kernel and the eval spike7 original it was
+copied from, not any cut in this task. Four more twins fail when the
+run inherits `EXL3_KVARN_IMAGELESS=1` / `EXL3_KVARN_GRAPH=1` (they
+test the store/image paths and do not set those themselves); identical
+at every serve-groups cap, so also pre-existing. Run the twin suite
+WITHOUT the protocol env. Both want a separate cleanup.
+
+Spike artifacts (never committed): `eval/_spike9_serve_bill.py`,
+`eval/_spike9_ab.py`, `eval/_spike9_dbg.py`, `eval/_spike9_dbg2.py`,
+`eval/_spike9*.bat`, mirror logs `spike9_bill*.log`, `t7_*.log`.
