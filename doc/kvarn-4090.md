@@ -1323,7 +1323,9 @@ checkpoints.
 
 ### Qwen3.8-Flash-Next 2.05bpw (Qwen4Exp) — kvarn bring-up 2026-10-04
 
-`D:\llms\Qwen3.8-Flash-Next-exl3-2.05bpw`, kvarn4, `wip/kvarn-cache` @`1b84690`,
+`D:\llms\Qwen3.8-Flash-Next-exl3-2.05bpw`, kvarn4, code as of
+`wip/kvarn-cache` @`1b84690` (the tip these runs were made on; the ledger
+commits below are the only later changes and are docs-only),
 RTX 4090 sm_89, Windows native (WSL2 side only launches + guards). Weights
 33.93GB on disk (5 shards + index), plus a 26.2GB `ngram_embedding.safetensors`
 MTP asset that is EXCLUDED here (no draft path). Decode/prefill are
@@ -1369,13 +1371,44 @@ Triton gate passes: `head_dim` 256 is in `KVAR_N_SUPPORTED_HEAD_DIMS`
 `(128, 256, 512)`, `kvarn_triton_available()` True under
 `EXL3_KVARN_TRITON=1`.
 
-#### Phase 0.3 — load test: PASS
+#### Phase 0.3 — load test: PASS (both cache types)
 
-`-mcl 38`, cuda:0: load ok in 23-24s, 14.11GB allocated / 14.49GB reserved
-after load, 52 modules on `cuda:0` + 1 on `cpu`. One 512-ctx forward:
-logits `(1, 512, 248320)` float16, peak 14.94GB, no arch error, no missing
-kernel, no OOM. Windows free RAM 44.6GB before load -> 17.4GB with the CPU
-MoE arena up (~27GB for 38 offloaded layers) -> 16.4GB after teardown.
+`--help` on `eval/kvarn_microkld.py` first, per plan §0: it confirms
+`-cq`, `-ref {fp16,q8,q4}` and `-mcl/--moe_cpu_offload` ("Offload first N
+block-sparse MoE layers to CPU") exactly as the plan assumed.
+
+The plan asks for the load test on an **fp16** cache, so both were run
+(`-mcl 38`, cuda:0, 512-ctx forward):
+
+| cache | load | allocated / reserved after load | 512-ctx forward | peak | min-free | guard |
+|---|---|---|---|---|---|---|
+| fp16 (`CacheLayer_qsa` x12) | 23.3s | 14.09 / 14.47GB | logits `(1, 512, 248320)` fp16 | 14.92GB | 8689MiB | 0 (no kill) |
+| kvarn4 (`CacheLayer_kvarn_qsa` x12) | 23.0s | 14.11 / 14.49GB | logits `(1, 512, 248320)` fp16 | 14.94GB | 8667MiB | 0 (no kill) |
+
+No arch error, no missing kernel, no OOM in either. 52 modules on `cuda:0`
++ 1 on `cpu`; 37 recurrent states (`GDNLayerState` x36 + `PLELayerState`).
+Per-layer shapes (the plan's "prints shapes"), probed with
+`Module.get_tensors()` (exllamav3 `Module` has no `named_parameters`):
+
+| layer | module | cache class | tensors | on cpu |
+|---|---|---|---|---|
+| 0 | `GatedDeltaNet` | `GDNLayerState` | 20 | 3 |
+| 3 | `Attention` | `CacheLayer_kvarn_qsa` | 20 | 4 |
+| 4 | `GatedDeltaNet` | `GDNLayerState` | 20 | 3 |
+| 47 | `Attention` | `CacheLayer_kvarn_qsa` | 6164 | 1540 |
+
+The 20-vs-6164 gap is the offload prefix, not a difference in block shape:
+`-mcl 38` offloads layers **0..37**, and a CPU-offloaded MoE layer keeps no
+expert tensors on its module tree at all, so layers 0/3/4 report only their
+attention/GDN projections. Layer 47 sits outside the prefix and reports
+6144 = 512 experts x 12 tensors on top of the same 20. Exactly 2 submodules
+per block are not introspectable — the `GatedResidual` hyper-connections,
+whose fp16 source weights are released after load by design; the dump reports
+them instead of hiding the skip.
+
+Windows free RAM 44.8GB before load -> 17.2GB with the CPU MoE arena up
+(~27GB for 38 offloaded layers) -> 16.3GB after teardown. Never near the
+1GB RAM kill line.
 
 #### Phase 3.1 — offload calibration (ran BEFORE the KLD gates)
 
@@ -1424,15 +1457,32 @@ own `max_memory_allocated` per phase (standing rule: no number without its
 peak). Prefill column is wall time only — offload-bound, not a throughput
 claim.
 
-| ctx | ref | mcl | ref prefill / peak | kvarn prefill / peak | KLD med / mean / max | p99 | same-top | fits |
-|---|---|---|---|---|---|---|---|---|
-| 2048 | fp16 | 32 | 3.1s / 20.9GB | 2.0s / 20.9GB | 2.0e-5 / 1.17e-4 / 1.55e-3 | 1.45e-3 | 100.00% | yes |
-| 8192 | fp16 | 36 | 5.0s / 19.8GB | 4.1s / 19.6GB | 8e-6 / 3.3e-5 / 4.78e-4 | 4.66e-4 | 100.00% | yes |
-| 8192 | q8 | 36 | 5.3s / 19.7GB | 4.0s / 19.6GB | 1.7e-5 / 7.9e-5 / 1.88e-3 | 1.29e-3 | 100.00% | yes |
-| 32768 | fp16 | 37 | 13.5s / 20.1GB | 13.8s / 19.3GB | 1.1e-5 / 3.7e-5 / 6.19e-4 | 3.53e-4 | 100.00% | yes |
-| 65536 | fp16 | 39 | 25.5s / 20.1GB | 27.5s / 18.5GB | 6e-6 / 2.0e-5 / 2.64e-4 | 2.12e-4 | 100.00% | yes |
-| 131072 | fp16 | 42 | 50.9s / 20.8GB | 57.3s / 17.3GB | 4e-6 / 1.2e-5 / 1.14e-4 | 1.13e-4 | 100.00% | yes |
-| 131072 | q8 | 42 | 52.8s / 19.3GB | 57.5s / 17.3GB | 5e-6 / 1.3e-5 / 2.48e-4 | 1.44e-4 | 100.00% | yes |
+Per-cell columns are the plan §4.4 set: peak allocated, min-free, OOM/kill
+Y/N, KLD same-top. `min-free` is the guard's minimum over the whole run
+(range across repeats); "kill" rows are the OOM boundary one step below the
+SPEED config, measured with the same command.
+
+| ctx | ref | mcl | ref prefill / peak | kvarn prefill / peak | min-free (MiB) | OOM/kill | KLD med / mean / max | p99 | same-top | fits |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2048 | fp16 | 32 | 3.1s / 20.9GB | 2.0s / 20.9GB | 687-893 | N | 2.0e-5 / 1.17e-4 / 1.55e-3 | 1.45e-3 | 100.00% | yes |
+| 2048 | fp16 | 31 | 3.0s / 21.4GB | 1.9s / 21.4GB | **173** | **Y** | 4.3e-5 / 1.52e-4 / 2.97e-3 | - | (100.00%) | **no** |
+| 8192 | fp16 | 36 | 5.0s / 19.8GB | 4.1s / 19.6GB | 479-1175 | N | 8e-6 / 3.3e-5 / 4.78e-4 | 4.66e-4 | 100.00% | yes |
+| 8192 | fp16 | 35 | 5.0s / 20.4GB | 4.1s / 20.3GB | **101** | **Y** (1 of 3) | 2.7e-5 / 8.5e-5 / 1.79e-3 | 1.03e-3 | (100.00%) | **no** |
+| 8192 | q8 | 36 | 5.3s / 19.7GB | 4.0s / 19.6GB | 1283 | N | 1.7e-5 / 7.9e-5 / 1.88e-3 | 1.29e-3 | 100.00% | yes |
+| 8192 | fp16 | 38 | 5.1s / 18.7GB | 4.2s / 18.5GB | 1581 | N | 1.6e-5 / 8.9e-5 / 1.05e-3 | 7.59e-4 | 100.00% | yes |
+| 32768 | fp16 | 37 | 13.5s / 20.1GB | 13.8s / 19.3GB | 835-1479 | N | 1.1e-5 / 3.7e-5 / 6.19e-4 | 3.53e-4 | 100.00% | yes |
+| 32768 | fp16 | 36 | - | - | **179** | **Y** | - | - | - | **no** |
+| 65536 | fp16 | 39 | 25.5s / 20.1GB | 27.5s / 18.5GB | 437-807 | N | 6e-6 / 2.0e-5 / 2.64e-4 | 2.12e-4 | 100.00% | yes |
+| 65536 | fp16 | 38 | - | - | **9** | **Y** | - | - | - | **no** |
+| 131072 | fp16 | 42 | 50.9s / 20.8GB | 57.3s / 17.3GB | 463-491 | N | 4e-6 / 1.2e-5 / 1.14e-4 | 1.13e-4 | 100.00% | yes |
+| 131072 | q8 | 42 | 52.8s / 19.3GB | 57.5s / 17.3GB | 1995 | N | 5e-6 / 1.3e-5 / 2.48e-4 | 1.44e-4 | 100.00% | yes |
+| 131072 | fp16 | 41 | - | - | **9** | **Y** | - | - | - | **no** |
+
+Parenthesised same-top values are from runs the guard killed after the KLD
+had already printed (the kill lands in teardown, so the number is real but
+the cell is disqualified on min-free). The 8192/`mcl` 38 row is the
+`PARITY=1` run (see below). No cell OOM'd on its own — every failure was the
+200MiB guard firing first, which is the intended failure mode.
 
 **same-top is 100.00% in every cell, at every ctx, against both fp16 and q8.**
 fp16 KV is 12 layers x 2 kv heads x 256 dim x 2 bytes x 2 (k+v) = 24576 B per
@@ -1518,10 +1568,21 @@ offloaded layers cost ~27GB, not 36GB.
    engages at the ctx tested here (<=131072).
 6. **`-mcl` is per-ctx, not one number** — 32 at 2k rising to 42 at 128k (§3.1
    table). Do not carry 38 across ctx.
+7. **§4.2 says "binary-search" the offload count; it had to be a ladder walk.**
+   The VRAM floor is not monotone in `mcl` (32768: 36 killed at 179MiB, 37 ->
+   1479MiB, 38 -> 927MiB), so bisection has no monotone predicate to cut on and
+   would converge on the wrong answer. Every cell was reached by walking, and
+   §4.2's "1 run + 1 confirm" was raised to 3+ repeats after `mcl` 34 and 35 at
+   ctx 8192 passed and were then killed. This is a strengthening of the plan's
+   own confirm step, not a loosening.
+8. **Phase 0.3's load test was run on both cache types**, not just the fp16 the
+   plan names — fp16 is the plan's literal gate, kvarn4 is the cache actually
+   under test, and the load-test spike is what proved the per-layer shape dump
+   (`get_tensors()`, since exllamav3 `Module` has no `named_parameters`).
 
 Raw evidence (all runs, guard min-free + Windows free-RAM before/after per
-run): `C:\Users\yoho\Downloads\exllamav3-kvarn\_fn_evidence\` (72 files).
-Harness used: `eval/kvarn_microkld.py` (committed); spikes
+run): `C:\Users\yoho\Downloads\exllamav3-kvarn\_fn_evidence\`. Harness used:
+`eval/kvarn_microkld.py` (committed, unmodified); spikes
 `eval/_spike12_audit.py` (audit), `_spike13_loadtest.py` (load test),
 `_spike15_kldctl.py` (noise-floor control), `_spike16_collect.py` (log ->
 TSV), plus `_fn_run.sh` / `_fn_calib.sh` and the
