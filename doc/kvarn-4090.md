@@ -394,6 +394,55 @@ worthwhile. Also note the isolated 52us/layer is ~50x off roofline for
 reduction chain (`tl.sum(where(roff==r, e, 0))` per r), not the tail
 DRAM round-trip. That loop, not the fusion, is where a future tail-side
 cut would have to aim.
+Sampler + terminal sync -- STOP (2026-10-03,
+`wiki/plans/task5-sample-in-graph.md`, no production code change; spike
+`eval/_spike11_sampler_bill.py`, log `t5_bill.log`). Measured in the
+SERVER path (real `Generator` + `Job`, greedy `ArgmaxSampler`, 65536-token
+prompt, protocol v3, 6 windows x 40 steps interleaved): **17.344 ms/step
+= 57.66 tok/s**. Host split per step: model forward **16.382 ms** (94%;
+of which 11.72 ms host dispatch + 4.66 ms blocked in the fused store's
+status readback), terminal `torch.cuda.synchronize` at
+`generator.py:1128` **0.667 ms** (exactly 1 per step), everything else
+0.245 ms (block-table/positions/input-id staging, sampler launch,
+`receive_sample`, requeue). Sampler device tail 0.024 ms.
+**The step is device-bound with zero slack**: adding 5 ms of pure-python
+spin at the step boundary (where the device is provably idle, the
+previous step having ended in a full sync) costs 5.01 ms of step time,
+not one microsecond absorbed. Therefore no host-side cut can recover host
+time. The plan's own ceiling settles it: deleting the terminal sync
+outright (illegal -- it feeds stale tokens) is worth **-0.283 ms/step =
++1.63%** (17.344 -> 17.061, 58.61 tok/s, consistent across all 6
+windows), and that is only reachable by the "LAST, hardest" attack
+(argmax in the graph + device-side input staging). Two ranked attacks
+are already closed: (a) "batch the `.item()` reads" EXISTS upstream at
+`generator.py:1102-1128` -- one pinned buffer, one synchronize per
+step -- and the 4 remaining token readbacks (`job.py:620/621/809/826`)
+cost 3.8 us/step total; (b) replacing the full sync with a stream-event
+wait is worth ~0, because the wait primitive is not the cost:
+`torch.cuda.synchronize` on an idle device is 3.9-4.1 us and a full
+kernel+sync round trip is 11.8 us on this box, so the 0.667 ms is the
+device still owing ~0.65 ms of real work -- the token is produced by
+kernels queued behind the forward on the same stream, so waiting for the
+token IS waiting for the forward. +1.63% is inside this box's own
+window-to-window spread (-22% seen in the same run) and only reachable
+behind a static-Philox RNG problem: the sampler seed is a host int
+(`job.py:578` -> `sampler/custom.py:1185-1190`). Do NOT re-propose
+sample-in-graph / terminal-sync removal. Premise corrections to the
+plan: the "~1.7 ms loop overhead above the model" pool is really 0.9 ms
+of which 0.283 ms is recoverable; `generator.py:670` is the DRAFT path,
+not the main greedy sample (that is `job.receive_logits`,
+`job.py:571-583`); `DefaultSampler` is at `sampler/presets.py:3`, not
+`job.py:166-168`. Two findings worth keeping, neither chased here: the
+largest single host-blocking item in a server decode step is the fused
+store's status readback at `kvarn_triton.py:502` -- **4.63 ms/step, 27%
+of the step**, 16 blocking `tolist()` per step, reached via
+`kvarn.py:2019 _store_rows` <- `kvarn.py:2986 update_kv_direct` <-
+`dispatch.py:259 _try_kvarn_graph_decode` (previously unnumbered in
+`wiki/reports/2026-10-02-tg64-host-bubbles.md`, which had flagged it
+HARD); and the SERVER harness measures 57.66 tok/s at 64k where the
+microkld ledger harness measures 47.8 for the same model/cache/protocol,
+so the ledger understates the server by ~20% and server-path work must
+be measured on the server harness.
 Note: KLD divergence trend across approximation cuts (mean
 1.7e-5 base -> 2.3e-5 Sinkhorn -> 3.2e-5 deferred seals @64k;
 max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,
