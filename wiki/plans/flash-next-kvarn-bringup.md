@@ -116,6 +116,20 @@ residency subject to min-free VRAM ≥200MB at every instant.
    same-top (parity cells only). Present as one table: ctx ×
    cache → peak / fits / KLD. 0-used before/after every run;
    warmed box. Peaks are per-run maxima: 1 run + 1 confirm.
+5. SYSTEM-RAM GUARD (hard rule, overrides everything: NEVER
+   risk exceeding 64GB box RAM — disk swap degrades the whole
+   machine semi-permanently, reboot territory, not a slow run).
+   The 33.93GB model puts ~36GB on CPU RAM at production
+   offload on a 64GB box plus WSL2's own share: headroom is
+   thin by construction, so every cell is a RAM cell too.
+   Before EVERY run: `(Get-CimInstance
+   Win32_OperatingSystem).FreePhysicalMemory` — ABORT unless
+   ≥2048MB free, no exceptions, no "probably fits". During the
+   run: kill at 1GB free, never wait for swap. After: record
+   free-RAM-before/after next to every VRAM peak. A cell with
+   VRAM green but RAM under 1GB is marked UNSAFE (same as OOM).
+   When in doubt between a bigger ctx and safety: take safety,
+   record the boundary, move on.
 
 ## 5. Non-goals + guards (binding, cf. task-6 plan §5/§5b)
 
