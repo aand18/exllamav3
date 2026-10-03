@@ -251,8 +251,15 @@ self-capture via `bc.run_bszN` / `BC_GatedMLP` (nested capture trips
 `exllamav3_ext/graph.cu:186`, exit 900), BCAttn declines on all 16
 kvarn layers, and the attn-layer capture is invalidated by the eager
 serve's host read at `dispatch.py:491`; store alone is 0.228ms/layer
-(3.50ms/step) and is host-sync bound. Verdict STOP + re-rank, details
-in `wiki/plans/task6-whole-layer-graphs.md` §8. Model is dense
+(3.50ms/step) and is host-sync bound. The one shape with a prize left
+-- two disjoint graphs per attn layer (project_qkv+rope / gate+o_proj,
+store+serve eager) -- was then BUILT and measured: 16/16 layers
+capture, bit-exact (region worst maxabs 0.0, re-verified over 10
+advancing steps x 16 layers), but worth only +0.041 ms/step =
+19.272 -> 19.231 ms (51.9 -> 52.0 tok/s in-process, ~48.0 projected on
+the 47.9 baseline) because the removed dispatches were already
+overlapped with the GPU. Verdict STOP + re-rank; details in
+`wiki/plans/task6-whole-layer-graphs.md` §8. Model is dense
 (GatedMLP), so the "MoE ~8ms" label above is really the dense exl3
 GEMV/GEMM path (measured 8.20ms).
 Note: KLD divergence trend across approximation cuts (mean
