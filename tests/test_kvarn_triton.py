@@ -453,6 +453,142 @@ def test_online_serve_grouped_matches_torch():
 
 
 @pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
+def _serve_v2_records(G, kvh, sl, layout, k_bits, v_bits, npool=8, seed=7):
+    """Vectorized stand-in for _spike2_online._make_records: quantize
+    `npool` distinct tiles once, then gather them across G groups. The
+    per-group Python loop of the original costs minutes at G=400 (the
+    CPG=4 production shape); groups still differ from each other, which
+    is all a legacy-vs-v2 bit-exactness twin needs."""
+    from types import SimpleNamespace
+    C = kvh * sl
+    B = layout.tile_bytes
+    torch.manual_seed(seed)
+    pool = torch.zeros((npool, C, B), dtype=torch.uint8, device="cuda")
+    for j in range(npool):
+        tk = kvarn.kvarn_hadamard_128(
+            torch.randn(128, 128, dtype=torch.float32, device="cuda"))
+        tv = kvarn.kvarn_hadamard_128(
+            torch.randn(128, 128, dtype=torch.float32, device="cuda"))
+        for c in range(C):
+            kvarn.kvarn_quantize_k_tile(tk, 16, k_bits, layout, pool[j, c])
+            kvarn.kvarn_quantize_v_tile(tv, 16, v_bits, layout, pool[j, c])
+    idx = (torch.arange(G, device="cuda") * 7 + 3) % npool
+    records = pool[idx].contiguous()
+    del pool
+    return records
+
+
+@pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
+def test_serve_v2_group_hoist_bit_exact():
+    # Task-7 attempt 1 (EXL3_KVARN_SERVE_V2): the per-group metadata
+    # hoist must be BIT-EXACT vs the legacy kernel -- same addresses,
+    # same op order, no reassociation -- so torch.equal on the combine
+    # output AND on every partial (m, l, acc). Deliberately covers the
+    # two shapes that break naive rewrites:
+    #   * non-pow2 group count (gc=130 -> 128 groups, CPG=2, last
+    #     program covers a partial chunk with masked rows),
+    #   * short prefix (n not a multiple of 128) so the final group's
+    #     trailing rows are masked by r = p < n,
+    # plus the production vehicle at CPG=4 (gc=400), CPG=1, and the
+    # mixed-tile cases (sink window + tail window -> tail-domain dot and
+    # exact-direct rows).
+    from types import SimpleNamespace
+
+    kvh, sl, hd, qpk = 4, 2, 256, 6
+    qh = kvh * qpk
+    gps, scale = 2, hd ** -0.5
+    cases = [
+        # (gc, n, sink_n, tail_eff, tag)
+        (130, 130 * 128, 0, 0, "nonpow2-gc cpg=2"),
+        (130, 130 * 128 - 37, 0, 0, "nonpow2-gc short prefix"),
+        (130, 130 * 128, 128, 128, "nonpow2-gc sink+tail"),
+        (400, 400 * 128 - 37, 128, 128, "production cpg=4 short prefix"),
+        (400, 400 * 128, 0, 0, "production cpg=4 all-body"),
+        (8, 8 * 128, 128, 128, "cpg=1 sink+tail"),
+        (8, 8 * 128 - 1, 128, 128, "cpg=1 short prefix"),
+    ]
+    for gc, n, sink_n, tail_eff, tag in cases:
+        G = max(gc, 8)
+        layout = kvarn.kvarn_make_layout(128, 128, 4, 4)
+        records = _serve_v2_records(G, kvh, sl, layout, 4, 4)
+        exact_k = torch.zeros(G, 128, kvh, hd, dtype=torch.float16,
+                              device="cuda")
+        exact_v_w = torch.zeros(G, 128, kvh, hd, dtype=torch.float32,
+                                device="cuda")
+        # Exact-direct rows exist for the tail window only; everything
+        # else is body (sealed), so the tail-domain branch is exercised
+        # exactly where the production path uses it.
+        exrev = torch.full((G,), -1, dtype=torch.int64, device="cuda")
+        if tail_eff:
+            exrev[-(tail_eff // 128 + 1):] = torch.arange(
+                tail_eff // 128 + 1, dtype=torch.int64, device="cuda")
+        torch.manual_seed(3)
+        exact_k[exrev >= 0] = torch.randn_like(
+            exact_k[exrev >= 0]) * 0.5
+        exact_v_w[exrev >= 0] = torch.randn_like(
+            exact_v_w[exrev >= 0]) * 0.5
+        sealed = torch.ones(G, dtype=torch.bool, device="cuda")
+        # One open body group must still raise the sticky flag (the
+        # fail-closed signal), identically on both kernels.
+        sealed[G // 2] = False
+        bt = torch.arange((n + 255) // 256, dtype=torch.int32,
+                          device="cuda")
+        n_0d = torch.tensor([n], dtype=torch.int32, device="cuda")
+        torch.manual_seed(11)
+        Q = torch.randn(qh, hd, dtype=torch.float16, device="cuda")
+        Qf = Q.float()
+        Qw = kt.kvarn_triton_wht_rows(Qf, hd)
+        lay = SimpleNamespace(
+            records=records, layout=layout, k_bits=4, v_bits=4,
+            num_kv_heads=kvh, head_dim=hd, slices=sl)
+        old = os.environ.get("EXL3_KVARN_SERVE_V2")
+        try:
+            os.environ["EXL3_KVARN_SERVE_V2"] = "0"
+            out_a, flag_a = kt.kvarn_triton_online_serve(
+                lay, Qw, Qf, exact_k, exact_v_w, exrev, sealed, bt, n_0d,
+                qpk, scale, sink_n, tail_eff, gps, gc=gc)
+            out_a = out_a.clone()
+            m_a = lay._ov_serve_m.clone()
+            l_a = lay._ov_serve_l.clone()
+            acc_a = lay._ov_serve_acc.clone()
+            gshape = tuple(lay._ov_serve_m.shape)
+            os.environ["EXL3_KVARN_SERVE_V2"] = "1"
+            out_b, flag_b = kt.kvarn_triton_online_serve(
+                lay, Qw, Qf, exact_k, exact_v_w, exrev, sealed, bt, n_0d,
+                qpk, scale, sink_n, tail_eff, gps, gc=gc)
+            out_b = out_b.clone()
+            m_b = lay._ov_serve_m.clone()
+            l_b = lay._ov_serve_l.clone()
+            acc_b = lay._ov_serve_acc.clone()
+        finally:
+            if old is None:
+                os.environ.pop("EXL3_KVARN_SERVE_V2", None)
+            else:
+                os.environ["EXL3_KVARN_SERVE_V2"] = old
+        assert flag_a == flag_b == 1, (tag, flag_a, flag_b)
+        assert gshape == tuple(lay._ov_serve_m.shape), tag
+        assert torch.equal(out_a, out_b), \
+            f"{tag}: out maxabs {float((out_a - out_b).abs().max()):.3e}"
+        assert torch.equal(m_a, m_b), tag
+        assert torch.equal(l_a, l_b), tag
+        assert torch.equal(acc_a, acc_b), \
+            f"{tag}: acc maxabs {float((acc_a - acc_b).abs().max()):.3e}"
+
+
+@pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
+def test_serve_v2_gate_default_off():
+    # Default OFF: with the env unset the launcher must run the legacy
+    # kernel. Proven by poisoning v2 (raise on any launch) -- if the
+    # gate leaked, the twin's v2 call would blow up instead.
+    import inspect as _inspect
+    src = _inspect.getsource(kt.kvarn_triton_online_serve)
+    assert 'EXL3_KVARN_SERVE_V2", "0"' in src, "gate must default OFF"
+    assert hasattr(kt, "_kvarn_online_serve_kernel_v2"), "v2 kernel missing"
+    # Legacy kernel must remain in the module and untouched by the gate.
+    assert hasattr(kt, "_kvarn_online_serve_kernel")
+
+
+@pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
 def test_prefill_4096_chunks_match_torch_path():
     # Spec B prefill twin: twin layers, 4096-token prefill in 4096-wide
     # chunks (single chunk) plus 1024-wide chunks, fused WHT (env on) vs

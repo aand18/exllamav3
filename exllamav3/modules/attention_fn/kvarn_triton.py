@@ -1796,6 +1796,271 @@ if _have_triton:
                  mask=qmask2[:, None])
 
 
+    # ------------------------------------------------------------------
+    # Serve v2 (task-7 attempt 1): per-GROUP metadata hoist. Env-gated
+    # EXL3_KVARN_SERVE_V2=1, default OFF, fail-closed on the launcher.
+    # Body-verbatim copy of _kvarn_online_serve_kernel with ONE change:
+    # the single tile loop becomes a (group, tile) nest, so the
+    # block-table gather and the three per-channel metadata vectors
+    # (K sc, K zp, V oth) are loaded once per 128-row group instead of
+    # once per 16-row tile -- 8x fewer, and provably the same values
+    # (a TOK=16 tile can never straddle a 128-row group).
+    # Bit-exact vs legacy: same addresses, same per-element op order, no
+    # reassociation. Rows masked out by r = p < n read a different
+    # in-bounds record address than the legacy pa=0 clamp gave them;
+    # every use of those rows is masked or discarded by the body/tail
+    # select, so the outputs are identical.
+    # ------------------------------------------------------------------
+    @triton.jit
+    def _kvarn_online_serve_kernel_v2(
+        qw_ptr, qf_ptr, rec_ptr, rec_f16_ptr,
+        exact_k_ptr, exact_v_ptr, exrev_ptr, sealed_ptr,
+        bt_ptr, n_ptr, flag_ptr,
+        m_ptr, l_ptr, out_ptr,
+        K_PAY_OFF, K_SC2, K_ZP2, K_OT2, K_BITS: tl.constexpr,
+        V_PAY_OFF, V_SC2, V_ZP2, V_OT2, V_BITS: tl.constexpr,
+        C: tl.constexpr, B: tl.constexpr, SL: tl.constexpr, GPS: tl.constexpr,
+        KVH: tl.constexpr, QPK: tl.constexpr, QPAD: tl.constexpr,
+        HD: tl.constexpr, GMAX: tl.constexpr, SCALE: tl.constexpr,
+        SINK_N: tl.constexpr, TAIL_EFF: tl.constexpr,
+        CPG: tl.constexpr, GROUPS: tl.constexpr,
+    ):
+        pid_h = tl.program_id(0)
+        pid_c = tl.program_id(1)
+        lane = tl.arange(0, HD)  # (HD,)
+        sl_c = lane // 128
+        dd_c = lane % 128
+        qoff = tl.arange(0, QPAD)  # (QPAD,)
+        qmask = qoff < QPK
+        qw = tl.load(qw_ptr + (pid_h * QPK) * HD + qoff[:, None] * HD
+                     + lane[None, :], mask=qmask[:, None], other=0.0)
+        qf = tl.load(qf_ptr + (pid_h * QPK) * HD + qoff[:, None] * HD
+                     + lane[None, :], mask=qmask[:, None], other=0.0)
+        qwT = tl.trans(qw.to(tl.float16))  # (HD, QPAD)
+        qfT = tl.trans(qf.to(tl.float16))
+        n = tl.load(n_ptr)
+        tail_start = n - TAIL_EFF
+        m = tl.full([QPAD], -1e30, dtype=tl.float32)
+        l = tl.zeros([QPAD], dtype=tl.float32)
+        acc = tl.zeros([QPAD, HD], dtype=tl.float32)
+    
+        tok = tl.arange(0, 16)  # TOK=16 rows/iter
+        # Hierarchical super-chunk: each program covers CPG chunks
+        # (CPG*128 rows) with one online state instead of one chunk per
+        # program. CPG=1 is exactly the old path (8 iters cover 128).
+        # Past-n tiles are no-ops via the r-mask (same mechanism as the
+        # old last-chunk partial tiles); the reduction order changes
+        # (tree of depth 2 vs flat: fp32 assoc noise only, allclose-gated).
+        kc = pid_h * SL + sl_c  # (HD,) col channel
+        for cg in tl.range(CPG):
+            # One group == 128 token slots == 8 TOK=16 tiles.
+            pa0 = (pid_c * CPG + cg) * 128
+            # Groups past n (the grid covers 8*CPG tiles regardless of n,
+            # exactly like the legacy loop) must not index past the block
+            # table or the records. Clamp the page index to the highest
+            # page the serve may touch and the group index to GMAX-1;
+            # both clamps are no-ops for a live group, and every value a
+            # dead group derives is discarded by the r / body masks.
+            bt_max = tl.maximum((n - 1) // 256, 0)
+            page0 = tl.load(bt_ptr + tl.minimum(pa0 // 256, bt_max))
+            g0 = tl.minimum(page0 * GPS + (pa0 % 256) // 128, GMAX - 1)
+            kf16_g0 = rec_f16_ptr + (g0 * C * B) // 2
+            k_sc0 = tl.load(kf16_g0 + (kc * B) // 2 + K_SC2
+                            + dd_c).to(tl.float32)  # (256,)
+            k_zp0 = tl.load(kf16_g0 + (kc * B) // 2 + K_ZP2
+                            + dd_c).to(tl.float32)
+            v_ot0 = tl.load(kf16_g0 + (kc * B) // 2 + V_OT2
+                            + dd_c).to(tl.float32)
+            # Fail-closed guard, evaluated once per group: the page of the
+            # group's last row must equal the page of its first. For a
+            # group inside n this is an identity (groups are 128-aligned,
+            # so pa0//256 == (pa0+127)//256), i.e. a 2-scalar-load
+            # invariant check rather than a heuristic; a partially live
+            # last group clamps and takes the per-row path below, which
+            # serves those tiles exactly as the legacy kernel does.
+            uniform = tl.load(bt_ptr + tl.minimum((pa0 + 127) // 256,
+                                                  bt_max)) == page0
+            for t in tl.range(8):
+                p = pa0 + t * 16 + tok  # (TOK,)
+                r = p < n
+                body = (p >= SINK_N) & (p < tail_start) & r
+                if uniform:
+                    # Group index and in-group slot are arithmetic here
+                    # (no block-table gather per tile).
+                    g = tl.zeros([16], dtype=tl.int32) + g0
+                    s = tl.zeros([16], dtype=tl.int32) + (t * 16 + tok)
+                else:
+                    pa = tl.where(r, p, 0)
+                    pg = tl.load(bt_ptr + pa // 256)
+                    offs = pa % 256
+                    g = pg * GPS + offs // 128  # (TOK,)
+                    s = offs % 128  # (TOK,)
+
+                # --- K tile 2D (TOK, HD), row-dependent gbase ---
+                kpay_row = rec_ptr + g * C * B + K_PAY_OFF  # (TOK,)
+                kf16_row = rec_f16_ptr + (g * C * B) // 2  # (TOK,)
+                # K value index: slot-major v6 store for all widths (v = s*128+dd;
+                # rows read coalesced). nibble path below for 4-bit, bit loop else.
+                vv = s[:, None] * 128 + dd_c[None, :]  # (16, HD) transposed
+                if K_BITS == 4:
+                    # Nibble fast path: value v occupies stream bits [4v,4v+4),
+                    # i.e. low/high nibble of byte v//2. One byte load per
+                    # element instead of 4 bit-loop loads. Matches the generic
+                    # LSB-first loop bit-for-bit (verified: even v -> low
+                    # nibble, odd v -> high nibble).
+                    nb = vv // 2
+                    nptr = (kpay_row[:, None] + kc[None, :] * B + nb)
+                    nbyte = tl.load(nptr).to(tl.int32)
+                    # uint8: values are 0-15 (bit-identical through the later
+                    # .to(fp32)), 4KB live instead of 16KB -> fewer regs/thread.
+                    qq = (((nbyte >> ((vv % 2) * 4)) & 0xF).to(tl.uint8))
+                else:
+                    qq = tl.zeros([16, HD], dtype=tl.int32)
+                    for i in tl.static_range(8):
+                        if i < K_BITS:
+                            b = vv * K_BITS + i
+                            ptr = (kpay_row[:, None] + kc[None, :] * B + b // 8)
+                            byteval = tl.load(ptr).to(tl.int32)
+                            qq += ((byteval >> (b % 8)) & 1) << i
+                sc_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + K_SC2
+                          + dd_c[None, :])
+                zp_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + K_ZP2
+                          + dd_c[None, :])
+                ot_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + K_OT2
+                          + s[:, None])
+                if uniform:
+                    # Per-slot K oth: 2 values/row (one per slice) -> where-expand
+                    # over sl_c. Bit-identical (same addresses, same op order).
+                    k_ot = tl.zeros([16, HD], dtype=tl.float32)
+                    for _sl in tl.static_range(4):
+                        if _sl < SL:
+                            _v = tl.load(kf16_g0 + ((pid_h * SL + _sl) * B) // 2
+                                         + K_OT2 + s).to(tl.float32)  # (16,)
+                            k_ot = tl.where(sl_c[None, :] == _sl, _v[:, None], k_ot)
+                    kk = (qq.to(tl.float32) * k_sc0[None, :]
+                          + k_zp0[None, :]) * k_ot  # (16, HD)
+                else:
+                    kk = (qq.to(tl.float32) * tl.load(sc_ptr).to(tl.float32)
+                          + tl.load(zp_ptr).to(tl.float32)) \
+                        * tl.load(ot_ptr).to(tl.float32)  # (16, HD)
+    
+                # --- exact-direct 2D tiles (orig-K / WHT-V) ---
+                # (V payload + ev deferred below the QK dots to halve peak live.)
+                es = tl.load(exrev_ptr + g)  # (TOK,)
+                ok_tail = (es >= 0) & (~body) & r  # (TOK,)
+                ek_ptr = (exact_k_ptr + (es[:, None] * 128 + s[:, None]) * KVH * HD
+                          + pid_h * HD + lane[None, :])
+                ek = tl.load(ek_ptr, mask=ok_tail[:, None], other=0.0)
+                k_tile = tl.where(body[:, None], kk, ek)  # open rows: r-masked below
+    
+                bad = body & (tl.load(sealed_ptr + g) == 0)
+                tl.store(flag_ptr, 1, mask=tl.sum(bad.to(tl.int32)) > 0)
+    
+                # --- MMA QK: (TOK,HD) @ (HD,QPAD) -> (TOK,QPAD), both domains ---
+                # Tail-domain dot only when the tile actually has non-body rows
+                # (all-body is the common case): saves 1 MMA/iter there.
+                sb = tl.dot(k_tile.to(tl.float16), qwT) * SCALE
+                nbody = tl.sum(body.to(tl.int32))
+                if nbody == 16:
+                    sc = tl.where(r[:, None], sb.to(tl.float32), float("-inf"))
+                else:
+                    st = tl.dot(k_tile.to(tl.float16), qfT) * SCALE
+                    # Unassigned tail rows (staging-fallback rows the torch tail
+                    # path serves): -inf, else their zero exact values would still
+                    # draw softmax weight and downscale real rows.
+                    st = tl.where(ok_tail[:, None], st, float("-inf"))
+                    sc = tl.where(body[:, None], sb.to(tl.float32),
+                                  st.to(tl.float32))
+                    sc = tl.where(r[:, None], sc, float("-inf"))
+    
+                smax = tl.max(sc, axis=0)  # (QPAD,)
+                m_new = tl.maximum(m, smax)
+                alpha = tl.exp(m - m_new)
+                e = tl.exp(sc - m_new[None, :])  # (TOK, QPAD)
+                l = l * alpha + tl.sum(e, axis=0)
+                # --- V side deferred here so K-side tiles (qq/kk/ek/k_tile, ~50KB
+                # live) are dead past the QK dots: peak live state roughly halves.
+                # Bit-identical: same addresses, same per-element op order.
+                vpay_row = rec_ptr + g * C * B + V_PAY_OFF  # (TOK,)
+                vv2 = s[:, None] * 128 + dd_c[None, :]
+                if V_BITS == 4:
+                    # Same nibble fast path as K (stream bits [4v,4v+4)).
+                    nbv = vv2 // 2
+                    nptrv = (vpay_row[:, None]
+                             + kc[None, :] * B + nbv)
+                    nbytev = tl.load(nptrv).to(tl.int32)
+                    # uint8 (see K side): 4KB live instead of 16KB.
+                    qqv = (((nbytev >> ((vv2 % 2) * 4)) & 0xF).to(tl.uint8))
+                elif V_BITS == 2:
+                    # Quad fast path (K4V2 vehicle): stream bits [2v,2v+2),
+                    # 4 values/byte, LSB-first exactly like the generic
+                    # bit loop below (value v lives at bits [2j,2j+2) of
+                    # byte j=vv2//4). One byte load per element instead of
+                    # 2 predicated bit-loop loads; bit-identical.
+                    qbv = vv2 // 4
+                    qptrv = (vpay_row[:, None]
+                             + kc[None, :] * B + qbv)
+                    qbytev = tl.load(qptrv).to(tl.int32)
+                    qqv = (((qbytev >> ((vv2 % 4) * 2)) & 0x3).to(tl.uint8))
+                else:
+                    qqv = tl.zeros([16, HD], dtype=tl.int32)
+                    for i in tl.static_range(8):
+                        if i < V_BITS:
+                            bv = vv2 * V_BITS + i
+                            ptrv = (vpay_row[:, None]
+                                    + kc[None, :] * B + bv // 8)
+                            byteval = tl.load(ptrv).to(tl.int32)
+                            qqv += ((byteval >> (bv % 8)) & 1) << i
+                vsc_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + V_SC2
+                           + s[:, None])
+                vzp_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + V_ZP2
+                           + s[:, None])
+                vot_ptr = (kf16_row[:, None] + (kc[None, :] * B) // 2 + V_OT2
+                           + dd_c[None, :])
+                if uniform:
+                    # Per-slot V sc/zp: (16,SL) loads + where-expand. Bit-identical.
+                    v_sc = tl.zeros([16, HD], dtype=tl.float32)
+                    v_zp = tl.zeros([16, HD], dtype=tl.float32)
+                    for _sl in tl.static_range(4):
+                        if _sl < SL:
+                            _s = tl.load(kf16_g0 + ((pid_h * SL + _sl) * B) // 2
+                                         + V_SC2 + s).to(tl.float32)  # (16,)
+                            _z = tl.load(kf16_g0 + ((pid_h * SL + _sl) * B) // 2
+                                         + V_ZP2 + s).to(tl.float32)
+                            _m = sl_c[None, :] == _sl
+                            v_sc = tl.where(_m, _s[:, None], v_sc)
+                            v_zp = tl.where(_m, _z[:, None], v_zp)
+                    vv_tile = ((qqv.to(tl.float32) * v_sc + v_zp)
+                               * v_ot0[None, :])
+                else:
+                    vv_tile = ((qqv.to(tl.float32) * tl.load(vsc_ptr).to(tl.float32)
+                                + tl.load(vzp_ptr).to(tl.float32))
+                               * tl.load(vot_ptr).to(tl.float32))
+                ev = tl.load(exact_v_ptr + (es[:, None] * 128 + s[:, None]) * KVH
+                             * HD + pid_h * HD + lane[None, :],
+                             mask=ok_tail[:, None], other=0.0)
+                v_tile = tl.where(body[:, None], vv_tile, ev)
+                # --- MMA EV via transposed form: (HD,TOK) @ (TOK,QPAD) = (HD,QPAD)
+                # M=256,N=8,K=16 hits m16n8k16; the old (QPAD,TOK) form had M=8
+                # (SIMT fallback suspect). Trans back and accumulate.
+                d = tl.dot(tl.trans(v_tile.to(tl.float16)),
+                           e.to(tl.float16))  # (HD, QPAD)
+                acc = acc * alpha[:, None] + tl.trans(d)
+                m = m_new
+    
+            qoff2 = tl.arange(0, QPAD)
+            qmask2 = qoff2 < QPK
+            # Partials strided by GROUPS (subgroup count), not GMAX: with
+            # CPG=1 (GROUPS==GMAX) this is bit-identical to the old layout.
+            tl.store(m_ptr + (pid_h * QPAD * GROUPS) + qoff2 * GROUPS + pid_c,
+                     m, mask=qmask2)
+            tl.store(l_ptr + (pid_h * QPAD * GROUPS) + qoff2 * GROUPS + pid_c,
+                     l, mask=qmask2)
+            tl.store(out_ptr + ((pid_h * QPAD * GROUPS) + qoff2[:, None] * GROUPS
+                                + pid_c) * HD + lane[None, :], acc,
+                     mask=qmask2[:, None])
+
+
 def _kvarn_serve_groups(gc):
     """Hierarchical subgroup count shared by serve and its callers.
 
@@ -1886,7 +2151,7 @@ def kvarn_triton_online_serve(layer, qw, Qf, exact_k, exact_v_w, exrev,
               f"exrev={int(exrev.sum())} sealed={int(sealed.sum())} "
               f"bt={int(bt.sum())} scale={scale} sink={sink_n} "
               f"tail={tail_eff} gps={gps} qpk={qpk}", flush=True)
-    _kvarn_online_serve_kernel[(kvh, groups,)](
+    _serve_args = (
         qw, Qf, records, rec_f16, exact_k, exact_v_w, exrev, sealed, bt,
         n_0d, flag, m, l, acc,
         layout.k_payload_off,
@@ -1896,8 +2161,25 @@ def kvarn_triton_online_serve(layer, qw, Qf, exact_k, exact_v_w, exrev,
         layout.v_s_row_off // 2, layout.v_zp_off // 2,
         layout.v_s_col_off // 2, v_bits,
         records.shape[1], records.shape[2], sl, gps,
-        kvh, qpk, qpad, hd, gc, scale, sink_n, tail_eff, cpg, groups,
-        num_warps=4, num_stages=1)
+        kvh, qpk, qpad, hd, gc, scale, sink_n, tail_eff, cpg, groups)
+    # Serve v2 (per-group metadata hoist, task-7 attempt 1): default OFF,
+    # kill-switch restores the legacy kernel by unsetting the env. Same
+    # arg tuple, same grid, same partials layout -- only the kernel body
+    # differs, and it is bit-exact. Fail-closed loud fallback on throw
+    # (triton compiles before it launches, so a throw means nothing ran):
+    # copy the _kvarn_launch_combine pattern.
+    if _os.environ.get("EXL3_KVARN_SERVE_V2", "0") == "1":
+        try:
+            _kvarn_online_serve_kernel_v2[(kvh, groups,)](
+                *_serve_args, num_warps=4, num_stages=1)
+        except Exception as _e:
+            print("KVARN-SERVE-V2 launch failed, legacy fallback: "
+                  f"{_e}", flush=True)
+            _kvarn_online_serve_kernel[(kvh, groups,)](
+                *_serve_args, num_warps=4, num_stages=1)
+    else:
+        _kvarn_online_serve_kernel[(kvh, groups,)](
+            *_serve_args, num_warps=4, num_stages=1)
     sscale = 1.0 if sl == 1 else (0.7071067811865475 if sl == 2 else 0.5)
     nbpad = 1 << (groups - 1).bit_length()
     _kvarn_launch_combine(
