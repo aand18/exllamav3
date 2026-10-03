@@ -213,14 +213,19 @@ correctness validation (asserts must stay green there). Protocol v3:
 perf runs PARITY=0 (+ GRAPH default), validation runs PARITY=1
 (either GRAPH setting); never compare across parity settings.
 
-| ctx (tok) | tg ours fp16 (tok/s) | tg ours kvarn4 (tok/s) | tg Bee kvarn4 (tok/s) | tg Bee f16 (tok/s) | ours/Bee (%) | KLD med/mean/max/p99 (unitless) | same-top (%) |
-|-----|--------------|----------------|---------------|------------|----------|----------------------|----------|
-| 8192 | 87.6 | 48.2 eager / 55.8 graph (was 40.8 parity-taxed; pre-serve-v2, re-measure) | **44.0** | 46.1 | 110% / 127% | 1e-6 / 1.8e-5 / 5.05e-4 / n/a | 100.00% |
-| 16384 | 82.2 | 46.8 eager (pre-serve-v2, re-measure) / 58.3 graph (+3.2% cap64) | **44.0** | 46.2 | 106% / 132% | 1e-6 / 1.1e-5 / 2.96e-4 / n/a | 100.00% |
-| 65536 | 62.2 | 46.8 eager / 52.2 graph (+9.0% serve-v2 + cap64) | **44.0** | 46.1 | 106% / 119% | 1e-6 / 2.8e-5 / 1.36e-3 / n/a | 100.00% |
-| 131072 | 47.1 | 35.2 graph (pre-serve-v2, re-measure; Bee tg@128k unknown) | n/a | n/a | n/a | 1e-6 / 5e-6 / 6.9e-5 / 4.9e-5 | 100.00% |
-Peak VRAM @64k, protocol v3 (microkld `peak` lines): prefill 19.0GB
-fp16 / 19.1GB kvarn4; decode 14.7GB / 15.3GB. Prefill-vs-decode gap
+| ctx (tok) | Bee IQ2 tg k4 / f16 (tok/s) | EXL3 fp16 tg (tok/s) | EXL3 kvarn4 graph (tok/s) | EXL3 kvarn4 eager (tok/s) | KLD med/mean/max (unitless) | same-top (%) |
+|-----|--------------|---------------|------------|----------|----------------------|----------|
+| 8192 | 80.79 / 88.39 | 87.6 | 58.9 | 47.2 | 1e-6 / 1.8e-5 / 5.05e-4 | 100.00% |
+| 16384 | 80.72 / 88.18 | 82.1 | 58.3 | 47.1 | 1e-6 / 1.1e-5 / 2.96e-4 | 100.00% |
+| 32768 | 80.96 / 88.30 | 75.6 | 55.5 | 46.4 | 1e-6 / 2.4e-5 / 5.22e-4 | 100.00% |
+| 65536 | 80.56 / 88.26 | 62.2 | 52.2 | 46.8 | 1e-6 / 2.8e-5 / 1.36e-3 | 100.00% |
+| 131072 | 80.60 / 88.29 | 47.1 (prior; q8 ref this round) | 44.9 hot (36.1 run1, spread noted) | 42.2 | 1e-6 / 5e-6 / 1.01e-4 (q8 ref) | 100.00% |
+Peak VRAM, protocol v3 (microkld `peak` lines, beebench cuda peaks):
+8k prefill 14.5/14.6GB, decode 10.3/10.6GB; 16k 15.2/15.2, 10.9/11.3;
+32k 16.4/16.5, 12.2/12.6; 64k 19.0/19.1, 14.7/15.3; 128k kvarn4
+prefill 19.3, decode 16.9 (q8 prefill 18.3, decode 16.1). Bee IQ2
+cuda peaks (pp): 8.93/9.26, 9.06/9.75, 9.35/10.75, 10.70/13.77,
+11.90/18.10GB @8/16/32/64/128k. Prefill-vs-decode gap
 is structural (chunk fp32 logits + full-ctx remat temps + allocator
 retention), NOT a leak — see research 2026-10-03. Standing rules
 (2026-10-03): (1) every box harness prints peak allocated per phase
@@ -547,12 +552,13 @@ fast path, protocol v2 hot-cache, chunk 8192 unless noted). Bee
 columns are external (beellama.cpp). Untagged older numbers predate
 versioning.
 
-| ctx (tok) | pp ours fp16 (s, tok/s) | pp ours kvarn4 (s, tok/s) | pp Bee kvarn4 (s, tok/s) | ours/Bee (%) |
-|-----|--------------|----------------|---------------|----------|
-| 8192 | 3.2s, ~2560 | 3.6s, ~2280 (was 3.75 parity-taxed) | **2.8s, 2946** | 78% |
-| 16384 | 6.3s, ~2586 | 7.1s, ~2300 (was 7.55 parity-taxed) | **5.8s, 2844** | 82% |
-| 65536 | 32.1s, ~2044 | 35.5s, ~1844 (was 40.0 parity-taxed) | **28.1s, 2336** | 79% |
-| 131072 | 198.1s, ~662 (chunk 4096; swap pressure) | 157.9s, ~830 (chunk 4096, warm-restart) | **69.5s, 1887** | 44% |
+| ctx (tok) | Bee IQ2 pp k4 / f16 (tok/s) | EXL3 fp16 pp (s, tok/s) | EXL3 kvarn4 pp (s, tok/s) |
+|-----|--------------|---------------|------------|
+| 8192 | 2919.6 / 3089.1 | 3.2s, 2555 | 3.6s, 2260 |
+| 16384 | 2820.6 / 2991.1 | 6.4s, 2574 | 7.1s, 2303 |
+| 32768 | 2628.1 / 2813.1 | 13.7s, 2391 | 15.2s, 2158 |
+| 65536 | 2321.4 / 2510.8 | 32.1s, 2044 | 35.5s, 1844 |
+| 131072 | 1881.7 / 2068.8 | 198.1s, ~662 (chunk 4096; swap pressure, artifact) | 100.2s, 1308 (chunk 4096; was 157.9, 4-run consistent) |
 
 Long-context degradation verdict (2026-09-30, code `f73271f`,
 chunk 8192, protocol v2): NO kvarn cliff. pp kvarn/fp16 slips
