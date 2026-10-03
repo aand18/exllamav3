@@ -1320,3 +1320,193 @@ checkpoints.
 | 4096 | kvarn5,kvarn4 | 0.000036 | 0.000366 | 0.007289 |
 | 8192 | kvarn4 | 0.000010 | 0.000048 | 0.000880 |
 | 8192 | kvarn5,kvarn4 | 0.000011 | 0.000122 | 0.005001 |
+
+### Qwen3.8-Flash-Next 2.05bpw (Qwen4Exp) — kvarn bring-up 2026-10-04
+
+`D:\llms\Qwen3.8-Flash-Next-exl3-2.05bpw`, kvarn4, `wip/kvarn-cache` @`1b84690`,
+RTX 4090 sm_89, Windows native (WSL2 side only launches + guards). Weights
+33.93GB on disk (5 shards + index), plus a 26.2GB `ngram_embedding.safetensors`
+MTP asset that is EXCLUDED here (no draft path). Decode/prefill are
+CPU-offload-bound by construction, so **no tok/s is quoted in this section** --
+per the plan, phases report "completed in Ns" only; raw tok/s stays in the
+box logs. Everything below is correctness + fit.
+
+`config.json` verified against the plan's §0 before anything ran: 48 trunk
+layers, `layer_types` 12 `full_attention` / 36 `linear_attention`
+(`full_attention_interval` 4), full indices `[3, 7, 11, 15, 19, 23, 27, 31,
+35, 39, 43, 47]`, `head_dim` 256, 24 q heads / 2 kv heads (qpk 12, qpad 16),
+`hidden_size` 2560, 512 experts x top-10, `max_position_embeddings` 262144.
+Extra vs the plan's §0: the 12 full-attention layers are **QSA** (indexer
+budget 2048, compress 4, 4 indexer heads x 1 kv head x 128) and the 36 linear
+layers are **GatedDeltaNet** (not plain SWA); there is one extra n-gram module
+`model.language_model.layers.1.ple` (`ple_layer_ids: [2]`, `hc_count` 4).
+
+#### Phase 1 — per-layer cache audit (the load-bearing check): PASS
+
+`Model.get_cache_layers()` = 12, `get_recurrent_layers()` = 37,
+`get_prefetch_layers()` = 1. Routing is decided by `caps` in
+`cache/cache.py:149` — `kv_cache` gets the requested layer type,
+`recurrent_cache` gets a state class — so `QSAIndexer` (which declares no
+caps) can never receive a KVarN cache layer. Measured, per layer:
+
+| declared | module | caps | cache class | verdict |
+|---|---|---|---|---|
+| `full_attention` (12x, idx 3..47 step 4) | `Attention` | `kv_cache` | `CacheLayer_kvarn_qsa` | **KVARN** |
+| `linear_attention` (36x) | `GatedDeltaNet` | `recurrent_cache` | `GDNLayerState` | decline |
+| n-gram (idx -2, `ple_layer_ids [2]`) | `PLELayer` | `recurrent_cache`, `prefetch_ids` | `PLELayerState` | decline |
+
+Bar: EXACTLY the 12 full-attention layers take kvarn, all 36 linear decline,
+zero indexer/unknown types take kvarn. **PASS** — kvarn set
+`[3,7,11,15,19,23,27,31,35,39,43,47]` == the `full_attention` set, 48/48 trunk
+indices covered, 0 unknown. fp16 reference for the same layers is
+`CacheLayer_qsa`, q8/q4 refs are the QSA-quant variants — KLD below is
+therefore kvarn-vs-QSA throughout, not kvarn-vs-dense.
+
+Per-kvarn-layer geometry (identical for all 12, `@maxtok 8192`):
+`head_dim` 256, `slices` 2, `num_kv_heads` 2, qpk 12, qpad 16, `ncols` 4,
+k/v 4/4 bits, `is_swa` False, `has_sink` True, `tail_effective` 128.
+Triton gate passes: `head_dim` 256 is in `KVAR_N_SUPPORTED_HEAD_DIMS`
+`(128, 256, 512)`, `kvarn_triton_available()` True under
+`EXL3_KVARN_TRITON=1`.
+
+#### Phase 0.3 — load test: PASS
+
+`-mcl 38`, cuda:0: load ok in 23-24s, 14.11GB allocated / 14.49GB reserved
+after load, 52 modules on `cuda:0` + 1 on `cpu`. One 512-ctx forward:
+logits `(1, 512, 248320)` float16, peak 14.94GB, no arch error, no missing
+kernel, no OOM. Windows free RAM 44.6GB before load -> 17.4GB with the CPU
+MoE arena up (~27GB for 38 offloaded layers) -> 16.4GB after teardown.
+
+#### Phase 3.1 — offload calibration (ran BEFORE the KLD gates)
+
+`--moe_cpu_offload N` = "run the routed experts of the **first N** of the 48
+block-sparse MoE layers on the CPU" (`block_sparse_mlp_cpu.py:97`); ineligible
+layers fall back to the GPU. Each offloaded layer returns ~630-700MiB of VRAM
+(measured 34 -> 48 = +8782MiB over 14 layers). Max useful N is 48 (every MoE
+layer offloaded) -> 12.7GB peak at ctx 8192, i.e. ~11.3GB of cache headroom
+is reachable. Guard: `smi_guard.py --min-free-mb 200` (200, not the usual
+100 -- overflow on a 33.93GB model is swap-thrash, not just OOM).
+
+Two calibration lessons, both load-bearing:
+
+1. **The VRAM floor is not monotone in `mcl`.** 32768: mcl 36 killed at
+   179MiB, mcl 37 -> 1479MiB, mcl 38 -> 927MiB. 8192: 34 -> 349MiB but
+   37 -> 1771MiB and 38 -> 1571MiB. Whole-layer offload moves VRAM in coarse
+   allocator slabs, so a ladder has to be *walked*, not extrapolated.
+2. **"1 run + 1 confirm" is not enough at this margin.** At ctx 8192, mcl 34
+   passed once (349MiB) then was killed at 25MiB; mcl 35 passed twice
+   (473, 491MiB) then was killed at 101MiB. mcl 36 passed 6/6. Every
+   SPEED cell below is therefore the lowest `mcl` that survived **3+ runs**.
+
+SPEED config (max GPU residency subject to min-free >= 200MiB at every
+instant), with the measured kill one step below it in each case:
+
+| ctx | SPEED `mcl` | min-free over n runs (MiB) | one step below | that cell |
+|---|---|---|---|---|
+| 2048 | 32 | 687-893 (3) | 31 | **KILL 173MiB** |
+| 8192 | 36 | 479-1175 (6) | 35 | KILL 101MiB (1 of 3) |
+| 32768 | 37 | 835-1479 (3) | 36 | **KILL 179MiB** |
+| 65536 | 39 | 437-807 (4) | 38 | **KILL 9MiB** |
+| 131072 | 42 | 463-491 (3) | 41 | **KILL 9MiB** |
+
+The plan's PARITY config (over-offload to buy fp16-KV headroom, §4.2) turned
+out to be **moot**: full fp16-KV fits at every ctx up to 131072 at the SPEED
+config already (see the map), so there is nothing to buy. `mcl` 38 -- the
+tabbyAPI serving reference (`config.yml cpu_moe_offload_layers: 38`, which is
+tuned for the 3.05bpw sibling) -- is exactly the 32768 SPEED cell; 8192 wants
+less (36) and 131072 wants more (42).
+
+#### Phase 2 + 3.2 — KLD parity and the VRAM map (kvarn4, QSA full-attn)
+
+`eval/kvarn_microkld.py`, chunk 4096 (2048 row: 2048, the plan's Phase-2
+command), fp16 ref unless noted, at the SPEED `mcl`. Peaks are the harness's
+own `max_memory_allocated` per phase (standing rule: no number without its
+peak). Prefill column is wall time only — offload-bound, not a throughput
+claim.
+
+| ctx | ref | mcl | ref prefill / peak | kvarn prefill / peak | KLD med / mean / max | p99 | same-top | fits |
+|---|---|---|---|---|---|---|---|---|
+| 2048 | fp16 | 32 | 3.1s / 20.9GB | 2.0s / 20.9GB | 2.0e-5 / 1.17e-4 / 1.55e-3 | 1.45e-3 | 100.00% | yes |
+| 8192 | fp16 | 36 | 5.0s / 19.8GB | 4.1s / 19.6GB | 8e-6 / 3.3e-5 / 4.78e-4 | 4.66e-4 | 100.00% | yes |
+| 8192 | q8 | 36 | 5.3s / 19.7GB | 4.0s / 19.6GB | 1.7e-5 / 7.9e-5 / 1.88e-3 | 1.29e-3 | 100.00% | yes |
+| 32768 | fp16 | 37 | 13.5s / 20.1GB | 13.8s / 19.3GB | 1.1e-5 / 3.7e-5 / 6.19e-4 | 3.53e-4 | 100.00% | yes |
+| 65536 | fp16 | 39 | 25.5s / 20.1GB | 27.5s / 18.5GB | 6e-6 / 2.0e-5 / 2.64e-4 | 2.12e-4 | 100.00% | yes |
+| 131072 | fp16 | 42 | 50.9s / 20.8GB | 57.3s / 17.3GB | 4e-6 / 1.2e-5 / 1.14e-4 | 1.13e-4 | 100.00% | yes |
+| 131072 | q8 | 42 | 52.8s / 19.3GB | 57.5s / 17.3GB | 5e-6 / 1.3e-5 / 2.48e-4 | 1.44e-4 | 100.00% | yes |
+
+**same-top is 100.00% in every cell, at every ctx, against both fp16 and q8.**
+fp16 KV is 12 layers x 2 kv heads x 256 dim x 2 bytes x 2 (k+v) = 24576 B per
+token, i.e. ~24MB per 1k tokens -- so ~0.20GB @8k, 0.81GB @32k, 1.6GB @64k,
+3.2GB @131072 (plus QSA indexer planes) -- it fits everywhere <=131072, so the
+plan's q8 fallback never has to fire and q4 is not needed as a fit-enabler at
+all.
+
+#### The `mean < 1e-4` bar is below this box's noise floor
+
+Both microkld arms share the CPU-offloaded MoE experts (8-thread GEMM,
+`EXL3_MOE_CPU_THREADS=8`), whose reduction order is not run-stable, so part of
+every KLD here is offload nondeterminism rather than cache format. Measured
+directly with a bit-identical comparison (`_spike15_kldctl.py`, kvarn4 vs
+kvarn4, ctx 8192, separate processes so load-to-load variation is included):
+
+| control sample | median | mean | max | same-top |
+|---|---|---|---|---|
+| mcl 36, run 1 | 1.0e-5 | 2.5e-5 | 4.04e-4 | 100.00% |
+| mcl 36, run 2 | 2.4e-5 | 4.8e-5 | 3.33e-4 | 100.00% |
+| mcl 36, run 3 | 1.3e-5 | 5.5e-5 | 1.03e-3 | 100.00% |
+| mcl 34, runs 1-5 | 1.0e-5-1.8e-5 | 4.2e-5-1.41e-4 | 4.56e-4-3.34e-3 | 100.00% |
+
+The floor's mean reaches **1.41e-4 with a bit-identical comparison**, i.e. the
+plan's `mean < 1e-4` gate sits *inside* the noise distribution and cannot be
+met by construction on this box at this scale. The defensible gate here is
+**same-top 100%** (holds universally) plus KLD within the noise floor — which
+the kvarn-vs-fp16 and kvarn-vs-q8 rows do, and which is also why the 3.05bpw
+rows above (mean 8.2e-4 @400, 5.2e-4 @4096) should be read as "same-top 100%,
+mean in the offload-noise band", not as a cache-format ranking. No kernel or
+harness change is warranted by this; it is a measurement-resolution limit.
+
+`PARITY=1` @8192, `mcl` 38: **clean** — every Triton call asserts against its
+torch twin, exit 0, no trips, KLD med 1.6e-5 / mean 8.9e-5 / same-top 100.00%,
+min-free 1581MiB. So the fused Triton path is bit-verified against torch on a
+new architecture (`head_dim` 256, 12 QSA layers, 2 kv heads). Note it needs
+real headroom: at `mcl` 34 the parity twins do not fit and the guard killed the
+run at 25MiB.
+
+#### System-RAM guard (hard rule) — no cell UNSAFE
+
+Every run was gated on Windows free physical RAM >= 2048MB before launch and
+logged after. Observed range before: 26.2-45.7GB (floor never approached);
+worst after-run value 19.6GB (`mcl` 41 kill, process torn down mid-run). The
+64GB box never went near the 1GB kill line, so no VRAM-green cell is RAM-unsafe.
+The plan's "~36GB on CPU RAM at production offload" is pessimistic for this
+model: the CPU MoE arena is slot-bounded (`EXL3_MOE_CPU_SLOTS=4`), so 44
+offloaded layers cost ~27GB, not 36GB.
+
+#### Deviations from the bring-up plan (all recorded, none blocking)
+
+1. **§3.2 `mean < 1e-4` is unmeasurable here** — see the noise-floor table.
+   Same-top 100% is the gate actually used.
+2. **§4.2's PARITY config is unnecessary** — fp16-KV fits at every ctx <=131072
+   at the SPEED config, so there is no headroom to buy with over-offload.
+3. **§4.3's "fp16 KV at 131072 ~8.6GB-class" is wrong for this model** (that
+   figure is the 27B's). Measured 3.2GB-class + indexer planes; fp16 fits
+   cleanly at 131072 and was NOT forced.
+4. **§4.1's MoE env is 7 vars, 5 of them live here.** `EXL3_MOE_MEMOPS=0`
+   (WDDM workaround, default is 1) and `EXL3_MOE_STREAM_T=6` /
+   `_BATCH_EXPERTS=48` / `_CPU_THREADS=8` / `_CPU_SWIZZLE=1` are read by the
+   code; `EXL3_MOE_CPU_PIN` and `EXL3_MOE_ZERO_COPY` are **not read anywhere in
+   this tree** (no-ops — harmless, exported anyway to keep the reference exact).
+5. `output_chunking: true` and `rope auto/YaRN` are tabbyAPI-server settings
+   with no counterpart in the eval harness; `rope_scale` is 1.0 in the serving
+   reference and `max_position_embeddings` is 262144, so auto-YaRN never
+   engages at the ctx tested here (<=131072).
+6. **`-mcl` is per-ctx, not one number** — 32 at 2k rising to 42 at 128k (§3.1
+   table). Do not carry 38 across ctx.
+
+Raw evidence (all runs, guard min-free + Windows free-RAM before/after per
+run): `C:\Users\yoho\Downloads\exllamav3-kvarn\_fn_evidence\` (70 files).
+Harness used: `eval/kvarn_microkld.py` (committed); spikes
+`eval/_spike12_audit.py` (audit), `_spike13_loadtest.py` (load test),
+`_spike15_kldctl.py` (noise-floor control), `_spike16_collect.py` (log ->
+TSV), plus `_fn_run.sh` / `_fn_calib.sh` / `_spike1{3load,4kld,5ctl}.bat`
+runners -- all untracked.
