@@ -9,6 +9,11 @@ fallbacks reproduce legacy).
 
 - Seal-direct fast path: pp 5.2 -> 4.0s. Hierarchical serve: tg@64k
   34 -> 35.1. Decode graphs: tg 48.2 -> 57.8 @8k. Host trims.
+- Shipped neutral, kept as structural unlocks (2026-10-02/03):
+  combine WHT-split (`90074b7`, 47.5 vs 47.8), n-mirror (`c50905e`,
+  47.9 vs 47.8), longskip (`633660b`, 47.8 vs 47.9). All green
+  (twin/KLD/PARITY), all ~0%: the step is dispatch-throughput-bound,
+  not sync- or conversion-bound (see tg wall below).
 - Rejected with reasons (do not re-propose without new evidence):
   MMA floor (neutral), fused tail-QK (SIMT vs MMA loss), inductor
   seal (inexact), flat-32 groups (-4%), tail v2 (+0.1%).
@@ -39,6 +44,50 @@ layer / chunk. Design queued (subagent B).
 Per feasibility study: graph WHT + vectorized store-scatter per
 chunk size; seal core stays eager. Whole-chunk graph rejected
 (dozens of shapes, pressure storms). Queued behind 1-2.
+
+## tg@64k wall (2026-10-03, measured)
+
+tg@64k graph 47.9 (21ms/step). Online-path Kineto, 5 steps: device
+~16.4ms (MoE exl3 GEMV/GEMM ~8ms inherent, serve 4.5ms, tail 0.8ms,
+combine 0.28ms), host cpu_op wall 23.4ms = the full wall (~3000
+aten calls/step, no fat host function, syncs are cheap polls).
+Device ceiling with a free host: 16.4ms = ~61 tok/s. Three
+host/dispatch cuts measured neutral (above): piecemeal is done.
+
+## 4. Tail + merge fusion (tg device, +0.5-1%, S effort)
+
+Tail-reduce (0.8ms) + torch gap + merge in one kernel on the `(qh,)`
+grid; bmm stays torch (per `2026-09-30-fused-decode.md:24`). Kills
+1 launch/layer + ~50KB/layer round-trips. Do first: smallest,
+stacks with the split combine (stable merge input layout).
+
+## 5. Sample-in-graph (tg host, ~+0.5ms, M effort)
+
+Argmax/sample inside the captured graph; host receives only the
+finished token. Kills the terminal step-boundary serialization
+(sampler is already 1-sync; this removes the orchestration around
+it). Needs sampler + capture interlock design.
+
+## 6. Whole-layer / whole-step graphs or torch.compile (tg host,
+biggest prize, L effort)
+
+The only attack on the actual bottleneck (dispatch throughput):
+capture the entire layer (attn + MLP + norms + recurrent) or the
+whole model step so ~3000 dispatches collapse into replays.
+Scope: all 48 layers incl. GDN/recurrent + MoE routing, static
+shapes/addresses, control flow (seal/evict/pressure fallbacks stay
+eager). Risk medium-high (staleness bugs; replay itself is
+bit-exact, failures mostly loud). Prize: the 5-7ms host gap,
+i.e. the road from 48 toward 61 tok/s.
+
+## 7. Serve traffic/compute surgery (tg device 4.5ms, HIGH RISK)
+
+Serve reads + dequantizes all 64k KV/layer/step at ~220GB/s
+effective. Cutting traffic/compute is the biggest device prize,
+but perf can go BACKWARDS: flat-32 lesson (-4% from CTA
+underfill). Requires occupancy-preserving redesign + a Kineto
+iteration loop per attempt. Attempt only with dedicated box time;
+do not interleave with 4-6.
 
 ## Deliberately not pursued
 
