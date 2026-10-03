@@ -238,6 +238,23 @@ _touch_batch early-out before conversions (~96 .long()/step in
 Kineto); tg@64k graph 47.8 hot vs 47.9 (neutral -- host dispatch
 count is not the binding constraint either). KLD identical,
 PARITY=1 @8k clean (41.3 tok/s, asserts green).
+Task-6 phase-0 spike (2026-10-03, `eval/_spike8_layer.py`, no code
+change): post-graphs device busy @64k measured for the first time --
+16.51ms/step over 1682 kernels (kvarn serve 4.46, exl3 GEMV/GEMM
+8.20, tail 0.78, combine 0.40, GDN 0.53) vs 19.27ms in-process wall
+(51.9 tok/s, argmax loop) -> host bubble 2.77ms/step = 14.4% of
+wall, device ceiling 60.6 tok/s in-process. Closes open question 1
+of `wiki/reports/2026-10-02-tg64-host-bubbles.md`: the remaining
+host-side pool is 2.77ms, not the 4-7ms the ranking assumed. Whole-
+layer graph capture is NOT viable: GDN and GatedMLP decode already
+self-capture via `bc.run_bszN` / `BC_GatedMLP` (nested capture trips
+`exllamav3_ext/graph.cu:186`, exit 900), BCAttn declines on all 16
+kvarn layers, and the attn-layer capture is invalidated by the eager
+serve's host read at `dispatch.py:491`; store alone is 0.228ms/layer
+(3.50ms/step) and is host-sync bound. Verdict STOP + re-rank, details
+in `wiki/plans/task6-whole-layer-graphs.md` §8. Model is dense
+(GatedMLP), so the "MoE ~8ms" label above is really the dense exl3
+GEMV/GEMM path (measured 8.20ms).
 Note: KLD divergence trend across approximation cuts (mean
 1.7e-5 base -> 2.3e-5 Sinkhorn -> 3.2e-5 deferred seals @64k;
 max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,
