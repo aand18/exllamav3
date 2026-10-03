@@ -48,6 +48,10 @@ fail-closed (project law).
 
 ## 1. Read this first (no code until done)
 
+**STATUS: DONE** — merge kernel/wrapper `kvarn_triton.py:1111`/`:1154`,
+tail kernel/wrappers `:1186`/`:1232`, eager sequence + persistent
+buffers `dispatch.py:~540-610`, capture `dispatch.py:377-399`.
+
 1. `kvarn_triton.py:1079-1153` (merge kernel + wrapper: exact
    input/output contract you must preserve).
 2. `kvarn_triton.py:1193-~1310` (tail kernel + `tail_reduce` +
@@ -63,19 +67,33 @@ fail-closed (project law).
 
 ## 2. Phase 0 — premise check + STOP gate (no kernel edits)
 
+**STATUS: RAN. Gate resolved YES (eager is real traffic), bar FAILED →
+STOP. Numbers in §6; the spike is bit-exact but 4.5% slower eager.**
+
 1. Eager `@64k`: `EXL3_KVARN_GRAPH=0` microkld pair (protocol §6
    of task-6 plan). Confirm eager baseline ~44.
+   → **DONE: 46.8 / 46.7 tok/s, not ~44** (see §6.1).
 2. If the maintainer says eager is irrelevant (graph is default
    ON and staying ON): STOP HERE, write the skip note into
    `doc/kvarn-4090.md` (2 lines: why fused-eager can't move graph
    tg), do not write a kernel. Done.
+   → **NOT this branch.** Maintainer answered no: eager is live
+   traffic (tabbyAPI `max_batch_size: 2`), so Phase 0 continued.
 3. Otherwise spike (`eval/_spike10_tailmerge.py`, never commit):
    hand-fuse tailred+merge for ONE layer on synthetic inputs,
    verify `torch.equal` vs separate launches (same order = exact
    expected), measure per-call delta. Bar: ≥0.5% eager-step win
    projected, else STOP.
+   → **DONE, and the bar is what stopped it.** `torch.equal` True
+   (maxabs 0.0) as predicted, but the projected win is **+0.15%**
+   (device +1.85us/layer x 16 = 30us of a 19.7ms step), and the
+   interleaved end-to-end A/B is **−4.5%**. STOP taken.
 
 ## 3. Phase 1 — production (only after §2 bar passes)
+
+**STATUS: NOT RUN — barred by §2.3. Nothing below was written. No
+kernel, no wrapper, no `EXL3_KVARN_TAILMERGE` gate, no twin test
+exists in the tree. Do not start this section; see §6.5.**
 
 - New kernel `_kvarn_online_tailmerge_kernel` beside merge
   (do NOT edit the existing kernels: fallback needs them).
@@ -103,6 +121,12 @@ add`, never `git add -A`. Spikes untracked, one atomic commit
 for the cut + one for the ledger lines.
 
 ## 5. Done means
+
+**STATUS: MET via the second branch — "documented SKIP / revert with
+the measured number". Nothing was reverted (no code was ever
+written); the measured number is recorded in `doc/kvarn-4090.md`
+and §6. The twin / KLD / PARITY gates do not apply: they gate a cut,
+and there was no cut.**
 
 Eager hot ≥45 (≈+2%) with twin + KLD + PARITY green, ledger
 entry, pushed — or documented SKIP / revert with the measured
@@ -182,9 +206,9 @@ loses. Take the interleaved end-to-end A/B as the decider, always.
 52.4us/layer to read 1.25MB is ~50× off roofline. The cost is the tail
 kernel's **serial `for r in tl.range(R)` reduction chain** —
 `er = tl.sum(tl.where(roff == r, e, 0.0))` recomputes a full RPAD-wide
-reduction once per row, R=256 times
-(`kvarn_triton.py:1182`, `_kvarn_online_tail_kernel`). Not the
-tail-stat DRAM round-trip this task targeted. A future tail-side cut
+reduction once per row, R=256 times — `kvarn_triton.py:1225`, inside
+`_kvarn_online_tail_kernel` (def `:1186`). Not the tail-stat DRAM
+round-trip this task targeted. A future tail-side cut
 should attack that loop (blocked reduction, or a `tl.dot` over
 `e × vt`); note a dot formulation reassociates, so it gates on allclose
 + KLD, **not** `torch.equal`.
