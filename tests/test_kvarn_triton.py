@@ -483,8 +483,12 @@ def test_serve_v2_group_hoist_bit_exact():
     # Task-7 attempt 1 (EXL3_KVARN_SERVE_V2): the per-group metadata
     # hoist must be BIT-EXACT vs the legacy kernel -- same addresses,
     # same op order, no reassociation -- so torch.equal on the combine
-    # output AND on every partial (m, l, acc). Deliberately covers the
-    # two shapes that break naive rewrites:
+    # output AND on every partial (m, l, acc). Partials are compared
+    # over the first QPK rows only: the QPAD-QPK tail rows are never
+    # written by either kernel (mask=qmask2), so they hold whatever the
+    # allocator left there and torch.equal on them is luck, not a
+    # property. Deliberately covers the two shapes that break naive
+    # rewrites:
     #   * non-pow2 group count (gc=130 -> 128 groups, CPG=2, last
     #     program covers a partial chunk with masked rows),
     #   * short prefix (n not a multiple of 128) so the final group's
@@ -548,18 +552,18 @@ def test_serve_v2_group_hoist_bit_exact():
                 lay, Qw, Qf, exact_k, exact_v_w, exrev, sealed, bt, n_0d,
                 qpk, scale, sink_n, tail_eff, gps, gc=gc)
             out_a = out_a.clone()
-            m_a = lay._ov_serve_m.clone()
-            l_a = lay._ov_serve_l.clone()
-            acc_a = lay._ov_serve_acc.clone()
+            m_a = lay._ov_serve_m[:, :qpk].clone()
+            l_a = lay._ov_serve_l[:, :qpk].clone()
+            acc_a = lay._ov_serve_acc[:, :qpk].clone()
             gshape = tuple(lay._ov_serve_m.shape)
             os.environ["EXL3_KVARN_SERVE_V2"] = "1"
             out_b, flag_b = kt.kvarn_triton_online_serve(
                 lay, Qw, Qf, exact_k, exact_v_w, exrev, sealed, bt, n_0d,
                 qpk, scale, sink_n, tail_eff, gps, gc=gc)
             out_b = out_b.clone()
-            m_b = lay._ov_serve_m.clone()
-            l_b = lay._ov_serve_l.clone()
-            acc_b = lay._ov_serve_acc.clone()
+            m_b = lay._ov_serve_m[:, :qpk].clone()
+            l_b = lay._ov_serve_l[:, :qpk].clone()
+            acc_b = lay._ov_serve_acc[:, :qpk].clone()
         finally:
             if old is None:
                 os.environ.pop("EXL3_KVARN_SERVE_V2", None)
@@ -576,16 +580,16 @@ def test_serve_v2_group_hoist_bit_exact():
 
 
 @pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
-def test_serve_v2_gate_default_off():
-    # Default OFF: with the env unset the launcher must run the legacy
-    # kernel. Proven by poisoning v2 (raise on any launch) -- if the
-    # gate leaked, the twin's v2 call would blow up instead.
+def test_serve_v2_gate_default_on():
+    # Default ON (box-green 2026-10-03), kill-switch =0. Both the gate
+    # string and the legacy fallback must stay in the launcher.
     import inspect as _inspect
     src = _inspect.getsource(kt.kvarn_triton_online_serve)
-    assert 'EXL3_KVARN_SERVE_V2", "0"' in src, "gate must default OFF"
+    assert 'EXL3_KVARN_SERVE_V2", "1"' in src, "gate must default ON"
     assert hasattr(kt, "_kvarn_online_serve_kernel_v2"), "v2 kernel missing"
-    # Legacy kernel must remain in the module and untouched by the gate.
-    assert hasattr(kt, "_kvarn_online_serve_kernel")
+    assert hasattr(kt, "_kvarn_online_serve_kernel"), "legacy kernel missing"
+    assert "KVARN-SERVE-V2 launch failed, legacy fallback" in src, \
+        "fail-closed loud fallback must stay"
 
 
 @pytest.mark.skipif(not _cuda_triton(), reason="needs CUDA + triton")
