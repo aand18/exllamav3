@@ -262,6 +262,40 @@ overlapped with the GPU. Verdict STOP + re-rank; details in
 `wiki/plans/task6-whole-layer-graphs.md` §8. Model is dense
 (GatedMLP), so the "MoE ~8ms" label above is really the dense exl3
 GEMV/GEMM path (measured 8.20ms).
+Serve v2 / per-group metadata hoist (2026-10-03, task-7 attempt 1,
+default OFF, kill-switch `EXL3_KVARN_SERVE_V2=0`): the serve tile loop
+becomes a (group, tile) nest, so the block-table gather and the three
+per-channel metadata vectors (K sc, K zp, V oth) load once per 128-row
+group instead of once per 16-row tile (8x fewer) -- a TOK=16 tile can
+never straddle a 128-row group, so the values are identical.
+Phase-0 bill (isolated serve @64k, differential ablation of 18 kernel
+variants, 7 interleaved windows): metadata loads are 54.0% of the
+222.8us/layer kernel, K+V payload reads 37.8%, dequant ALU 24.8%,
+exact-direct tail 13.4%, partials stores 3.2%, exp 5.9%, one extra MMA
+-1.5% (i.e. the tensor cores are NOT a cost -- §3 dot narrowing and
+exp fast paths have no prize). Serve kernel 222.8 -> 162.7 us/layer
+(-27%). Occupancy proof: grid 512 CTAs unchanged, regs/thread
+219 -> 254, spills 0, smem 16384B unchanged, CTA/SM 2 -> 2 (8 warps/SM,
+17%) -- preserved, so this is a win at constant occupancy, not a
+traffic-reduction illusion. (254 regs is one step from the 255 cliff
+that would halve CTA/SM; watch it if the body grows.)
+Gates: twin `test_serve_v2_group_hoist_bit_exact` 7 shapes
+(CPG=4 production, non-pow2 gc, short-prefix mask rows, sink+tail,
+CPG=1) bit-exact via `torch.equal` on out AND m/l/acc partials;
+KLD same-top 100.00%, mean 2.8e-5 < 1e-4, and *identical to 6 digits
+across arms* (the bit-exactness prediction); PARITY=1 @8k green both
+arms; CPU suite 85 passed / 14 skipped.
+Perf (64k, `-dec 256`): graph path, arms interleaved over 3 rounds --
+legacy 47.9 / 47.9 / 48.0 tok/s, v2 51.0 / 50.8 / 51.0 tok/s = **+6.5%**.
+Eager in-process alternating (one model load, gate flipped per window,
+6 x 32 steps, `eval/_spike9_ab.py`): 21.254 -> 19.970 ms/step = -6.0%,
+1505.6 -> 1604 tok/s. Note: this box has a +/-25% BETWEEN-PROCESS
+spread for identical code (expandable_segments is unsupported here, so
+each process lays the 64k cache out differently) -- one v2 graph run
+measured 39.3 tok/s against 50.8 for the same config. Single-process
+alternating A/B is the only reliable protocol here; both arms also
+show one ~25ms outlier window at the same step count (a periodic
+event, pre-existing, not this cut).
 Note: KLD divergence trend across approximation cuts (mean
 1.7e-5 base -> 2.3e-5 Sinkhorn -> 3.2e-5 deferred seals @64k;
 max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,
