@@ -332,17 +332,28 @@ failures the protocol env causes (EXL3_KVARN_IMAGELESS=1 /
 EXL3_KVARN_GRAPH=1 break four store/image twins that do not set those
 themselves) are pre-existing and not this cut -- run the twin suite
 WITHOUT the protocol env.
-Also negative, recorded so it is not re-proposed: rewriting the three
-per-slot metadata expansions (K oth, V sc, V zp) from SL selects each
-into a (16,2,128) broadcast of a joined pair -- same tensor, same
-values, no selects -- is NOT faster (165.3 vs 163.7 us/layer, regs
-254 -> 243). The 31% the `nopermeta` ablation attributes to those three
-loads is mostly the REGISTER drop they enable (254 -> 168, i.e. 2 ->
-3 CTA/SM), not the select ALU. The live prize is getting the kernel
-under ~170 regs/thread; the candidates are folding K sc/zp into
-`qwT` per group and splitting the QK dot per slice so `k_ot` never
-reaches the (16, HD) domain (both reassociate -> allclose + KLD
-gates, not bit-exact).
+Four more negatives, so nobody re-proposes them (all vs the same base of
+155.9 us/layer, one interleaved process). The six per-slot (16,)
+metadata loads (K oth, V sc, V zp x SL=2) are the largest section
+left -- `nopermeta` measures them at 43.4 us/layer = 0.70ms/step =
+27.9% -- and none of the five ways to get them out of the inner loop
+wins: rewriting the three (16, HD) expansions from SL selects each into
+a (16,2,128) broadcast of a joined pair (same tensor, same values)
++4.4us; unrolling the tile loop so the compiler can merge the eight
+adjacent 16-element chunks into one 256B load +88.7us with 124 spills;
+issuing the six loads one tile ahead by hand +17.4us with 10 spills;
+`num_stages=2` +29.1us; and keeping the loads while deleting only the
+expansions (`permeta`) changes NOTHING (+1.8us, regs 254 -> 251). That
+last one is the load-bearing measurement: the 27.9% is the loads' own
+issue and latency, not the select ALU, and not the registers the
+expansions hold -- which also refutes the "get under 170 regs for
+3 CTA/SM" theory. The serve kernel is at a local optimum for this tile
+shape; the next candidate is structural (fold K sc/zp into `qwT` per
+group, split the QK dot per slice so `k_ot` never reaches the (16, HD)
+domain, rewrite the V side as `dot(trans(qqv), (v_sc*e))` plus a rank-1
+`v_zp` term). Those reassociate -> allclose + KLD gates, not bit-exact,
+and are a much larger change; not attempted. Serve device time is now
+~2.49ms/step for 16 layers, down from 4.474ms at the start of task 7.
 Note: KLD divergence trend across approximation cuts (mean
 1.7e-5 base -> 2.3e-5 Sinkhorn -> 3.2e-5 deferred seals @64k;
 max 6e-4 -> 8.2e-4 -> 1.3e-3; same-top 100% throughout,
