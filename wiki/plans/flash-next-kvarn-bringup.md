@@ -78,6 +78,15 @@ residency subject to min-free VRAM ≥200MB at every instant.
    loop setting from there. MTP EXCLUDED (ignore
    `mtp_hyper_connection_mixer_patch` + `ngram_embedding`; no
    draft path this task).
+   Export the `start_tuned.ps1` env on EVERY run (MoE offload
+   throughput depends on it; plain env loses ~10%+ per
+   `tabbyAPI/PERF_FINDINGS.md`): `EXL3_MOE_CPU_THREADS=8`,
+   `EXL3_MOE_CPU_PIN=1`, `EXL3_MOE_CPU_SWIZZLE=1`,
+   `EXL3_MOE_MEMOPS=0`, `EXL3_MOE_ZERO_COPY=1`,
+   `EXL3_MOE_STREAM_T=6`, `EXL3_MOE_STREAM_BATCH_EXPERTS=48`.
+   MEMOPS=0 is a WDDM workaround (memop path ~10% slower on
+   this box; upstream fix pending per MEMOPS_FIX_PROMPT.md),
+   not a preference — do not "try MEMOPS=1 for speed" here.
 2. Binary-search the offload count per ctx (8192 first): run the
    Phase-2 KLD command with watchdog `smi_guard.py` set to kill
    under **200MB** free (not the usual 100MB — overflow risk on
