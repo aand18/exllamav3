@@ -215,10 +215,21 @@ perf runs PARITY=0 (+ GRAPH default), validation runs PARITY=1
 
 | ctx (tok) | tg ours fp16 (tok/s) | tg ours kvarn4 (tok/s) | tg Bee kvarn4 (tok/s) | tg Bee f16 (tok/s) | ours/Bee (%) | KLD med/mean/max/p99 (unitless) | same-top (%) |
 |-----|--------------|----------------|---------------|------------|----------|----------------------|----------|
-| 8192 | 87.6 | 48.2 eager / 55.8 graph (was 40.8 parity-taxed) | **44.0** | 46.1 | 110% / 127% | 1e-6 / 1.8e-5 / 5.05e-4 / n/a | 100.00% |
-| 16384 | 82.2 | 46.8 eager / 54.0 graph (was 39.4 parity-taxed) | **44.0** | 46.2 | 106% / 123% | 1e-6 / 1.1e-5 / 2.96e-4 / n/a | 100.00% |
-| 65536 | 62.1 | 43.4 eager / 47.0 graph (was 34 parity-taxed) | **44.0** | 46.1 | 99% / 107% | 1e-6 / 2.8e-5 / 1.36e-3 / n/a | 100.00% |
-| 131072 | 47.1 | 35.2 graph (first measurement; Bee tg@128k unknown) | n/a | n/a | n/a | 1e-6 / 5e-6 / 6.9e-5 / 4.9e-5 | 100.00% |
+| 8192 | 87.6 | 48.2 eager / 55.8 graph (was 40.8 parity-taxed; pre-serve-v2, re-measure) | **44.0** | 46.1 | 110% / 127% | 1e-6 / 1.8e-5 / 5.05e-4 / n/a | 100.00% |
+| 16384 | 82.2 | 46.8 eager (pre-serve-v2, re-measure) / 58.3 graph (+3.2% cap64) | **44.0** | 46.2 | 106% / 132% | 1e-6 / 1.1e-5 / 2.96e-4 / n/a | 100.00% |
+| 65536 | 62.2 | 46.8 eager / 52.2 graph (+9.0% serve-v2 + cap64) | **44.0** | 46.1 | 106% / 119% | 1e-6 / 2.8e-5 / 1.36e-3 / n/a | 100.00% |
+| 131072 | 47.1 | 35.2 graph (pre-serve-v2, re-measure; Bee tg@128k unknown) | n/a | n/a | n/a | 1e-6 / 5e-6 / 6.9e-5 / 4.9e-5 | 100.00% |
+Peak VRAM @64k, protocol v3 (microkld `peak` lines): prefill 19.0GB
+fp16 / 19.1GB kvarn4; decode 14.7GB / 15.3GB. Prefill-vs-decode gap
+is structural (chunk fp32 logits + full-ctx remat temps + allocator
+retention), NOT a leak — see research 2026-10-03. Standing rules
+(2026-10-03): (1) every box harness prints peak allocated per phase
+(microkld already does) and every ledger table transcribes it —
+no number without its peak; (2) q8 proxy rule: fp16 ref where it
+fits, `-ref q8` (KLD digit-identical to fp16, med 1e-6 / mean 4e-6 /
+max 4.6e-5 @128k) only where fp16 spills; one-time ≤32k
+proxy calibration (kvarn-vs-fp16 AND kvarn-vs-q8 digit-equal +
+identical needle HIT/MISS) before q8-only at 64k/128k.
 Combine WHT-split (2026-10-02, `90074b7`, default ON, kill-switch
 `EXL3_KVARN_COMBINE_SPLIT=0`): tg@64k graph 47.5 hot vs 47.8 pre-cut
 (neutral within noise; run1 34.9 was one-time triton recompile of the
@@ -516,7 +527,7 @@ model failure). Update item keys on the NEW code only. THIS stays
 the discriminative long-context gate (baseline solves it): any
 retention regression (evict/slot/seal) shows as MISS. Run per cut
 when touching store/evict/seal/serve paths.
-| 131072 | 47.4-47.5 | 28.1/28.7 | **44.0** | OOM (>24GB) | 65% | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
+| 131072 | 47.4-47.5 | 28.1/28.7 | **44.0** | OOM Bee f16 only (>24GB: 17.9GB Q4_K_XL + 8.59GB KV = 26.5GB; ours-fp16 fits at ~19-23GB, tight) | 65% | 1e-6 / 3e-6 / 3.1e-5 / 2.7e-5 | 100.00% |
 
 128k q8-ref (2026-09-29, current code, same box/flags): q8 prefill
 85.7s (1529 tok/s, peak 18.3GB), q8 tg 56.3; kvarn prefill 148.4s
