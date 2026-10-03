@@ -1,11 +1,16 @@
 # Task 5 plan: sample-in-graph / terminal-sync removal (handoff) — SERVER PATH ONLY
 
 > **OUTCOME: STOP (2026-10-03).** Phase 0 measured the prize and it is not
-> there: the server step is **device-bound with zero slack**, and deleting
-> the terminal sync outright -- an illegal change, the plan's own ceiling --
-> buys only **0.283 ms/step (+1.63%)**, reachable only by the "LAST,
-> hardest" attack the plan itself gates behind a static-Philox RNG spike.
-> No production code was written. Full bill in **§7**, ledger entry in
+> there. The server decode step is **device-bound with zero slack**, and a
+> device-floor loop with *no host work in the loop at all* — token stays
+> on the device, one sync per window instead of per step — is only
+> **0.21-0.25 ms/step (+1.2 to +1.5%)** faster than the shipped loop
+> (57.5 -> 58.3 tok/s, reproduced over two runs). That is the hard
+> ceiling for this entire plan, it is
+> below the plan's own 0.5 ms bar, and it is reachable only by the
+> "LAST, hardest" attack the plan gates behind a static-Philox RNG spike.
+> Deleting the terminal sync outright (incorrect) already captures all of
+> it. No production code was written. Full bill in **§7**; ledger entry in
 > `doc/kvarn-4090.md` ("Sampler + terminal sync — STOP").
 
 **Premise warning (read first): this cut likely does NOT move the
@@ -66,10 +71,13 @@ corrections to §0's reading are listed there.
 ## 2. Phase 0 — premise check + STOP gate (measure, no code)
 
 **STATUS: RAN. Gate resolved by measurement: the raw sync (0.667 ms) is
-above the 0.5 ms bar, but the RECOVERABLE prize is 0.283 ms — the step
-is device-bound with zero slack, so the bar's purpose ("the prize is
-below the bar and the RNG-in-graph risk is not worth it") applies.
-STOP recorded in §7 and in the ledger. Nothing below §2 was started.**
+above the 0.5 ms bar, but the step is device-bound with zero slack and
+the total host cost of the whole loop is 0.21-0.25 ms/step — so the
+RECOVERABLE prize is that, below the bar. The bar's purpose ("the
+prize is below the bar and the RNG-in-graph risk is not worth it")
+applies. STOP recorded in §7 and in the ledger. Nothing below §2 was
+started.** §7.3 is the decisive experiment; §7.4 is the independent
+host-spin confirmation.
 
 1. Instrument ONE server-harness 64k run (tabbyAPI or a minimal
    `generator.py` loop, NOT microkld): CUDA-event time per step
@@ -83,7 +91,7 @@ STOP recorded in §7 and in the ledger. Nothing below §2 was started.**
 
 ## 3. Ranked attacks (only after §2 bar passes)
 
-**STATUS: NOT RUN — barred by §2 (recoverable prize 0.283 ms < 0.5 ms).
+**STATUS: NOT RUN — barred by §2 (ceiling 0.21-0.25 ms < 0.5 ms).
 Ranking below was still scored against the measurement, because §2.3
 asks for it: attack 1 is already shipped, attack 2 is worth ~0 for a
 reason §7.4 gives, attack 3 is the only one with any prize and it is
@@ -144,10 +152,11 @@ Spikes untracked, atomic commits, ledger lines on landing.
 ## 6. Done means
 
 **STATUS: MET via the second branch — "documented SKIP with the §2
-bill".** Server-harness tok/s at 64k ctx (greedy) is 57.66 tok/s
-(17.344 ms/step) and the measured prize for the whole plan is +1.63%
-at an absolute ceiling that requires an incorrect change; the bill is
-§7. The twin / PARITY / env-gate gates in §4 gate a cut, and there was
+bill".** Server-harness tok/s at 64k ctx (greedy) is 57.58-57.66 tok/s
+(17.34-17.37 ms/step) and the measured ceiling for the whole plan is
+**+1.2 to +1.5%** (58.3 tok/s), i.e. every host-side cost removed at
+once; the
+bill is §7. The twin / PARITY / env-gate gates in §4 gate a cut, and there was
 no cut. Microkld tg was not chased — as the premise warning predicted,
 this work cannot move it.
 
@@ -164,7 +173,7 @@ Microkld tg is not expected to move; do not chase it here.
 
 ## 7. RESULTS (2026-10-03, box mirror `wip/kvarn-cache`, protocol v3,
 ##    spike `eval/_spike11_sampler_bill.py`, log `t5_bill.log`) — STOP.
-##    Step is device-bound; terminal-sync ceiling is +1.63%.
+##    Step is device-bound; whole-plan ceiling +1.2-1.5% (0.21-0.25 ms).
 
 No production code written. §3 was never started.
 
@@ -209,21 +218,73 @@ The four `job.py` readbacks — the ones this plan targets — cost **3.8 us
 per step in total**. §3.1 is already shipped (`generator.py:1102-1128`)
 and free.
 
-### 7.3 The step is device-bound with zero slack
+### 7.3 The ceiling: a device-floor loop (the decisive experiment)
 
-Two direct experiments, interleaved, 6 windows each:
+Everything above says the host is not the constraint. The direct test is
+to run the same decode step with **no host involvement at all**: same
+forward, same pinned staging and the same params the generator passes
+(`attn.py:121-129` block_table branch — no `positions`, `position` None),
+but the sampled token stays on the device
+(`tok = logits.argmax(-1)`), fed straight back into the next step, with a
+single `torch.cuda.synchronize` per *window* instead of per step. Run on
+its own cache and its own prefill in the same process (phase F), so it
+cannot perturb the generator's page mirrors and no between-process box
+noise enters the comparison.
+
+A floor is only meaningful if the loop that produces it runs the same
+device work, so there is a control: `floor_sync` is the same loop **plus**
+the generator's per-step terminal sync and a `.cpu().item()` readback.
+
+| arm | ms/step | tok/s | vs base |
+|---|---|---|---|
+| base — generator loop as shipped | 17.366 | 57.58 | — |
+| **floor — no host work in the loop at all** | **17.160** | **58.28** | **−0.206 ms, +1.19%** |
+| floor_sync — control (floor + per-step sync + readback) | 17.409 | 57.44 | −0.25% vs base |
+| nosync — generator with its terminal sync deleted | 17.109 | 58.45 | −0.257 ms, +1.48% |
+
+Three things follow.
+
+- **The control passes**: `floor_sync` lands within 0.25% of `base`, so the
+  floor loop runs the same device work and the floor number is real.
+- **The entire host cost of the server decode loop is 0.206 ms/step
+  in this run** (1.2%; 0.252 ms / 1.45% in the repeat) — all staging, all
+  bookkeeping, the terminal sync, the readbacks, everything. That is the
+  hard ceiling on what the whole of task 5 could ever win, and it is
+  *below* the plan's own 0.5 ms bar.
+- `nosync` (0.257 ms) is at the floor within noise (0.05 ms, 0.3%):
+  deleting the terminal sync already captures essentially the entire
+  host cost, so there is nothing beyond it for a correct implementation
+  to find.
+
+Reproduced end-to-end by a second full run (base 17.394 / floor 17.141 /
+floor_sync 17.436, control −0.24%): ceiling **0.252 ms/step = +1.45%**,
+best case 58.34 tok/s. Two runs, ceiling 0.21-0.25 ms/step, control
+passing both times.
+
+A perfect sample-in-graph — device-side input staging, static Philox,
+no host stall — buys at most **58.3 tok/s instead of 57.6**.
+
+### 7.4 The step is device-bound with zero slack
+
+The independent confirmation, same process, same window structure as
+§7.3: two more interleaved arms, 6 windows each.
 
 | arm | ms/step | tok/s | Δ |
 |---|---|---|---|
-| base | 17.344 | 57.66 | — |
-| **nosync** (generator's terminal sync deleted outright) | **17.061** | **58.61** | **−0.283 ms, +1.63%** |
-| hostload (+5 ms of pure-python spin at the step boundary, where the device is provably idle) | 22.35 | — | **+5.01 ms: not one microsecond absorbed** |
+| base | 17.366 | 57.58 | — |
+| **nosync** (generator's terminal sync deleted outright) | **17.109** | **58.45** | **−0.257 ms, +1.48%** |
+| hostload (+5 ms of pure-python spin at the step boundary, where the device is provably idle) | 24.570 | 40.70 | **+5.01 ms of spin, +7.20 ms of step: not one microsecond absorbed** |
 
-`hostload` is the decisive one: 5 ms of host-only time costs 5 ms of
-step. There is no per-step device slack, so no host-side cut — batching
-reads, moving the sync, or moving sampling into the graph — can buy back
-host time. The host's real CPU work is ~11.7 ms against ~17.2 ms of
-device work.
+`hostload` is the second decisive one: 5 ms of host-only time costs *more*
+than 5 ms of step (the extra ~2.2 ms is the pipeline refilling from empty
+after the forced drain). There is no per-step device slack, so no
+host-side cut — batching reads, moving the sync, or moving sampling into
+the graph — can buy back host time. The host's real CPU work is ~11.7 ms
+against ~17.2 ms of device work.
+
+An earlier run of the same spike without phase F reproduced every arm:
+base 17.344 / nosync 17.061 (+1.63%) / hostload 24.525, i.e. base-to-base
+agreement within 0.15% and the same hostload delta.
 
 The 4.63 ms of fused-store status reads is the largest host-blocking
 item in the step, but it is a *symptom* of device-boundedness, not an
@@ -234,7 +295,7 @@ the "HARD, drives 0/2/1 control flow" item in
 `wiki/reports/2026-10-02-tg64-host-bubbles.md` — but it is a different
 mechanism from this task and out of its scope.)
 
-### 7.4 Why §3.2 is worth ~0 and §3.3 is worth at most +1.63%
+### 7.5 Why §3.2 is worth ~0 and §3.3 is worth at most +1.2%
 
 - **§3.2 (replace the full `synchronize` with a stream-event wait):
   worth ~0.** The wait primitive is not the cost. Measured on the box:
@@ -248,10 +309,10 @@ mechanism from this task and out of its scope.)
   cross-stream: the token is produced by kernels queued behind the
   forward on the same stream, so waiting for the token *is* waiting for
   the forward.
-- **§3.3 (sample in graph): at most +1.63%, and only that.** The `nosync`
+- **§3.3 (sample in graph): at most +1.2-1.5%, and only that.** The `nosync`
   arm is the plan's own ceiling — it removes the terminal wait outright,
   at the price of correctness (it feeds stale tokens). It recovers
-  0.283 ms because the host stops waiting and the device absorbs the
+  0.257 ms because the host stops waiting and the device absorbs the
   difference. A legal version of the same mechanism (token stays on
   device, input staging moves to device, no host stall) is bounded by the
   same number. The RNG problem is concrete: the seed is a host int drawn
@@ -261,18 +322,19 @@ mechanism from this task and out of its scope.)
   still need the value on the host, so the bookkeeping cannot simply
   disappear.
 
-+1.63% is inside this box's own window-to-window spread (this run saw
-22.3 ms windows against a 17.3 ms median, −22%), and it is only
-reachable by the attack the plan ranks last and flags as high-risk.
-The §2.2 rationale — "the prize is below the bar and the RNG-in-graph
-risk is not worth it" — holds on the recoverable number.
++1.2-1.5% is inside this box's own window-to-window spread (this run saw
+22.2 ms windows against a 17.2 ms median, −23%; one such window appears
+in every arm, in every phase), and it is only reachable by the attack the
+plan ranks last and flags as high-risk. The §2.2 rationale — "the prize
+is below the bar and the RNG-in-graph risk is not worth it" — holds on
+the ceiling measured in §7.3 (0.21-0.25 ms).
 
-### 7.5 Premise corrections
+### 7.6 Premise corrections
 
 - **"~1.7 ms is loop overhead ABOVE the model — your prize pool ceiling"
   is stale.** Measured host time outside the model forward is 0.245 ms
   of staging/bookkeeping plus a 0.667 ms wait that is device latency:
-  0.9 ms total, of which 0.283 ms is recoverable.
+  0.9 ms total, of which only 0.21-0.25 ms is recoverable (§7.3).
 - **`generator.py:670` is the draft path**, not the main greedy sample
   (see §0). The main loop samples at `job.receive_logits`
   (`job.py:571-583`).
@@ -286,7 +348,7 @@ risk is not worth it" — holds on the recoverable number.
   now it has one: **4.63 ms/step, 27% of the step's wall time**, spent
   blocked. Worth a task of its own if the store path is ever in scope.
 
-### 7.6 Side finding, not chased
+### 7.7 Side finding, not chased
 
 The server harness measures **57.66 tok/s at 64k** where the ledger's
 microkld harness measures 47.8 for the same model/cache/protocol — the
