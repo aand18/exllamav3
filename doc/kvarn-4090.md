@@ -1646,8 +1646,8 @@ bit-compare repeated calls. That removes the model forward from the equation.
 | `get_kv` on real sealed records | Flash-Next layer, `mcl` 38 | 32 / 64 | **bit-identical** |
 | re-store identical K/V, re-read | idem | 1 | **identical image** |
 
-**18 stages, 0 varying** (`EXL3_KVARN_TRITON=1`), and 17/17 with the Triton path
-off. Every run is a bit-for-bit match — `max|diff| 0.000e+00`, not "within
+**20 stages, 0 varying** in the final run (`EXL3_KVARN_TRITON=1`, which adds the two
+`qsa_sparse_attend_rows` variants below), and 17/17 with the Triton path off. Every run is a bit-for-bit match — `max|diff| 0.000e+00`, not "within
 tolerance".
 
 Two notes on why this needed doing rather than reading:
@@ -1668,15 +1668,49 @@ Two notes on why this needed doing rather than reading:
   kernel in `attention_fn`, there are no atomics anywhere — but absence of
   atomics never implied determinism, and the measurement is what settles it.
 
+The sparse-attention kernel that actually serves ctx > `sparse_threshold()`
+lives in `qsa_triton.py`, not `kvarn_triton.py`, and was **not** covered by the
+first pass — so it gets its own test. Its docstring warns "Splits size to the
+grid", i.e. the split count can follow occupancy, which would change reduction
+order with no atomics involved. Measured on fixed inputs, R=8192 query rows,
+32768 KV rows, KPAD=2048:
+
+| kernel | variant | reps | result |
+|---|---|---|---|
+| `qsa_sparse_attend_rows` | flat (contiguous K/V) | 32 | **bit-identical** |
+| `qsa_sparse_attend_rows` | paged (block table, as `sparse_attend` calls it) | 32 | **bit-identical** |
+
+So that hypothesis is out too: the grid-dependent split is reproducible for a
+fixed launch.
+
 **Therefore the end-to-end floor (mean 3e-5-1.2e-4, max 3.4e-3, on a
 bit-identical kvarn-vs-kvarn comparison) originates upstream of kvarn**: in the
-CPU-offloaded MoE path or the GPU runtime, not in kvarn's quantization,
-WHT, record store or serve. This is consistent with the fp16-vs-fp16 arm
-moving by the same order with no kvarn present. What remains unexplained is
-the *mechanism* of that upstream variance — the thread-count test rules out
-CPU thread scheduling, and `torch.are_deterministic_algorithms_enabled()` is
-False with `CUBLAS_WORKSPACE_CONFIG` unset, so cuBLAS split-k / non-deterministic
-reduction selection is the obvious next suspect, untested here.
+CPU-offloaded MoE path or the GPU runtime, not in kvarn's quantization, WHT,
+record store or serve. Consistent with the fp16-vs-fp16 arm moving by the same
+order with no kvarn present.
+
+The mechanism is **not** established. What has been ruled out, each by
+measurement rather than argument:
+
+| candidate | test | result |
+|---|---|---|
+| kvarn's own math | 18 stages, fixed inputs, 32-64 reps | bit-identical |
+| sparse-attention kernel | `qsa_sparse_attend_rows`, flat + paged | bit-identical |
+| CPU thread scheduling | `EXL3_MOE_CPU_THREADS` 8 / 4 / 1 | no change |
+| torch non-deterministic ops | `use_deterministic_algorithms(True, warn_only=False)` + `CUBLAS_WORKSPACE_CONFIG=:4096:8` | runs clean, floor persists (mean 3.2e-5, 8.5e-5) |
+| volume of CPU MoE work | fp16-vs-fp16 at `mcl` 36 / 44 / 48 | same band (2.4e-5-1.38e-4), no scaling |
+| recurrent-state carryover between arms | `params["cache"].get_new_state()` per arm | states are per-cache, not shared |
+
+Note the strict-determinism run *passed* rather than raising, so every torch op
+in the path has a deterministic implementation — which points the remaining
+suspects at code torch cannot govern: the **native CPU MoE extension**
+(`moe_handoff`, a pinned-shared-memory worker whose partial-sum combine order is
+invisible to `torch.use_deterministic_algorithms`) and **exllamav3's own GPU
+expert kernels** (custom CUDA/Triton, likewise unaffected). Both are untested.
+Isolating them needs a bisect with intermediate-tensor capture around a single
+MoE layer, which is a separate piece of work — this plan is bring-up validation,
+and the parity verdict does not depend on resolving it. Recorded as an open
+question rather than guessed at.
 
 #### Read this before quoting any long-ctx KLD number: QSA sparsifies it
 
