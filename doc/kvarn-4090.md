@@ -234,7 +234,15 @@ no number without its peak; (2) q8 proxy rule: fp16 ref where it
 fits, `-ref q8` (KLD digit-identical to fp16, med 1e-6 / mean 4e-6 /
 max 4.6e-5 @128k) only where fp16 spills; one-time ≤32k
 proxy calibration (kvarn-vs-fp16 AND kvarn-vs-q8 digit-equal +
-identical needle HIT/MISS) before q8-only at 64k/128k.
+identical needle HIT/MISS) before q8-only at 64k/128k; (3) q5-rule
+(2026-10-04, spike `eval/_spike23_q5.py`, untracked): kvarn4 ≈
+q5-class on BOTH archs, tied within ~2x — 27B@2048 HOLDS strict
+(2.7e-5 ≤ 6.8e-5), 27B@8192 + FN@2048 strict-FAIL with q5
+marginally ahead (2.2e-5 vs 1.5e-5; 1.75e-4 vs 1.59e-4),
+same-top 100% throughout. "Better than Q5" does NOT cleanly
+replicate; treat as tied. FN means run ~10x 27B (MoE
+nondeterminism suspected — even q5-vs-fp16 exceeds the 1e-4 mean
+budget) → MoE KLD budget needs recalibration, not a kvarn defect.
 Combine WHT-split (2026-10-02, `90074b7`, default ON, kill-switch
 `EXL3_KVARN_COMBINE_SPLIT=0`): tg@64k graph 47.5 hot vs 47.8 pre-cut
 (neutral within noise; run1 34.9 was one-time triton recompile of the
@@ -1516,6 +1524,22 @@ fits if you actually serve kvarn4". Since the plan's Goal is to *map what
 fits*, the kvarn-only config was measured too (`_spike18_kvarnonly.py`: one
 kvarn cache, same prefill/decode shape, same 200MiB guard).
 
+> **Superseded for serving use — read "What this box actually delivers"
+> below first.** Two independent reasons, both measured later:
+>
+> 1. This ladder is calibrated on **prefill alone**. It does not survive decode.
+>    ctx 8192 @ `mcl` 30 prefills with 3127MiB to spare but is guard-killed once
+>    decode steps are added.
+> 2. It was measured with `EXL3_KVARN_IMAGELESS=1`, which is **not the default**.
+>    That flag suppresses the persistent fp16 image, so the stock path
+>    (`EXL3_KVARN_IMAGELESS=0`) allocates VRAM this ladder did not account for.
+>    Under stock settings the values below do not transfer: ctx 8192 @ `mcl` 30
+>    is **killed at 33MiB** where this table records 3127MiB free.
+>
+> The table is retained as the prefill-fit record it is. The decode-safe values
+> are in the delivery section below (ctx 8192 minimum passing `mcl` is **32** on
+> stock, 36 recommended).
+
 Selection rule, applied identically to both ladders: **the lowest `mcl` whose
 guard min-free stays >= 200MiB on 3+ independent runs.** Peak *reserved* is
 recorded per cell as a diagnostic but is NOT a gate — PyTorch's caching
@@ -1825,50 +1849,142 @@ path, so its ladder is not the serving ladder.
 The plan's §3.3 asks for "completed in Ns" and no comparative tok/s. A direct
 request for expected pp / tg / VRAM / system RAM on this system overrides that,
 so the numbers are recorded here — as absolutes for this configuration, with
-**nothing compared against anything**. All at the serving `mcl` (the kvarn-only
-ladder), kvarn4, chunk 4096, one sequence, greedy argmax decode, 512 decode
-steps per cell, guard 200MiB.
+**nothing compared against any other system**. kvarn4, chunk 4096, one sequence,
+greedy argmax decode, 128 decode steps per cell, guard 200MiB, stock
+`EXL3_KVARN_IMAGELESS=0`.
 
-| ctx | serving `mcl` | pp wall | pp tok/s | tg settled | ms/step | tg first window | decode peak | peak reserved | RAM free after load |
+> **Corrected.** The table previously in this section was measured with
+> `EXL3_KVARN_IMAGELESS=1` hardcoded in the runner. That is **not the default**
+> (`kvarn.py:526` returns the flag, default `"0"`, and its own docstring calls
+> the image path *"the tested image path"*). It is also **1.84x slower at ctx
+> 32768** — 10.34 vs 19.04 tok/s, measured A/B on the same layer and `mcl`.
+> Every kvarn4 `tg` and `mcl` figure in the old table was therefore taken on the
+> slow path and understated kvarn4. The table is replaced, not amended.
+> q4/fp16 figures are unaffected: the flag gates nothing when no kvarn layer
+> exists.
+
+**Decode-safe serving ladder, kvarn4.** Highest passing `mcl` per cell, since
+decode speed is nearly flat in `mcl` (see the offload-headroom table below).
+
+| ctx | `mcl` | pp wall | pp tok/s | tg settled | ms/step | decode peak alloc | peak reserved | guard min-free | RAM after load | RAM after decode | process sys RAM (peak) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2048 | 34 | 3.6s | 569 | **20.30 tok/s** | 49.3 | 16.90GB | 19.55GB | 3641MiB | 22339MB | 21148MB | 25.4GB |
+| 8192 | 36 | 5.9s | 1388 | **20.98 tok/s** | 47.7 | 15.96GB | 20.11GB | 3067MiB | 20957MB | 19754MB | 26.8GB |
+| 32768 | 38 | 15.8s | 2074 | **19.98 tok/s** | 50.1 | 15.65GB | 19.74GB | 3445MiB | 19805MB | 18617MB | 27.9GB |
+| 65536 | 40 | 30.1s | 2177 | **7.70 tok/s** | 129.9 | 14.76GB | 18.40GB | 4819MiB | 18505MB | 17383MB | 29.1GB |
+| 131072 | 42 | 60.4s | 2170 | **5.22 tok/s** | 191.7 | 15.05GB | 18.02GB | 5209MiB | 17328MB | 16131MB | 30.3GB |
+
+`process sys RAM (peak)` is `RAM before load − RAM after decode`, both sampled
+in-process via `GlobalMemoryStatusEx`. The box is warm before every run
+(47157-47217MB free), so this is the process's own footprint, not the box's.
+No cell approaches the 1GB RAM kill line; the worst is 16131MB free at ctx
+131072 / `mcl` 42.
+
+**Offload headroom is close to free, so take the highest `mcl` that fits.**
+Decode is bound by the O(ctx) cache read, not by MoE offload, so more offload
+buys VRAM almost for free:
+
+| ctx | `mcl` 32 | `mcl` 34 | `mcl` 36 | `mcl` 40 | `mcl` 42 |
+|---|---|---|---|---|---|
+| 8192 tg | 21.86 | 21.19 | 20.98 | — | — |
+| 8192 peak alloc | 18.33GB | 17.08GB | 15.96GB | — | — |
+| 8192 guard min-free | 1319MiB | 2605MiB | 3067MiB | — | — |
+| 131072 tg | — | — | — | 5.26 | 5.22 |
+| 131072 peak alloc | — | — | — | 16.18GB | 15.05GB |
+| 131072 guard min-free | — | — | — | 3577MiB | 5209MiB |
+
+Going `mcl` 32 → 36 at ctx 8192 costs 4% throughput and returns 2.4GB of VRAM
+and 1748MiB of guard headroom. `mcl` 40 → 42 at ctx 131072 costs 1% and returns
+1.1GB and 1632MiB. At ctx 8192 the minimum passing value is **32**; `mcl` 30,
+28 and 26 were all guard-killed at 33, 19 and 27MiB free. The other four cells
+are single passing points and their true minima may be lower.
+
+**Decode needs more VRAM headroom than prefill, and `chunk` is as load-bearing
+as `mcl`.** ctx 8192 @ `mcl` 30 prefills with 3127MiB to spare but was killed
+at 41MiB once 128 decode steps were added. Separately, `chunk=8192` at `mcl` 38
+was guard-killed at **23MiB** where `chunk=4096` at the same `mcl` was
+comfortable. If prefill-calibrated and decode-calibrated values disagree,
+shrink the chunk before adding offload.
+
+**Cache format: kvarn4 vs plain 4-bit quant vs fp16.** Same model, same ctx,
+128 decode steps, window 32. `mcl` differs per column and is noted, because
+decode is nearly flat in `mcl`.
+
+| ctx | kvarn4 tg | q4 tg | fp16 tg | kvarn4 pp | q4 pp | fp16 pp | kvarn4 resv | q4 resv | fp16 resv |
 |---|---|---|---|---|---|---|---|---|---|
-| 2048 | 27 | 3.5s | 585 | **15.7 tok/s** | 63.6 | 15.1 | 21.04GB | 23.31GB | 26.1GB |
-| 8192 | 32 | 5.6s | 1463 | **15.4 tok/s** | 64.8 | 14.7 | 18.24GB | 21.81GB | 22.4GB |
-| 32768 | 32 | 14.4s | 2276 | **11.1 tok/s** | 90.0 | 10.7 | 18.78GB | 22.13GB | 25.1GB |
-| 65536 | 34 | 27.8s | 2358 | **8.2 tok/s** | 121.6 | 8.1 | 18.26GB | 21.57GB | 21.8GB |
-| 131072 | 38 | 55.6s | 2357 | **5.3 tok/s** | 189.1 | 5.2 | 17.43GB | 20.83GB | 18.7GB |
+| 8192 | 21.86 (m32) | **28.25** (m32) | 28.58 (m32) | 5.6s | 5.1s | 5.0s | 21.82GB | 21.79GB | 22.02GB |
+| 32768 | 19.98 (m38) | **28.63** (m32) | 28.51 (m32) | 15.8s | 13.3s | 12.9s | **19.74GB** | 22.54GB | 22.69GB |
+| 65536 | 7.70 (m40) | **27.25** (m36) | 27.29 (m36) | 30.1s | 25.7s | 25.2s | **18.40GB** | 20.72GB | 21.83GB |
+| 131072 | 5.26 (m40) | **24.46** (m40) | 23.72 (m42) | 59.1s | 51.7s | 51.6s | 19.62GB | 19.07GB | 19.72GB |
 
-"settled" = last 256 of 512 steps. Reading it:
+Two things fall out of this:
 
-- **pp saturates at ~2350 tok/s** from ctx 32768 up. Below that the fixed
-  per-chunk cost dominates, so ctx 2048's 585 tok/s is a warm-up artefact, not
-  a ceiling. Prefill is not ctx-limited and does not degrade with context.
-- **tg is flat to ctx 8192 (~15.5 tok/s) then falls roughly linearly** to 5.3
-  at 131072. Fitting the settled points above 8k: **~64ms fixed + ~1.0ms per
-  1k tokens of ctx**. The fixed term is the per-step CPU MoE cost of 32-38
-  offloaded layers; the slope is consistent with KVarN materialising the whole
-  sealed body every step (`get_kv` over the full block table — see the QSA
-  section), which is O(ctx) even though attention itself is capped at 2048
-  positions.
-- **Decode warm-up is real and it is the expert churn.** Resolved at 8-step
-  windows at ctx 131072: 214.6 ms/step over steps 1-8, 193.0 over 9-16, 185.0
-  over 17-24, then a flat 184-196 for the remaining 488 steps. So roughly a
-  **14% penalty across the first ~24 steps**, after which the hot-expert set has
-  settled and the rate is stationary. A 64-step window hides this entirely
-  (first window reads 5.24 tok/s vs 5.29 settled, i.e. 1%). Peak VRAM does not
-  move during warm-up — the churn costs time, not memory.
-- **VRAM**: peak reserved 20.8-23.3GB of 23.99GB, decode peak 17.4-21.0GB. The
-  cell that is tightest is small ctx (2048 @ mcl 27, 23.31GB reserved), because
-  there the cache is negligible and the weight residency is what fills the card.
-  Large ctx is *cheaper* on VRAM: more of the card goes to cache, less to
-  offloaded-expert shortfall.
-- **System RAM**: the process takes ~19-27GB of the box's 63.5GB; free RAM after
-  load ranges 18.7-26.1GB, worst at ctx 131072 / mcl 38. Nowhere near the 1GB
-  floor, so no RAM-unsafe configuration exists in this table.
-- **Decode needs more VRAM headroom than prefill.** Calibrating the serving
-  ladder on prefill alone is not sufficient: ctx 8192 @ mcl 30 prefills with
-  3127MiB to spare but was **killed at 41MiB** once 128 decode steps were added.
-  The tg rows above therefore use `mcl` 32-38, one to three layers above the
-  prefill-calibrated serving value.
+- **q4 ≈ fp16 at every context** (28.25/28.58, 28.63/28.51, 27.25/27.29,
+  24.46/23.72). 4-bit quantization costs essentially nothing over fp16 on this
+  decode path, so the kvarn4 deficit is kvarn's serve path, not the 4-bit
+  format. kvarn4 runs 1.3x to 4.6x slower than q4, and the gap widens with
+  context.
+- **kvarn4's win is reserved VRAM, not speed** — visible at ctx 32768 and 65536
+  (19.74 vs 22.54GB, 18.40 vs 20.72GB), where the compressed cache buys back
+  enough card to raise `mcl` and cut system RAM. That is the trade: kvarn4 is
+  what makes the deeper contexts fit at all, and it is not a speed win.
+
+**Decode warm-up is real and it is the expert churn.** Resolved at 8-step
+windows at ctx 131072: 214.6 ms/step over steps 1-8, 193.0 over 9-16, 185.0
+over 17-24, then a flat 184-196 for the remaining steps — roughly a **14%
+penalty across the first ~24 steps**, after which the hot-expert set has
+settled. A 64-step window hides this (first window 5.24 vs 5.29 settled, 1%).
+Peak VRAM does not move during warm-up: the churn costs time, not memory.
+
+#### The decode slope is KVarN `get_kv`, and it is not configurable away
+
+Decode falls off a cliff between ctx 32768 (19.98 tok/s) and 65536 (7.70
+tok/s). `get_kv` is the cost. It cannot be instrumented inside the decode
+forward — that path is CUDA-graph captured, so both a monkey-patch wrapper and
+`torch.profiler` abort the process with `0xC0000409` (patching
+`update_kv_direct` likewise; an uninstrumented loop over the same layer runs
+clean, so this is a capture/profiler incompatibility, not a kvarn bug). Measured
+instead by calling `get_kv` directly on a real sealed layer filled by a real
+prefill:
+
+| ctx | num_groups | `get_kv` sealed, 0 dirty | x 12 layers | measured kvarn-q4 excess |
+|---|---|---|---|---|
+| 8192 | 64 | 1.04 ms | 12.5 ms | 26 ms |
+| 32768 | 256 | 2.75 ms | 33.0 ms | 52 ms |
+| 131072 | 1024 | 10.61 ms | 127.4 ms | 148 ms |
+
+Linear in `num_groups` (= ctx/128), and ~86% of the kvarn-q4 decode excess at
+131072.
+
+**The O(ctx) term is not the dequantisation, and the image cap is not the
+limit.** `kvarn.py:1231` sets `_img_ok = self.num_pages <= 160`, i.e. the
+persistent fp16 image is only used at max_num_tokens <= 40960; above that the
+legacy full-rematerialization branch runs. Forcing `_img_ok = True` on all 12
+layers changed nothing: 7.96 vs 8.22 tok/s at ctx 65536, 5.31 vs 5.17 at
+131072. And at ctx 32768 — where the image path *is* active — `get_kv` still
+costs 2.75ms with **zero dirty groups**. The incremental image avoids
+re-dequantising dirty groups (~1 per decode step); it does not avoid the
+per-call emission of the full contiguous fp16 image that the downstream single
+softmax requires. That emission is the O(ctx) term, and it is structural in the
+current design: attention reads at most 2048 QSA-selected positions but the
+merge builds all of ctx.
+
+`kvarn.py:1229-1230` carries the maintainers' own note to the same effect —
+*"The legacy path above this is prefill-grade only (it rematerializes the whole
+context per step: 8.2 tok/s at 32k vs 64 fp16)."* Our 32k measurement on that
+path (~10 tok/s) is close to their 8.2. **Their "64 fp16" does not reproduce
+here** — we measure 28.5 tok/s fp16 at 32k, ~2.2x lower, most likely because
+MoE offload dominates step time in this configuration.
+
+Improving it means fusing dequant+gather into the attention kernel so only the
+~2048 selected positions are expanded (~64x less work at ctx 131072). That is a
+kernel change, excluded by plan §5, and was not attempted. The `imageless`
+online-serve arm (`_kvarn_imageless`, `kvarn.py:516`) is the existing code
+meant to avoid this, but enabling it made decode **1.84x slower**, not faster.
+
+Unresolved: the 32768 → 65536 cliff sits immediately above the 160-page / 40k
+image limit, but forcing the flag open does not recover it, so the cause is
+broader than that flag.
 
 #### System-RAM guard (hard rule) — no cell UNSAFE
 
