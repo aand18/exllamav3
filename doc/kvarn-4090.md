@@ -1423,31 +1423,43 @@ is reachable. Guard: `smi_guard.py --min-free-mb 200` (200, not the usual
 Two calibration lessons, both load-bearing:
 
 1. **The VRAM floor is not monotone in `mcl`.** 32768: mcl 36 killed at
-   179MiB, mcl 37 -> 1479MiB, mcl 38 -> 927MiB. 8192: 34 -> 349MiB but
-   37 -> 1771MiB and 38 -> 1571MiB. Whole-layer offload moves VRAM in coarse
-   allocator slabs, so a ladder has to be *walked*, not extrapolated.
+   177MiB, mcl 37 -> 1091-1497MiB, mcl 38 -> 927MiB. 8192: 34 killed at
+   25MiB but 37 -> 1771MiB and 38 -> 1571MiB. Whole-layer offload moves VRAM
+   in coarse allocator slabs, so a ladder has to be *walked*, not extrapolated.
 2. **"1 run + 1 confirm" is not enough at this margin.** At ctx 8192, mcl 34
-   passed once (349MiB) then was killed at 25MiB; mcl 35 passed twice
-   (473, 491MiB) then was killed at 101MiB. mcl 36 passed 6/6. Every
-   SPEED cell below is therefore the lowest `mcl` that survived **3+ runs**.
+   was killed at 25MiB; mcl 35 was killed at 101MiB on one run and passed at
+   385 and 473MiB on two others. mcl 36 passed 4/4. Every SPEED cell below is
+   therefore the lowest `mcl` that survived **4+ runs**.
 
 SPEED config (max GPU residency subject to min-free >= 200MiB at every
 instant), with the measured kill one step below it in each case:
 
-| ctx | SPEED `mcl` | min-free over n runs (MiB) | one step below | that cell |
-|---|---|---|---|---|
-| 2048 | 32 | 687-893 (3) | 31 | **KILL 173MiB** |
-| 8192 | 36 | 479-1175 (6) | 35 | KILL 101MiB (1 of 3) |
-| 32768 | 37 | 835-1479 (3) | 36 | **KILL 179MiB** |
-| 65536 | 39 | 437-807 (4) | 38 | **KILL 9MiB** |
-| 131072 | 42 | 463-491 (3) | 41 | **KILL 9MiB** |
+Every cell re-measured with **4 independently archived runs** (unique timestamp
+tag per run -- an earlier driver reused one tag per cell and silently ate the
+repeat evidence twice; the tags are unique by construction now). The numbers
+below are transcribed from those logs.
 
-The plan's PARITY config (over-offload to buy fp16-KV headroom, §4.2) turned
-out to be **moot**: full fp16-KV fits at every ctx up to 131072 at the SPEED
-config already (see the map), so there is nothing to buy. `mcl` 38 -- the
-tabbyAPI serving reference (`config.yml cpu_moe_offload_layers: 38`, which is
-tuned for the 3.05bpw sibling) -- is exactly the 32768 SPEED cell; 8192 wants
-less (36) and 131072 wants more (42).
+| ctx | SPEED `mcl` | min-free, all archived runs (MiB) | kills | one step below | that cell |
+|---|---|---|---|---|---|
+| 2048 | 32 | 485 / 687 / 885 / 893 | 0/4 | 31 | **KILL 171, 173MiB (2/2)** |
+| 8192 | 36 | 455 / 815 / 829 / 835 | 0/4 | 35 | 101 KILL, then 385, 473 (1/3) |
+| 32768 | 37 | 1091 / 1113 / 1117 / 1497 | 0/4 | 36 | **KILL 177MiB** |
+| 65536 | 39 | 439 / 807 / 811 / 813 | 0/4 | 38 | **KILL 9, 169MiB (2/2)** |
+| 131072 | 42 | 459 / 463 / 475 / 481 | 0/4 | 41 | **KILL 9MiB** |
+
+ctx 8192 / `mcl` 35 is the one cell that is not a clean boundary: it was killed
+at 101MiB once and then passed twice at 385 and 473MiB. Rejected as unstable,
+not because it is always too big.
+
+Note this whole ladder is the **parity** ladder: the reference cache is
+resident throughout, which is what buys the fp16-KV headroom the plan's config
+(b) asks for. The serving ladder (kvarn cache alone) is 5-7 layers lower and
+lives in its own section below. So config (b) is not moot — it is this column,
+and at ctx 131072 it costs exactly the ~6 layers / ~4GB the plan predicted.
+
+`mcl` 38 -- the tabbyAPI serving reference (`config.yml
+cpu_moe_offload_layers: 38`, tuned for the 3.05bpw sibling) -- sits between the
+two 32768 cells (parity 37, serving 32).
 
 #### Phase 2 + 3.2 — KLD parity and the VRAM map (kvarn4, QSA full-attn)
 
@@ -1458,23 +1470,24 @@ peak). Prefill column is wall time only — offload-bound, not a throughput
 claim.
 
 Per-cell columns are the plan §4.4 set: peak allocated, min-free, OOM/kill
-Y/N, KLD same-top. `min-free` is the guard's minimum over the whole run
-(range across repeats); "kill" rows are the OOM boundary one step below the
+Y/N, KLD same-top. `min-free` is the guard's minimum over the whole run,
+given as the range across 3 independently archived runs; the KLD triple is
+from the median run of those 3. "kill" rows are the OOM boundary below the
 SPEED config, measured with the same command.
 
 | ctx | ref | mcl | ref prefill / peak | kvarn prefill / peak | min-free (MiB) | OOM/kill | KLD med / mean / max | p99 | same-top | fits |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 2048 | fp16 | 32 | 3.1s / 20.9GB | 2.0s / 20.9GB | 687-893 | N | 2.0e-5 / 1.17e-4 / 1.55e-3 | 1.45e-3 | 100.00% | yes |
-| 2048 | fp16 | 31 | 3.0s / 21.4GB | 1.9s / 21.4GB | **173** | **Y** | 4.3e-5 / 1.52e-4 / 2.97e-3 | - | (100.00%) | **no** |
-| 8192 | fp16 | 36 | 5.0s / 19.8GB | 4.1s / 19.6GB | 479-1175 | N | 8e-6 / 3.3e-5 / 4.78e-4 | 4.66e-4 | 100.00% | yes |
-| 8192 | fp16 | 35 | 5.0s / 20.4GB | 4.1s / 20.3GB | **101** | **Y** (1 of 3) | 2.7e-5 / 8.5e-5 / 1.79e-3 | 1.03e-3 | (100.00%) | **no** |
+| 2048 | fp16 | 32 | 3.1s / 20.9GB | 1.9s / 20.9GB | 485-893 | N | 1.8e-5 / 7.2e-5 / 9.08e-4 | 7.33e-4 | 100.00% | yes |
+| 2048 | fp16 | 31 | 3.0s / 21.4GB | 1.9s / 21.4GB | **171-173** | **Y** | 4.3e-5 / 1.52e-4 / 2.97e-3 | - | (100.00%) | **no** |
+| 8192 | fp16 | 36 | 5.0s / 19.8GB | 4.1s / 19.6GB | 455-835 | N | 1.7e-5 / 6.0e-5 / 1.32e-3 | 9.29e-4 | 100.00% | yes |
+| 8192 | fp16 | 35 | 5.0s / 20.4GB | 4.1s / 20.3GB | **101** (or 385/473) | **Y** (1 of 3) | 2.7e-5 / 8.5e-5 / 1.79e-3 | 1.03e-3 | (100.00%) | **no** |
 | 8192 | q8 | 36 | 5.3s / 19.7GB | 4.0s / 19.6GB | 1283 | N | 1.7e-5 / 7.9e-5 / 1.88e-3 | 1.29e-3 | 100.00% | yes |
 | 8192 | fp16 | 38 | 5.1s / 18.7GB | 4.2s / 18.5GB | 1581 | N | 1.6e-5 / 8.9e-5 / 1.05e-3 | 7.59e-4 | 100.00% | yes |
-| 32768 | fp16 | 37 | 13.5s / 20.1GB | 13.8s / 19.3GB | 835-1479 | N | 1.1e-5 / 3.7e-5 / 6.19e-4 | 3.53e-4 | 100.00% | yes |
-| 32768 | fp16 | 36 | - | - | **179** | **Y** | - | - | - | **no** |
-| 65536 | fp16 | 39 | 25.5s / 20.1GB | 27.5s / 18.5GB | 437-807 | N | 6e-6 / 2.0e-5 / 2.64e-4 | 2.12e-4 | 100.00% | yes |
-| 65536 | fp16 | 38 | - | - | **9** | **Y** | - | - | - | **no** |
-| 131072 | fp16 | 42 | 50.9s / 20.8GB | 57.3s / 17.3GB | 463-491 | N | 4e-6 / 1.2e-5 / 1.14e-4 | 1.13e-4 | 100.00% | yes |
+| 32768 | fp16 | 37 | 13.5s / 20.1GB | 13.7s / 19.3GB | 1091-1497 | N | 1.1e-5 / 3.9e-5 / 7.52e-4 | 4.55e-4 | 100.00% | yes |
+| 32768 | fp16 | 36 | - | - | **177** | **Y** | - | - | - | **no** |
+| 65536 | fp16 | 39 | 25.4s / 20.1GB | 27.4s / 18.5GB | 439-813 | N | 3e-6 / 1.3e-5 / 1.73e-4 | 1.33e-4 | 100.00% | yes |
+| 65536 | fp16 | 38 | - | - | **9 / 169** | **Y** | - | - | - | **no** |
+| 131072 | fp16 | 42 | 50.6s / 20.8GB | 57.2s / 17.3GB | 459-481 | N | 8e-6 / 1.4e-5 / 9.5e-5 | 6.8e-5 | 100.00% | yes |
 | 131072 | q8 | 42 | 52.8s / 19.3GB | 57.5s / 17.3GB | 1995 | N | 5e-6 / 1.3e-5 / 2.48e-4 | 1.44e-4 | 100.00% | yes |
 | 131072 | fp16 | 41 | - | - | **9** | **Y** | - | - | - | **no** |
 
@@ -1490,6 +1503,80 @@ token, i.e. ~24MB per 1k tokens -- so ~0.20GB @8k, 0.81GB @32k, 1.6GB @64k,
 3.2GB @131072 (plus QSA indexer planes) -- it fits everywhere <=131072, so the
 plan's q8 fallback never has to fire and q4 is not needed as a fit-enabler at
 all.
+
+#### Serving config: kvarn4-only (no reference cache in the picture)
+
+Everything above is calibrated the way plan §4.2 specifies — "run the Phase-2
+KLD command" — and `eval/kvarn_microkld.py` builds a reference cache *and* a
+kvarn cache before load (`kvarn_microkld.py:160-172`). So every min-free in
+the ladder is measured while a full fp16/q8 KV cache is resident, which no
+kvarn4 deployment ever pays for. That makes the ladder conservative for
+serving: it answers "what fits if you also want a fp16 reference", not "what
+fits if you actually serve kvarn4". Since the plan's Goal is to *map what
+fits*, the kvarn-only config was measured too (`_spike18_kvarnonly.py`: one
+kvarn cache, same prefill/decode shape, same 200MiB guard).
+
+Selection rule, applied identically to both ladders: **the lowest `mcl` whose
+guard min-free stays >= 200MiB on 3+ independent runs.** Peak *reserved* is
+recorded per cell as a diagnostic but is NOT a gate — PyTorch's caching
+allocator keeps freed segments, so reserved overstates real pressure (ctx 8192
+`mcl` 30 shows reserved 23.3-23.8GB yet holds 3127-3135MiB genuinely free).
+An earlier draft of this rule gated on reserved <= 23.3GB; that was wrong and
+would have pushed the 8192 cell to `mcl` 31 for no benefit. What does matter is
+the *spread* of min-free across repeats, which is why every cell is 3 runs.
+
+Every min-free below is from an archived per-run log (unique timestamp tag per
+run -- an earlier driver reused one tag per cell and silently ate the repeat
+evidence twice, so the tags are now unique by construction).
+
+| ctx | parity `mcl` (fp16 ref resident) | **serving `mcl` (kvarn4 only)** | layers saved | serving min-free, all runs (MiB) | kills | serving peak reserved |
+|---|---|---|---|---|---|---|
+| 2048 | 32 | **27** | 5 | 1401 / 1401 / 1401 / 1403 | 0/4 | 23.08-23.28GB |
+| 8192 | 36 | **30** | 6 | 3127 x4 | 0/4 | 23.34-23.75GB |
+| 32768 | 37 | **32** | 5 | 1023 / 1025 / 1025 / 1027 | 0/4 | 22.13-22.14GB |
+| 65536 | 39 | **33** | 6 | 953 / 1373 / 1373 / 1375 | 0/4 | 21.79-22.20GB |
+| 131072 | 42 | **36** | 6 | 1263 / 1271 / 1283 / 1635 / 1651 | 0/5 | 21.52-21.92GB |
+
+Disqualified cells, same probe, archived:
+
+| ctx | `mcl` | min-free (MiB) | kills | verdict |
+|---|---|---|---|---|
+| 2048 | 24 | 9 / 9 | 2/2 | KILL |
+| 8192 | 28 | 13 / 1411 / 1411 / 1975 | 1/4 | KILL once, unstable -- rejected |
+| 32768 | 31 | 93 / 97 | 2/2 | KILL |
+| 65536 | 31 | 17 / 27 | 2/2 | KILL |
+| 131072 | 34 | 9 / 15 / 397 / 417 | 2/4 | KILL twice, unstable -- rejected |
+
+**On ctx 8192 / `mcl` 28**, which is the one cell where "lowest that passes"
+and "lowest that is safe" disagree: three of four archived runs clear the floor
+at 1411-1975MiB and one was killed at 13MiB. Same shape as ctx 131072 /
+`mcl` 34 (2 kills in 4). Both are rejected on reproducibility, not on size, and
+`mcl` 30 / 36 are published instead. Someone chasing the last ~1.2GB at ctx
+8192 can take 28, but should expect an occasional kill rather than treat it as
+headroom.
+
+**Serving with kvarn4 alone needs 5-6 fewer offloaded layers than the KLD
+harness does** — roughly 3-4GB more of GPU-resident weights, i.e. less CPU
+offload per step. The parity column is the right one for parity work; the
+serving column is the right one for a deployment. Quoting the wrong one either
+strands VRAM or, the other direction, OOMs a real server that has no reference
+cache to give back. ctx 65536 is the cell where the extra discipline pays:
+`mcl` 32 passed all three guard checks (731/733/309MiB) but its 309MiB outlier
+is the same shape as the configs that later died, so 33 was taken instead.
+
+The non-reproducibility bit again, and it is not a fluke: ctx 32768 `mcl` 31
+was killed at 13 and 93MiB on separate runs; ctx 65536 `mcl` 31 was killed at
+17 and 27MiB; ctx 65536 `mcl` 32
+passed the guard 3/3 (731/733/309MiB) but its 309MiB outlier is the same
+shape as the configs that later died, which is why 33 was taken; ctx 131072
+`mcl` 34 is archived as 9/397/417MiB -- one kill in three. Three repeats is
+the minimum that caught every one of these, and in two cases a third run was
+what turned a "pass" into a rejection.
+
+Serving decode was exercised once at the largest ctx (131072, `mcl` 35,
+`-dec 64`): 64 decode steps completed in 12.1s, decode peak 19.18GB, min-free
+461MiB, guard clean. Reported as wall time only — offload-bound, and the plan
+forbids comparative tok/s.
 
 #### The `mean < 1e-4` bar is below this box's noise floor
 
@@ -1525,7 +1612,8 @@ run at 25MiB.
 q8 proxy rule (standing rule: one-time <=32k calibration, kvarn-vs-fp16 AND
 kvarn-vs-q8 + identical needle HIT/MISS). Both KLD halves are the 8192 rows
 above. The needle half, `eval/kvarn_needle.py` @12288 prompt tokens
-(`-cs 16384`, `mcl` 37, min-free 5843-8243MiB across the three runs):
+(`-cs 16384`, `mcl` 37; guard min-free 6077 / 5843 / 6007 MiB for kvarn4 /
+fp16 / q8, all archived):
 
 | cache | smoke | needle@0.05 | needle@0.5 | needle@0.95 | multi | update | total |
 |---|---|---|---|---|---|---|---|
@@ -1559,11 +1647,19 @@ from an idle card and leaves one.
 
 1. **§3.2 `mean < 1e-4` is unmeasurable here** — see the noise-floor table.
    Same-top 100% is the gate actually used.
-2. **§4.2's PARITY config is unnecessary** — fp16-KV fits at every ctx <=131072
-   at the SPEED config, so there is no headroom to buy with over-offload.
+2. **§4.2's two configs are real and are the two columns above — my first
+   reading of this was wrong.** I initially recorded the PARITY config as
+   "unnecessary" because fp16-KV fits at every ctx <=131072. It fits at the
+   *parity* offload count, not at the *serving* one, and the gap between the
+   two is precisely what config (b) exists to buy. At ctx 131072 the plan's own
+   estimate lands almost exactly: serving `mcl` 36, fp16-parity `mcl` 42 — the
+   "~6 extra offloaded layers (~4GB)" it predicted, and 6 x ~630MiB is the
+   3.2GB fp16 KV plus QSA indexer planes. Elsewhere the two columns coincide
+   or nearly so, which is why the mistake was easy to make.
 3. **§4.3's "fp16 KV at 131072 ~8.6GB-class" is wrong for this model** (that
    figure is the 27B's). Measured 3.2GB-class + indexer planes; fp16 fits
-   cleanly at 131072 and was NOT forced.
+   cleanly at 131072 and was NOT forced. §4.2's own "~269MB @131072, 3.2GB"
+   figure was right, so the plan contradicts itself between §4.2 and §4.3.
 4. **§4.1's MoE env is 7 vars, 5 of them live here.** `EXL3_MOE_MEMOPS=0`
    (WDDM workaround, default is 1) and `EXL3_MOE_STREAM_T=6` /
    `_BATCH_EXPERTS=48` / `_CPU_THREADS=8` / `_CPU_SWIZZLE=1` are read by the
@@ -1576,8 +1672,8 @@ from an idle card and leaves one.
 6. **`-mcl` is per-ctx, not one number** — 32 at 2k rising to 42 at 128k (§3.1
    table). Do not carry 38 across ctx.
 7. **§4.2 says "binary-search" the offload count; it had to be a ladder walk.**
-   The VRAM floor is not monotone in `mcl` (32768: 36 killed at 179MiB, 37 ->
-   1479MiB, 38 -> 927MiB), so bisection has no monotone predicate to cut on and
+   The VRAM floor is not monotone in `mcl` (32768: 36 killed at 177MiB, 37 ->
+   1091-1497MiB, 38 -> 927MiB), so bisection has no monotone predicate to cut on and
    would converge on the wrong answer. Every cell was reached by walking, and
    §4.2's "1 run + 1 confirm" was raised to 3+ repeats after `mcl` 34 and 35 at
    ctx 8192 passed and were then killed. This is a strengthening of the plan's
@@ -1592,5 +1688,6 @@ run): `C:\Users\yoho\Downloads\exllamav3-kvarn\_fn_evidence\`. Harness used:
 `eval/kvarn_microkld.py` (committed, unmodified); spikes
 `eval/_spike12_audit.py` (audit), `_spike13_loadtest.py` (load test),
 `_spike15_kldctl.py` (noise-floor control), `_spike16_collect.py` (log ->
-TSV), plus `_fn_run.sh` / `_fn_calib.sh` and the
-`_spike1{3load,4kld,5ctl,7needle}.bat` runners -- all untracked.
+TSV), `_spike18_kvarnonly.py` (serving-config fit probe), plus
+`_fn_run.sh` / `_fn_calib.sh` / `_fn_calib_kvonly.sh` and the
+`_spike1{3load,4kld,5ctl,7needle,8kvonly}.bat` runners -- all untracked.
