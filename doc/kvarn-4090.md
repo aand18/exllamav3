@@ -1689,8 +1689,39 @@ CPU-offloaded MoE path or the GPU runtime, not in kvarn's quantization, WHT,
 record store or serve. Consistent with the fp16-vs-fp16 arm moving by the same
 order with no kvarn present.
 
-The mechanism is **not** established. What has been ruled out, each by
-measurement rather than argument:
+**Mechanism found.** Replaying each native CPU-MoE call with byte-identical
+inputs (`_spike20_bisect.py`, ctx 2048, `mcl` 38, monkey-patched in-process):
+`BlockSparseMLP_CPU.cpu_offload_forward` -> `cpu_host.submit_prefill` is the
+native pinned-shared-memory worker. Every replay differed:
+
+| component | replays | differed | worst max&#124;diff&#124; |
+|---|---|---|---|
+| native CPU MoE worker, 38 layers | 114 (3 per layer) | **114** | 2.98e-08 (305984 elems) |
+| GPU-expert MoE module forwards | 3 | **0** | 0.0 |
+
+All 38 offloaded layers varied on every replay; the GPU-resident expert path
+was bit-identical. 2.98e-08 is 2^-25, i.e. one fp32 ULP at magnitude 1, over
+~5% of elements — the signature of a **reduction-order** difference in the
+CPU GEMM, not a logic bug. The error then compounds through 48 layers into the
+KLD floor measured above.
+
+None of the exposed knobs removes it — each still shows 76/76 replays differing
+(38 layers x 2), all 38 layers, worst 1-2 fp32 ULP:
+
+| config | worst max&#124;diff&#124; | differing elems |
+|---|---|---|
+| default (`THREADS=8 SWIZZLE=1 MEMOPS=0 PIN=1`) | 2.98e-08 | 305984 |
+| `EXL3_MOE_CPU_THREADS=1` | 2.98e-08 | 242638 |
+| `EXL3_MOE_CPU_SWIZZLE=0` | 2.98e-08 | 278503 |
+| `EXL3_MOE_MEMOPS=1` | 5.96e-08 | 272232 |
+| `EXL3_MOE_CPU_PIN=0` | 2.98e-08 | 325416 |
+
+So the variance is intrinsic to the CPU GEMM path in the native extension, and
+is not addressable from the environment knobs `start_tuned.ps1` exposes. Fixing
+it would mean changing the extension's partitioning -- a kernel change, which
+this plan explicitly excludes (§5).
+
+The rest of what was ruled out, each by measurement rather than argument:
 
 | candidate | test | result |
 |---|---|---|
@@ -1701,16 +1732,21 @@ measurement rather than argument:
 | volume of CPU MoE work | fp16-vs-fp16 at `mcl` 36 / 44 / 48 | same band (2.4e-5-1.38e-4), no scaling |
 | recurrent-state carryover between arms | `params["cache"].get_new_state()` per arm | states are per-cache, not shared |
 
-Note the strict-determinism run *passed* rather than raising, so every torch op
-in the path has a deterministic implementation — which points the remaining
-suspects at code torch cannot govern: the **native CPU MoE extension**
-(`moe_handoff`, a pinned-shared-memory worker whose partial-sum combine order is
-invisible to `torch.use_deterministic_algorithms`) and **exllamav3's own GPU
-expert kernels** (custom CUDA/Triton, likewise unaffected). Both are untested.
-Isolating them needs a bisect with intermediate-tensor capture around a single
-MoE layer, which is a separate piece of work — this plan is bring-up validation,
-and the parity verdict does not depend on resolving it. Recorded as an open
-question rather than guessed at.
+The strict-determinism run *passed* rather than raising, so every torch op has
+a deterministic implementation — which is why the suspect had to be code torch
+cannot govern. It was: the **native CPU MoE extension** (`moe_handoff`, reached
+through `submit_prefill`, a pinned-shared-memory worker whose reduction order is
+invisible to `torch.use_deterministic_algorithms`). The companion suspect,
+exllamav3's own GPU expert kernels, is now **exonerated** — bit-identical on
+replay.
+
+**What this costs the plan's verdict.** The `mean < 1e-4` bar is unmeasurable on
+this box for a concrete, nameable reason: 33.93GB of weights on a 24GB card
+forces MoE offload, the CPU worker is not run-reproducible at 1 fp32 ULP, and
+the resulting drift is the same order as the cache-format difference being
+measured. On a machine where the model fits in VRAM the bar would be testable
+with no code change at all. That is the honest reason for the substitution, and
+it also says exactly what would make it testable here.
 
 #### Read this before quoting any long-ctx KLD number: QSA sparsifies it
 
