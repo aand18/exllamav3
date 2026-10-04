@@ -1643,28 +1643,46 @@ config:
 | 65536 | 65472 | 16368 | 512 | 2048 | 3.13% |
 | 131072 | 131008 | 32752 | 512 | 2048 | **1.56%** |
 
-Consequences, stated plainly because they change how the table above should be
-read:
+**Correction (first version of this section was wrong about the mechanism).**
+An earlier draft of this note claimed that at long ctx "most sealed kvarn tiles
+are never dequantized into an attention", and drew the performance conclusion
+that QSA sparsity reduces kvarn's dequant work. Both are false, and the
+distinction matters. The cached sparse path (`attn.py:1124-1127`,
+`qsa_indexer.py:704-711`) is:
 
-1. **The long-ctx KLD values are not a kvarn stress test.** At ctx 131072 a
-   query attends to 1.56% of the history, so most sealed kvarn tiles are never
-   dequantized into an attention. The very clean mean 1.4e-5 at 131072 is
-   substantially QSA doing the discarding, not kvarn being lossless there. This
-   also explains the pattern across the table: coverage falls 64x from ctx 2048
-   to 131072 while the KLD *improves*, which is the opposite of what cache
-   compression pressure would do.
-2. **The ctx 2048 cell is the one that actually exercises kvarn** (100%
-   coverage, every position read). Across its four archived runs its mean sits
-   at 7.2e-5 / 2.44e-4 / 1.03e-4 / 1.03e-4 — the highest-variance cell in the
-   table, and the only one where every position is read. It still stays inside
-   the noise floor measured above. That is the honest "kvarn is correct" claim;
-   the long-ctx rows are "kvarn is correct on the 2048 positions the model
-   actually attends to".
-3. **This is not a kvarn defect and not something to fix.** It is the model's
-   architecture. But any comparison that reads the long-ctx rows as evidence
-   about kvarn's compression quality is reading them wrong.
+```python
+if qsa_sparse:
+    qsa_layer.update_kv_direct(cache_seqlens, block_table, k, v, seqlen)
+    o = self.qsa_indexer.sparse_attend(qsa_layer, self, q, qsa_q_idx, ...)
+```
 
-Independent end-to-end check that the sparsity does not break retrieval:
+and inside `sparse_attend`, the KVarN branch does
+`k_mat, v_mat = layer.get_kv(cache_seqlens_cpu, block_table, -1)` **before**
+`qsa_sparse_attend_rows` gathers per-row. `get_kv` materializes the whole
+merged image (sealed body + sink/tail overlay) over every referenced page. So
+**every sealed tile is dequantized on every sparse forward**; the indexer's
+top-k only decides which of the already-dequantized values enter the softmax.
+
+Consequences, restated correctly:
+
+1. **QSA sparsity does not reduce kvarn dequantization work.** The linear
+   prefill scaling (5.0s @8k -> 50.9s @128k, i.e. linear not quadratic) is
+   attention-bound on a bounded 2048-position gather, while the kvarn
+   materialization stays O(ctx) per chunk. Anyone reasoning about kvarn
+   throughput on this model should not credit sparsity for skipping tiles.
+2. **But the KLD conclusion is unchanged**, because it does not depend on the
+   mechanism: a non-selected tile is dequantized and then masked out, so its
+   quantization error cannot reach the logits either way. The long-ctx KLD
+   still only exercises kvarn on the ~2048 positions each query attends to.
+3. **ctx 2048 remains the only cell that exercises every position** (100%
+   coverage, dense regime since `sparse_threshold() = 4*512+3 = 2051` and
+   ctx 2048 < 2051). Its mean across four archived runs is 7.2e-5 / 2.44e-4 /
+   1.03e-4 / 1.03e-4, the highest-variance cell in the table, and still inside
+   the noise floor. That is the honest "kvarn is correct" claim.
+4. This is the model's architecture, not a kvarn defect.
+
+Independent end-to-end check that the top-k selection does not break
+retrieval (i.e. the indexer really does pick the needle's blocks):
 `kvarn_needle.py` at the plan's ctx ceiling, 131065-token prompts, depth
 0.05/0.5/0.95, `-fresh -classic`, guard 200MiB:
 
@@ -1736,13 +1754,15 @@ from an idle card and leaves one.
    plan names — fp16 is the plan's literal gate, kvarn4 is the cache actually
    under test, and the load-test spike is what proved the per-layer shape dump
    (`get_tensors()`, since exllamav3 `Module` has no `named_parameters`).
-9. **The plan does not mention QSA sparsity, and it dominates the long-ctx
-   numbers.** See the "QSA sparsifies it" section above: a query sees at most
-   2048 tokens, so coverage is 1.56% at ctx 131072. Nothing in the plan's
-   KLD-parity framing accounts for this, and reading the long-ctx rows as
+9. **The plan does not mention QSA sparsity, and it bounds what the long-ctx
+   rows can show.** See the "QSA sparsifies it" section: a query sees at most
+   2048 tokens, so coverage is 1.56% at ctx 131072. Reading those rows as
    evidence about kvarn's compression quality would be wrong. Recorded as a
-   finding rather than a deviation — the model behaves as designed — but it is
-   the first thing to read before quoting any of those rows.
+   finding rather than a deviation — the model behaves as designed. Note the
+   section also retracts an earlier draft of itself: sparsity does *not* skip
+   kvarn dequantization (`get_kv` materializes the whole sealed body before
+   the sparse kernel gathers), so the KLD caveat stands on masking, not on
+   laziness.
 
 Raw evidence (all runs, guard min-free + Windows free-RAM before/after per
 run): `C:\Users\yoho\Downloads\exllamav3-kvarn\_fn_evidence\`. Harness used:
