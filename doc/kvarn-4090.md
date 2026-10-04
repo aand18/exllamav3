@@ -829,8 +829,8 @@ warmed box, 2 runs/ctx quote hot, smi_guard exit 0 every run,
 | Bee IQ2_XXS f16 @64k | 2511 (26.10s, 13.765) | 88.3 (8.946) | 4.295 / 0.017 | 12203 | pp 2510.82/2510.82, tg 88.21/88.26 |
 | Bee IQ2_XXS kvarn4 @128k | 1882 (69.66s, 11.895) | 80.6 (8.975) | 2.424 / 0.038 | 13987 | pp 1880.91/1881.69 (Sept-28: 1881.71), tg 80.60/80.57 (Sept-28: 80.86) |
 | Bee IQ2_XXS f16 @128k | 2069 (63.36s, 18.100) | 88.3 (8.946) | 8.590 / 0.017 | 8069 | pp 2068.81/2067.90 (Sept-28: 2067.76), tg 88.26/88.29 (Sept-28: 88.40) |
-| ours 1.40bpw kvarn4 | 754 | 28.1 | 2.44 | 2461 |
-| ours 1.40bpw fp16 | 648 (swap) | 47.5 | 8.61 | n/a (old guard) |
+| ours 1.40bpw kvarn4 @128k | 754 | 28.1 | 2.44 | 2461 | single run, spread not recorded |
+| ours 1.40bpw fp16 @128k | 648 (swap-throttled) | 47.5 | 8.61 | n/a (old guard) | single run, spread not recorded |
 
 Two things fall out. First, Bee f16 @128k exists after all --
 8.59GB resident cross-validates our 8.61GB probe to 0.2%. Second,
