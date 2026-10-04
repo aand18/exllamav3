@@ -1820,6 +1820,56 @@ this to run needs `-cs` strictly above `-ntok` (the job asks for 520 pages;
 were both killed at 21 and 33MiB. The needle harness is heavier than the model
 path, so its ladder is not the serving ladder.
 
+#### What this box actually delivers (absolute, offload-bound)
+
+The plan's §3.3 asks for "completed in Ns" and no comparative tok/s. A direct
+request for expected pp / tg / VRAM / system RAM on this system overrides that,
+so the numbers are recorded here — as absolutes for this configuration, with
+**nothing compared against anything**. All at the serving `mcl` (the kvarn-only
+ladder), kvarn4, chunk 4096, one sequence, greedy argmax decode, 512 decode
+steps per cell, guard 200MiB.
+
+| ctx | serving `mcl` | pp wall | pp tok/s | tg settled | ms/step | tg first window | decode peak | peak reserved | RAM free after load |
+|---|---|---|---|---|---|---|---|---|---|
+| 2048 | 27 | 3.5s | 585 | **15.7 tok/s** | 63.6 | 15.1 | 21.04GB | 23.31GB | 26.1GB |
+| 8192 | 32 | 5.6s | 1463 | **15.4 tok/s** | 64.8 | 14.7 | 18.24GB | 21.81GB | 22.4GB |
+| 32768 | 32 | 14.4s | 2276 | **11.1 tok/s** | 90.0 | 10.7 | 18.78GB | 22.13GB | 25.1GB |
+| 65536 | 34 | 27.8s | 2358 | **8.2 tok/s** | 121.6 | 8.1 | 18.26GB | 21.57GB | 21.8GB |
+| 131072 | 38 | 55.6s | 2357 | **5.3 tok/s** | 189.1 | 5.2 | 17.43GB | 20.83GB | 18.7GB |
+
+"settled" = last 256 of 512 steps. Reading it:
+
+- **pp saturates at ~2350 tok/s** from ctx 32768 up. Below that the fixed
+  per-chunk cost dominates, so ctx 2048's 585 tok/s is a warm-up artefact, not
+  a ceiling. Prefill is not ctx-limited and does not degrade with context.
+- **tg is flat to ctx 8192 (~15.5 tok/s) then falls roughly linearly** to 5.3
+  at 131072. Fitting the settled points above 8k: **~64ms fixed + ~1.0ms per
+  1k tokens of ctx**. The fixed term is the per-step CPU MoE cost of 32-38
+  offloaded layers; the slope is consistent with KVarN materialising the whole
+  sealed body every step (`get_kv` over the full block table — see the QSA
+  section), which is O(ctx) even though attention itself is capped at 2048
+  positions.
+- **Decode warm-up is real and it is the expert churn.** Resolved at 8-step
+  windows at ctx 131072: 214.6 ms/step over steps 1-8, 193.0 over 9-16, 185.0
+  over 17-24, then a flat 184-196 for the remaining 488 steps. So roughly a
+  **14% penalty across the first ~24 steps**, after which the hot-expert set has
+  settled and the rate is stationary. A 64-step window hides this entirely
+  (first window reads 5.24 tok/s vs 5.29 settled, i.e. 1%). Peak VRAM does not
+  move during warm-up — the churn costs time, not memory.
+- **VRAM**: peak reserved 20.8-23.3GB of 23.99GB, decode peak 17.4-21.0GB. The
+  cell that is tightest is small ctx (2048 @ mcl 27, 23.31GB reserved), because
+  there the cache is negligible and the weight residency is what fills the card.
+  Large ctx is *cheaper* on VRAM: more of the card goes to cache, less to
+  offloaded-expert shortfall.
+- **System RAM**: the process takes ~19-27GB of the box's 63.5GB; free RAM after
+  load ranges 18.7-26.1GB, worst at ctx 131072 / mcl 38. Nowhere near the 1GB
+  floor, so no RAM-unsafe configuration exists in this table.
+- **Decode needs more VRAM headroom than prefill.** Calibrating the serving
+  ladder on prefill alone is not sufficient: ctx 8192 @ mcl 30 prefills with
+  3127MiB to spare but was **killed at 41MiB** once 128 decode steps were added.
+  The tg rows above therefore use `mcl` 32-38, one to three layers above the
+  prefill-calibrated serving value.
+
 #### System-RAM guard (hard rule) — no cell UNSAFE
 
 Every run was gated on Windows free physical RAM >= 2048MB before launch and
