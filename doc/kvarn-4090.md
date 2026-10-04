@@ -1624,6 +1624,60 @@ Earlier bit-identical kvarn-vs-kvarn samples at other `mcl` (ctx 8192), for
 completeness: `mcl` 34 gives mean 2.5e-5 / 4.8e-5 / 5.5e-5 / 6.4e-5 / 6.4e-5 /
 1.41e-4 / 1.26e-4, all same-top 100.00%.
 
+#### The noise floor is located upstream of KVarN (measured, not inferred)
+
+The floor above is *not attributable* to kvarn — the fp16-vs-fp16 arm has no
+kvarn in it. That is an argument from absence, and an earlier version of this
+section was content to leave it there on the strength of a `grep` for atomics
+and a docstring. Both are weak evidence, so the claim was tested directly
+(`_spike19_kvarndet.py`): feed **fixed inputs** to each kvarn stage in turn and
+bit-compare repeated calls. That removes the model forward from the equation.
+
+| stage | config | reps | result |
+|---|---|---|---|
+| `kvarn_quantize_tile` (+sc/zp/other) | bits 2, 3, 4, 5 | 32 each | **bit-identical** |
+| `kvarn_variance_normalize` (Sinkhorn) | default iters | 32 | **bit-identical** |
+| `kvarn_wht_head` (torch) | head_dim 256 | 32 | **bit-identical** |
+| sealed record write (`quantize_k/v_tile` into a record) | k4v4, k5v4, k4v2 | 32 each | **bit-identical** |
+| `kvarn_dequantize_k_tile` / `_v_tile` | k4, k5 / v4, v2 | 32 each | **bit-identical** |
+| Triton `kvarn_triton_wht_rows` | 16384 rows (prefill size) | 32 | **bit-identical** |
+| Triton `kvarn_triton_wht_rows` | 65536 rows (4x prefill) | 64 | **bit-identical** |
+| Triton WHT vs torch reference | 65536 rows | 64 | **64/64 exact** (<1e-3) |
+| `get_kv` on real sealed records | Flash-Next layer, `mcl` 38 | 32 / 64 | **bit-identical** |
+| re-store identical K/V, re-read | idem | 1 | **identical image** |
+
+**18 stages, 0 varying** (`EXL3_KVARN_TRITON=1`), and 17/17 with the Triton path
+off. Every run is a bit-for-bit match — `max|diff| 0.000e+00`, not "within
+tolerance".
+
+Two notes on why this needed doing rather than reading:
+
+- The one documented kvarn hazard is real and is in the regime these prefill
+  runs occupy. `kvarn_triton.py:68` records that `tl.debug_barrier()` does not
+  synchronise warps in Triton 3.8 on sm_89, seen as "nondeterministic corruption
+  at 1000+ rows, 0/6 exact with 4/8 warps vs 6/6 with 1 warp". Prefill here is
+  T=4096 x 2 kv heads = **16384 WHT rows**, four times past that threshold, run
+  under `num_warps=1`. The comment's evidence for the safe case is 6 samples;
+  this measures **64/64** at 65536 rows, self-consistent *and* exact against the
+  torch reference. So the mitigation holds at a far larger scale than it was
+  demonstrated at — but note the hazard is a `num_warps` launch property, not
+  run-to-run variance, and it would bite as *wrong results*, not as noise.
+- "No atomics" was the wrong thing to have grepped for, and my grep was also
+  incomplete (it covered `kvarn_triton.py` and `kvarn.py` but not
+  `qsa_triton.py`, which is on the kvarn sparse path). Re-run across every
+  kernel in `attention_fn`, there are no atomics anywhere — but absence of
+  atomics never implied determinism, and the measurement is what settles it.
+
+**Therefore the end-to-end floor (mean 3e-5-1.2e-4, max 3.4e-3, on a
+bit-identical kvarn-vs-kvarn comparison) originates upstream of kvarn**: in the
+CPU-offloaded MoE path or the GPU runtime, not in kvarn's quantization,
+WHT, record store or serve. This is consistent with the fp16-vs-fp16 arm
+moving by the same order with no kvarn present. What remains unexplained is
+the *mechanism* of that upstream variance — the thread-count test rules out
+CPU thread scheduling, and `torch.are_deterministic_algorithms_enabled()` is
+False with `CUBLAS_WORKSPACE_CONFIG` unset, so cuBLAS split-k / non-deterministic
+reduction selection is the obvious next suspect, untested here.
+
 #### Read this before quoting any long-ctx KLD number: QSA sparsifies it
 
 The 12 kvarn layers are QSA-sparse, and the indexer is not a kvarn feature —
