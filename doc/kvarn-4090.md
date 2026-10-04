@@ -234,15 +234,7 @@ no number without its peak; (2) q8 proxy rule: fp16 ref where it
 fits, `-ref q8` (KLD digit-identical to fp16, med 1e-6 / mean 4e-6 /
 max 4.6e-5 @128k) only where fp16 spills; one-time ≤32k
 proxy calibration (kvarn-vs-fp16 AND kvarn-vs-q8 digit-equal +
-identical needle HIT/MISS) before q8-only at 64k/128k; (3) q5-rule
-(2026-10-04, spike `eval/_spike23_q5.py`, untracked): kvarn4 ≈
-q5-class on BOTH archs, tied within ~2x — 27B@2048 HOLDS strict
-(2.7e-5 ≤ 6.8e-5), 27B@8192 + FN@2048 strict-FAIL with q5
-marginally ahead (2.2e-5 vs 1.5e-5; 1.75e-4 vs 1.59e-4),
-same-top 100% throughout. "Better than Q5" does NOT cleanly
-replicate; treat as tied. FN means run ~10x 27B (MoE
-nondeterminism suspected — even q5-vs-fp16 exceeds the 1e-4 mean
-budget) → MoE KLD budget needs recalibration, not a kvarn defect.
+identical needle HIT/MISS) before q8-only at 64k/128k.
 Combine WHT-split (2026-10-02, `90074b7`, default ON, kill-switch
 `EXL3_KVARN_COMBINE_SPLIT=0`): tg@64k graph 47.5 hot vs 47.8 pre-cut
 (neutral within noise; run1 34.9 was one-time triton recompile of the
@@ -1863,6 +1855,17 @@ greedy argmax decode, 128 decode steps per cell, guard 200MiB, stock
 > q4/fp16 figures are unaffected: the flag gates nothing when no kvarn layer
 > exists.
 
+> **Scope — read before quoting any number below.** Every figure in this
+> section is **Qwen3.8-Flash-Next 2.05bpw (`Qwen4Exp`)** on this box:
+> 512-expert MoE, 36 GatedDeltaNet recurrent layers, 12 QSA full-attention
+> layers, kvarn4 on the 12 QSA layers only. It is a **different architecture
+> from the Qwen3.8-27B dense model documented earlier in this file**, and the
+> two sets of numbers are **not comparable** — not pp, not tg, not VRAM, not
+> system RAM. Do not average them, ratio them, or quote one beside the other as
+> if they measured the same thing. The 27B figures were not retested under the
+> corrected settings below, so they remain valid only for the conditions under
+> which they were taken.
+
 **Decode-safe serving ladder, kvarn4.** Highest passing `mcl` per cell, since
 decode speed is nearly flat in `mcl` (see the offload-headroom table below).
 
@@ -1969,22 +1972,39 @@ softmax requires. That emission is the O(ctx) term, and it is structural in the
 current design: attention reads at most 2048 QSA-selected positions but the
 merge builds all of ctx.
 
-`kvarn.py:1229-1230` carries the maintainers' own note to the same effect —
-*"The legacy path above this is prefill-grade only (it rematerializes the whole
-context per step: 8.2 tok/s at 32k vs 64 fp16)."* Our 32k measurement on that
-path (~10 tok/s) is close to their 8.2. **Their "64 fp16" does not reproduce
-here** — we measure 28.5 tok/s fp16 at 32k, ~2.2x lower, most likely because
-MoE offload dominates step time in this configuration.
+**Do not import the 27B dense numbers as evidence here.** `kvarn.py:1229-1230`
+carries the note *"The legacy path above this is prefill-grade only (it
+rematerializes the whole context per step: 8.2 tok/s at 32k vs 64 fp16)."*
+Those figures — **8.2 tok/s and 64 fp16** — are **Qwen3.8-27B dense**
+measurements, recorded in the 27B dense section of this document above and
+merely quoted into a shared source comment. Flash-Next is a different
+architecture (512-expert MoE with 36 GatedDeltaNet recurrent layers, vs a dense
+27B), so that 64 tok/s is not a Flash-Next expectation and is not evidence that
+anything here regressed. Our own 32k figure on the same legacy path is ~10
+tok/s; our fp16 figure at 32k is 28.5 tok/s. Those are this model's numbers and
+they stand on their own. (Hypothesis, not established: the CPU MoE offload
+dominates step time in this configuration, which would depress fp16 decode
+relative to a dense model. Not measured — separating MoE-offload cost from
+cache cost would need a no-offload run at 32k.)
 
 Improving it means fusing dequant+gather into the attention kernel so only the
 ~2048 selected positions are expanded (~64x less work at ctx 131072). That is a
 kernel change, excluded by plan §5, and was not attempted. The `imageless`
 online-serve arm (`_kvarn_imageless`, `kvarn.py:516`) is the existing code
-meant to avoid this, but enabling it made decode **1.84x slower**, not faster.
+meant to avoid this, but on Flash-Next enabling it made decode **1.84x slower**,
+not faster. (The 27B dense section reached NO-GO on the same arm on 27B
+evidence; that decision stands on its own and was not re-tested here.)
+
+The 160-page cap itself is shared code and applies to both models, but its
+*benefit does not transfer*. On 27B dense, raising the image to 160 pages was a
+deliberate win (56.9 tok/s over 256 steps from 32k, per the 27B section). On
+Flash-Next, forcing the cap open changes nothing (7.96 vs 8.22 tok/s at 65536).
+Same line of code, opposite outcome, different architecture.
 
 Unresolved: the 32768 → 65536 cliff sits immediately above the 160-page / 40k
 image limit, but forcing the flag open does not recover it, so the cause is
-broader than that flag.
+broader than that flag. Flash-Next only; the 27B dense model does not show this
+cliff at these contexts, and was not retested to check.
 
 #### System-RAM guard (hard rule) — no cell UNSAFE
 
@@ -2112,12 +2132,29 @@ load 51B parameters and fail.
    kvarn dequantization (`get_kv` materializes the whole sealed body before
    the sparse kernel gathers), so the KLD caveat stands on masking, not on
    laziness.
+10. **A q5 standing rule was withdrawn from the 27B dense section on
+   2026-10-04 and is not recorded here.** It had been entered as a single
+   verdict spanning both architectures ("kvarn4 ≈ q5-class on BOTH archs,
+   tied within ~2x"), citing `eval/_spike23_q5.py` — a file that is not in the
+   tree and was never committed, so the run behind those figures could not be
+   re-checked or reproduced. Two reasons it does not stand: it merged 27B
+   dense and Flash-Next measurements into one verdict, which this document
+   does not do anywhere else and must not (they are different architectures —
+   see the scope note in the Flash-Next section); and the 27B half was measured
+   under the pre-correction `EXL3_KVARN_IMAGELESS=1` settings, so it would not
+   have been comparable with a fresh Flash-Next run even in principle. It is
+   to be re-measured and recorded **per architecture, each with its own table
+   and a retained artifact**, not as a cross-arch verdict. No q5 figure from
+   that entry should be quoted from this document in the meantime.
 
 Raw evidence (all runs, guard min-free + Windows free-RAM before/after per
 run): `C:\Users\yoho\Downloads\exllamav3-kvarn\_fn_evidence\`. Harness used:
 `eval/kvarn_microkld.py` (committed, unmodified); spikes
 `eval/_spike12_audit.py` (audit), `_spike13_loadtest.py` (load test),
-`_spike15_kldctl.py` (noise-floor control), `_spike16_collect.py` (log ->
-TSV), `_spike18_kvarnonly.py` (serving-config fit probe), plus
-`_fn_run.sh` / `_fn_calib.sh` / `_fn_calib_kvonly.sh` and the
-`_spike1{3load,4kld,5ctl,7needle,8kvonly}.bat` runners -- all untracked.
+`eval/_spike15_kldctl.py` (noise-floor control), `_spike16_collect.py` (log ->
+TSV), `_spike18_kvarnonly.py` (serving-config fit probe, extended with
+`-ct`/`-imgforce`), `_spike22_getkvtime.py` (isolated `get_kv` timing),
+`_spike23_table.py` (evidence-log -> table parser), plus `_fn_run.sh` /
+`_fn_calib.sh` / `_fn_calib_kvonly.sh` and the
+`_spike1{3load,4kld,5ctl,7needle,8kvonly}.bat` /
+`_spike2{1kvtime,2getkv}.bat` runners -- all untracked.
