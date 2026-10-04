@@ -1580,51 +1580,49 @@ forbids comparative tok/s.
 
 #### The `mean < 1e-4` bar is below this box's noise floor
 
-Both microkld arms share the CPU-offloaded MoE experts (8-thread GEMM,
-`EXL3_MOE_CPU_THREADS=8`), whose reduction order is not run-stable, so part of
-every KLD here is offload nondeterminism rather than cache format. Measured
-directly with a bit-identical comparison (`_spike15_kldctl.py`, kvarn4 vs
-kvarn4, ctx 8192, separate processes so load-to-load variation is included):
+Part of every KLD here is run-to-run nondeterminism rather than cache format.
+Measured with bit-identical comparisons — the same cache class on both arms —
+at ctx 8192, `mcl` 36, one process per sample, both arms inside that process
+(`_spike15_kldctl.py`). Three independent samples per cell:
 
-| control sample | median | mean | max | same-top |
+| arms | CPU threads | median (3) | mean (3) | max (3) |
 |---|---|---|---|---|
-| mcl 36, run 1 | 1.0e-5 | 2.5e-5 | 4.04e-4 | 100.00% |
-| mcl 36, run 2 | 2.4e-5 | 4.8e-5 | 3.33e-4 | 100.00% |
-| mcl 36, run 3 | 1.3e-5 | 5.5e-5 | 1.03e-3 | 100.00% |
-| mcl 34, runs 1-5 | 1.0e-5-1.8e-5 | 4.2e-5-1.41e-4 | 4.56e-4-3.34e-3 | 100.00% |
+| kvarn4 vs kvarn4 | 8 | 1.0e-5, 9.0e-6, 3.4e-5 | 9.0e-5, 6.2e-5, 9.1e-5 | 3.4e-3, 9.5e-4, 7.3e-4 |
+| kvarn4 vs kvarn4 | 1 | 6.3e-5, 2.4e-5, 7.0e-6 | 1.1e-4, 1.2e-4, 2.9e-5 | 7.5e-4, 1.7e-3, 3.2e-4 |
+| **fp16 vs fp16 (no kvarn)** | 8 | 4.1e-5, 8.0e-6, 1.8e-5 | 5.6e-5, 2.7e-5, 9.4e-5 | 3.2e-4, 4.7e-4, 2.5e-3 |
+| **fp16 vs fp16 (no kvarn)** | 1 | 1.2e-5, 1.5e-5, 1.2e-5 | 7.2e-5, 6.4e-5, 7.8e-5 | 2.2e-3, 1.2e-3, 1.5e-3 |
 
-The floor's mean reaches **1.41e-4 with a bit-identical comparison**, i.e. the
-plan's `mean < 1e-4` gate sits *inside* the noise distribution and cannot be
-met by construction on this box at this scale. The defensible gate here is
-**same-top 100%** (holds universally) plus KLD within the noise floor — which
-the kvarn-vs-fp16 and kvarn-vs-q8 rows do, and which is also why the 3.05bpw
-rows above (mean 8.2e-4 @400, 5.2e-4 @4096) should be read as "same-top 100%,
-mean in the offload-noise band", not as a cache-format ranking. No kernel or
-harness change is warranted by this; it is a measurement-resolution limit.
+same-top is 100.00% in all twelve samples. What this establishes:
 
-`PARITY=1` @8192, `mcl` 38: **clean** — every Triton call asserts against its
-torch twin, exit 0, no trips, KLD med 1.6e-5 / mean 8.9e-5 / same-top 100.00%,
-min-free 1581MiB. So the fused Triton path is bit-verified against torch on a
-new architecture (`head_dim` 256, 12 QSA layers, 2 kv heads). Note it needs
-real headroom: at `mcl` 34 the parity twins do not fit and the guard killed the
-run at 25MiB.
+1. **The floor exists with no kvarn involved at all.** An fp16-vs-fp16
+   comparison — identical cache, identical preset — moves by mean 2.7e-5 to
+   9.4e-5 and max up to 2.5e-3. So it is not a kvarn property.
+2. **It is not thread-scheduling nondeterminism.** An earlier version of this
+   section blamed the 8-thread CPU-offloaded MoE GEMM. At
+   `EXL3_MOE_CPU_THREADS=1`, where a CPU GEMM's reduction order is fixed, the
+   floor is unchanged (kvarn mean 2.9e-5-1.2e-4, fp16 mean 6.4e-5-7.8e-5 — no
+   trend against the 8-thread cells). Whatever varies is upstream of thread
+   scheduling and is not kvarn's.
+3. **kvarn does not measurably amplify it.** The kvarn-vs-kvarn and
+   fp16-vs-fp16 bands overlap (2.9e-5-1.2e-4 vs 2.7e-5-9.4e-5). An earlier
+   draft of this note claimed ~2-4x amplification from quantization boundary
+   effects; that rested on one sample per cell and does not survive three. Not
+   claiming it.
+4. **Consequence.** The plan's bar, `mean < 1e-4`, sits *inside* this floor
+   (which reaches 1.2e-4 with a bit-identical comparison), so it cannot be met
+   by construction on this box at this scale. The kvarn-vs-fp16 values in the
+   map above (mean 6.0e-5-2.44e-4) are the same order, reaching ~2x the top of
+   the floor at ctx 2048 and nowhere separating from it at ctx >= 32768. The
+   gate actually used is **same-top 100%**, which holds in every cell of every
+   table here.
+5. Separating "kvarn is lossy" from "kvarn is not run-reproducible" would need a
+   deterministic reference path, which 33.93GB of weights on a 24GB card does
+   not allow. That is a measurement-resolution limit, not something to fix in
+   the kernel or the harness.
 
-q8 proxy rule (standing rule: one-time <=32k calibration, kvarn-vs-fp16 AND
-kvarn-vs-q8 + identical needle HIT/MISS). Both KLD halves are the 8192 rows
-above. The needle half, `eval/kvarn_needle.py` @12288 prompt tokens
-(`-cs 16384`, `mcl` 37; guard min-free 6077 / 5843 / 6007 MiB for kvarn4 /
-fp16 / q8, all archived):
-
-| cache | smoke | needle@0.05 | needle@0.5 | needle@0.95 | multi | update | total |
-|---|---|---|---|---|---|---|---|
-| kvarn4 | HIT | HIT | HIT | HIT | HIT | HIT | 6/6 |
-| fp16 | HIT | HIT | HIT | HIT | HIT | HIT | 6/6 |
-| q8 | HIT | HIT | HIT | HIT | HIT | HIT | 6/6 |
-
-HIT/MISS identity holds across all three caches (including the multi-needle
-conjunction and the recency-update item), so q8 is a sound stand-in for fp16
-on this model. Recorded for completeness — at every ctx measured here fp16
-fits on its own, so the proxy is not load-bearing yet.
+Earlier bit-identical kvarn-vs-kvarn samples at other `mcl` (ctx 8192), for
+completeness: `mcl` 34 gives mean 2.5e-5 / 4.8e-5 / 5.5e-5 / 6.4e-5 / 6.4e-5 /
+1.41e-4 / 1.26e-4, all same-top 100.00%.
 
 #### Read this before quoting any long-ctx KLD number: QSA sparsifies it
 
@@ -1715,10 +1713,71 @@ exit, and it is the same full-card value both times on all 38 runs (38/38
 where the process was killed rather than exiting). So every peak below starts
 from an idle card and leaves one.
 
+#### Assumption audit (assumptions checked against the model card and the code)
+
+Every structural claim in this section was re-derived against the model's own
+`README.md` (the released model card) rather than against `config.json` alone,
+because a config field can be misread and a wrong reading here would invalidate
+the whole section. All of it holds:
+
+| assumption | model card | verdict |
+|---|---|---|
+| 48 trunk layers | "Number of Layers: 48" | confirmed |
+| 12 full-attn / 36 linear, 1:3, indices 3,7,...,47 | "12 x (3 x (Gated DeltaNet -> MoE) -> 1 x (Qwen Sparse Attention -> MoE))" | confirmed |
+| linear layers are GatedDeltaNet | "Gated DeltaNet: 48 for V and 16 for QK, Head Dimension 128" | confirmed (matches `linear_num_value_heads=48`, `linear_num_key_heads=16`) |
+| 24 Q heads / 2 KV heads, head_dim 256 | "24 for Q and 2 for KV, Head Dimension: 256" | confirmed |
+| QSA indexer is MQA, 4 Q heads / 1 shared K head, dim 128 | "MQA with 4 Query Heads and 1 Shared Key Head, Indexer Head Dimension: 128" | confirmed |
+| **each query sees at most 2048 tokens** | **"Budget: 512 blocks or 2048 tokens"** | **confirmed, exactly** |
+| selection is by micro-block, not per token | "Rather than selecting individual tokens ... operates at the micro-block level" | confirmed (`compress_ratio` 4) |
+| 512 experts, top-10 routed | "512 ... 10 Routed + 1 Shared" | confirmed |
+| Gated Residual, 4 branches, rank 320 | "Number of Branches: 4, Bottleneck Rank: 320" | confirmed (`hc_count`, `hc_lowrank`) |
+| n-gram embedding sits at layer 2 | "N-gram Embedding: 20,000,000 (bigrams/trigrams at layer 2)" | confirmed (`ple_layer_ids: [2]`) |
+| MTP excluded | "MTP: 1 layer"; 125B trunk + 51B n-gram + 4B MTP | confirmed as separable |
+| native ctx 262144 | "262,144 natively" | confirmed |
+
+**One assumption I held that turned out to need checking, and was right only by
+accident of implementation.** The plan (§4.1) says to exclude
+`ngram_embedding.safetensors` alongside the MTP patch, which reads as if that
+26.2GB file were draft-only. The model card contradicts that reading: the 51B
+n-gram embedding is listed as part of the *language model*, at layer 2, and
+`model.safetensors.index.json` contains **zero** `ngram_embedding` keys — the
+trunk shards hold only 6 PLE tensors (`conv1d`, `key_proj`, `value_proj`,
+`norm_key`, `norm_query`, `norm_conv`). So excluding the file looks like it
+would leave layer-2 PLE running with no embedding at all.
+
+It does not, and the reason is worth recording. `NGramEmbedding` takes
+`stream_from_disk`, which defers to `infer_params.ngram_stream_from_disk`,
+which defaults to on (`EXL3_NGRAM_STREAM`, default `"1"`,
+`model/config.py:59`). Probed on the loaded model:
+
+```
+config.infer_params.ngram_stream_from_disk  True
+EXL3_NGRAM_STREAM env                      <unset> -> default 1
+PLE module: PLELayer key=model.language_model.layers.1.ple  ple_embedding=NGramEmbedding
+  stream_from_disk     None      (defers to config at load time)
+  resident tensors     0         (disk-backed, not in VRAM/RAM)
+```
+
+So the 51B table is **mmapped from disk and gathered per token**
+(`ngram_gather_cpu` over a `DiskTensorHandle`), never resident. The runs were
+on the complete model, and `EXL3_NGRAM_STREAM` is not overridden in any runner,
+so streaming was on for every measurement here.
+
+Operational consequence: the full Qwen3.8-Flash-Next fits this 24GB card *only*
+because of that streaming. Resident, the trunk alone is 33.93GB; adding the
+n-gram table would be ~47GB+. Anyone repeating this on a card with less RAM
+must keep `EXL3_NGRAM_STREAM` at its default — setting it to `0` would try to
+load 51B parameters and fail.
+
 #### Deviations from the bring-up plan (all recorded, none blocking)
 
 1. **§3.2 `mean < 1e-4` is unmeasurable here** — see the noise-floor table.
-   Same-top 100% is the gate actually used.
+   Same-top 100% is the gate actually used. An earlier version of this note
+   blamed 8-thread CPU-GEMM scheduling; a thread-count test refuted that (the
+   floor survives at `EXL3_MOE_CPU_THREADS=1`, and an fp16-vs-fp16 control with
+   no kvarn still moves), so the cause is baseline nondeterminism in the
+   offloaded model path. A 3-samples-per-cell follow-up also refuted my
+   "kvarn amplifies it" reading: the kvarn and fp16 floors overlap.
 2. **§4.2's two configs are real and are the two columns above — my first
    reading of this was wrong.** I initially recorded the PARITY config as
    "unnecessary" because fp16-KV fits at every ctx <=131072. It fits at the
