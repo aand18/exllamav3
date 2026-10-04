@@ -44,6 +44,10 @@ class QSAPlanes:
 
     @override
     def copy_page(self, source, from_page: int, to_page: int, num_tokens: int):
+        assert self.compress_ratio == source.compress_ratio and \
+            self.index_head_dim == source.index_head_dim, \
+            "QSA copy_page requires matching compress_ratio/index_head_dim " \
+            "(pooled row counts differ otherwise)"
         super().copy_page(source, from_page, to_page, num_tokens)
         self.raw_k[to_page, :num_tokens].copy_(source.raw_k[from_page, :num_tokens], non_blocking = True)
         nb = (num_tokens + self.compress_ratio - 1) // self.compress_ratio
@@ -109,5 +113,6 @@ class CacheLayer_qsa_quant(QSAPlanes, CacheLayer_quant):
                 "max_num_tokens": self.max_num_tokens,
                 "k_bits": self.k_bits,
                 "v_bits": self.v_bits,
+                "compand_a": self.compand_a,
             }
         }

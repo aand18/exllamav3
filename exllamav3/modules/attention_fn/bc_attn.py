@@ -700,6 +700,17 @@ def build_bc_attn(module, layer):
     from ...cache.qsa import QSAPlanes
 
     m = module
+    # KVarN M5: explicit per-layer decline (no page-major K/V tensors to
+    # bake into graphs; online-dequant kernels out of scope). Falls back
+    # to the dispatch path by design, never silently.
+    try:
+        from ...cache.kvarn import CacheLayer_kvarn, kvarn_bc_attn_supported
+        if isinstance(layer, CacheLayer_kvarn):
+            assert kvarn_bc_attn_supported()[0] is False
+            _trace_build(m, None, "attn-kvarn")
+            return None
+    except ImportError:
+        pass
     qsa_idx = getattr(m, "qsa_indexer", None)
     if not (
         _module_eligible(m) and

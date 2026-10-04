@@ -966,6 +966,9 @@ class Attention(Module):
         from ..cache.fp16 import CacheLayer_fp16
         from ..cache.quant import CacheLayer_quant
         from ..cache.qsa import CacheLayer_qsa, CacheLayer_qsa_quant
+        from ..cache.kvarn import CacheLayer_kvarn, CacheLayer_kvarn_qsa
+        if issubclass(default, CacheLayer_kvarn):
+            return CacheLayer_kvarn_qsa, kwargs
         if issubclass(default, CacheLayer_quant):
             return CacheLayer_qsa_quant, kwargs
         assert issubclass(default, CacheLayer_fp16), \
@@ -983,9 +986,20 @@ class Attention(Module):
             return
         from ..cache import CacheLayer, CacheLayer_quant
         from ..cache.qsa import QSAPlanes
+        from ..cache.kvarn import CacheLayer_kvarn
         layer = cache if isinstance(cache, CacheLayer) else \
             cache.layers[self.layer_idx, params.get("layer_instance") or 0]
         if not isinstance(layer, QSAPlanes):
+            return
+        if isinstance(layer, CacheLayer_kvarn):
+            # KVarN M5: decline the synthetic zero-page sparse-regime
+            # probe (see kvarn_autosplit_probe_supported: it would seal
+            # garbage groups and touch page tensors KVarN does not have).
+            # The load-time measuring forward through the real cached
+            # path already accounts the fp16-size get_kv transient
+            # (kvarn_autosplit_transient_bytes), and seal bookkeeping is
+            # rewrite-safe, so skipping the probe is conservative and
+            # cannot corrupt seals.
             return
         quant = isinstance(layer, CacheLayer_quant)
         chunk = params["batch_shape"][1]
