@@ -234,7 +234,24 @@ no number without its peak; (2) q8 proxy rule: fp16 ref where it
 fits, `-ref q8` (KLD digit-identical to fp16, med 1e-6 / mean 4e-6 /
 max 4.6e-5 @128k) only where fp16 spills; one-time ≤32k
 proxy calibration (kvarn-vs-fp16 AND kvarn-vs-q8 digit-equal +
-identical needle HIT/MISS) before q8-only at 64k/128k.
+identical needle HIT/MISS) before q8-only at 64k/128k; (3) q5
+spot-checks, PER ARCHITECTURE (2026-10-04, artifact
+`eval/_spike23_q5.py` retained in-tree, box logs `q5_27b.log` /
+`q5_fn.log` on the mirror): 27B dense — @2048 HOLDS strict
+(kvarn4 mean 2.7e-5 ≤ q5 6.8e-5), @8192 strict-FAIL with q5
+marginally ahead (2.2e-5 vs 1.5e-5); measured under
+pre-correction `IMGL=1`, so 8k/16k/32k cells pending re-measure
+under IMGL=0. Verdict 27B: tied within ~2x, same-top 100%.
+KLD-TARGET CAVEATS (both archs): (a) strict ≤ is the wrong
+bar at these magnitudes — means ~1e-5 with maxes ~1e-4 differ
+by noise as much as by format; gate on same-top 100% + order
+of magnitude, not ≤; (b) MoE budget: Flash-Next means run ~10x
+27B *including q5-vs-fp16* (1.59e-4, over the 1e-4 budget with
+no kvarn involved — offload nondeterminism suspected), so the
+1e-4 mean budget does not transfer to MoE; recalibrate there,
+do not gate Flash-Next on dense thresholds; (c) QSA coverage:
+@2048 queries see ~100% of ctx (true kvarn exercise); long-ctx
+KLD rows certify attended positions only (see QSA finding).
 Combine WHT-split (2026-10-02, `90074b7`, default ON, kill-switch
 `EXL3_KVARN_COMBINE_SPLIT=0`): tg@64k graph 47.5 hot vs 47.8 pre-cut
 (neutral within noise; run1 34.9 was one-time triton recompile of the
@@ -1478,6 +1495,7 @@ SPEED config, measured with the same command.
 | ctx | ref | mcl | ref prefill / peak | kvarn prefill / peak | min-free (MiB) | OOM/kill | KLD med / mean / max | p99 | same-top | fits |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 2048 | fp16 | 32 | 3.1s / 20.9GB | 1.9s / 20.9GB | 485-893 | N | 1.8e-5 / 7.2e-5 / 9.08e-4 | 7.33e-4 | 100.00% | yes |
+| 2048 | q5 (spot-check, `eval/_spike23_q5.py` retained) | 34 | 21.4GB peak (q5 leg) | 21.5GB peak (kvarn leg) | n/a (no guard on this run) | N (completed) | 1.9e-5 / 1.59e-4 / 4.04e-3 | n/a | 100.00% | yes |
 | 2048 | fp16 | 31 | 3.0s / 21.4GB | 1.9s / 21.4GB | **171-173** | **Y** | 4.3e-5 / 1.52e-4 / 2.97e-3 | - | (100.00%) | **no** |
 | 8192 | fp16 | 36 | 5.0s / 19.8GB | 4.1s / 19.6GB | 455-835 | N | 1.7e-5 / 6.0e-5 / 1.32e-3 | 9.29e-4 | 100.00% | yes |
 | 8192 | fp16 | 35 | 5.0s / 20.4GB | 4.1s / 20.3GB | **101** (or 385/473) | **Y** (1 of 3) | 2.7e-5 / 8.5e-5 / 1.79e-3 | 1.03e-3 | (100.00%) | **no** |
@@ -1490,6 +1508,19 @@ SPEED config, measured with the same command.
 | 131072 | fp16 | 42 | 50.6s / 20.8GB | 57.2s / 17.3GB | 459-481 | N | 8e-6 / 1.4e-5 / 9.5e-5 | 6.8e-5 | 100.00% | yes |
 | 131072 | q8 | 42 | 52.8s / 19.3GB | 57.5s / 17.3GB | 1995 | N | 5e-6 / 1.3e-5 / 2.48e-4 | 1.44e-4 | 100.00% | yes |
 | 131072 | fp16 | 41 | - | - | **9** | **Y** | - | - | - | **no** |
+
+q5 spot-check verdict (2026-10-04, same 2048/mcl-34 setup as the q5
+row above; paired kvarn leg med 2.4e-5 / mean 1.75e-4 / max 5.73e-3):
+kvarn4 ≈ q5-class, tied — strict ≤ FAILS with q5 marginally ahead
+(1.75e-4 vs 1.59e-4), same-top 100% both. KLD-TARGET CAVEATS: (a)
+strict ≤ is the wrong bar at these magnitudes (means ~1e-4, maxes
+~1e-3 differ by noise as much as by format) — gate on same-top 100%
++ order of magnitude; (b) MoE means run ~10x dense *including
+q5-vs-fp16* (offload nondeterminism suspected), so the dense 1e-4
+mean budget does not transfer — recalibrate per architecture, do
+not gate Flash-Next on dense thresholds; (c) QSA coverage @2048 is
+~100% (true kvarn exercise); long-ctx rows certify attended
+positions only.
 
 Parenthesised same-top values are from runs the guard killed after the KLD
 had already printed (the kill lands in teardown, so the number is real but
