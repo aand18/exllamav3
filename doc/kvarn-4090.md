@@ -1626,6 +1626,60 @@ conjunction and the recency-update item), so q8 is a sound stand-in for fp16
 on this model. Recorded for completeness — at every ctx measured here fp16
 fits on its own, so the proxy is not load-bearing yet.
 
+#### Read this before quoting any long-ctx KLD number: QSA sparsifies it
+
+The 12 kvarn layers are QSA-sparse, and the indexer is not a kvarn feature —
+it is the model's own attention. Each query keeps the top
+`block_topk = token_budget / compress_ratio = 2048 / 4 = 512` blocks of 4
+tokens, i.e. **at most 2048 tokens**, ANDed into the causal mask
+(`qsa_indexer.py:226-237`). Measured off the live model, not derived from
+config:
+
+| ctx | past | blocks in history | blocks kept | tokens a query sees | coverage |
+|---|---|---|---|---|---|
+| 2048 | 1984 | 496 | 496 | 1984 | **100.00%** |
+| 8192 | 8128 | 2032 | 512 | 2048 | 25.20% |
+| 32768 | 32704 | 8176 | 512 | 2048 | 6.26% |
+| 65536 | 65472 | 16368 | 512 | 2048 | 3.13% |
+| 131072 | 131008 | 32752 | 512 | 2048 | **1.56%** |
+
+Consequences, stated plainly because they change how the table above should be
+read:
+
+1. **The long-ctx KLD values are not a kvarn stress test.** At ctx 131072 a
+   query attends to 1.56% of the history, so most sealed kvarn tiles are never
+   dequantized into an attention. The very clean mean 1.4e-5 at 131072 is
+   substantially QSA doing the discarding, not kvarn being lossless there. This
+   also explains the pattern across the table: coverage falls 64x from ctx 2048
+   to 131072 while the KLD *improves*, which is the opposite of what cache
+   compression pressure would do.
+2. **The ctx 2048 cell is the one that actually exercises kvarn** (100%
+   coverage, every position read). Across its four archived runs its mean sits
+   at 7.2e-5 / 2.44e-4 / 1.03e-4 / 1.03e-4 — the highest-variance cell in the
+   table, and the only one where every position is read. It still stays inside
+   the noise floor measured above. That is the honest "kvarn is correct" claim;
+   the long-ctx rows are "kvarn is correct on the 2048 positions the model
+   actually attends to".
+3. **This is not a kvarn defect and not something to fix.** It is the model's
+   architecture. But any comparison that reads the long-ctx rows as evidence
+   about kvarn's compression quality is reading them wrong.
+
+Independent end-to-end check that the sparsity does not break retrieval:
+`kvarn_needle.py` at the plan's ctx ceiling, 131065-token prompts, depth
+0.05/0.5/0.95, `-fresh -classic`, guard 200MiB:
+
+| cache | mcl | smoke | needle@0.05 | needle@0.5 | needle@0.95 | total | min-free |
+|---|---|---|---|---|---|---|---|
+| kvarn4 | 44 | HIT | HIT | HIT | HIT | **4/4** | 7091MiB |
+| fp16 | 46 | HIT | HIT | HIT | HIT | **4/4** | 8047MiB |
+
+So the indexer does select the needle's blocks at every depth, and HIT/MISS
+identity between kvarn4 and fp16 holds at 131072 as well as at 12288. Getting
+this to run needs `-cs` strictly above `-ntok` (the job asks for 520 pages;
+`-cs 131072` is 512) and more offload than the microkld probe — `mcl` 38 and 42
+were both killed at 21 and 33MiB. The needle harness is heavier than the model
+path, so its ladder is not the serving ladder.
+
 #### System-RAM guard (hard rule) — no cell UNSAFE
 
 Every run was gated on Windows free physical RAM >= 2048MB before launch and
@@ -1682,6 +1736,13 @@ from an idle card and leaves one.
    plan names — fp16 is the plan's literal gate, kvarn4 is the cache actually
    under test, and the load-test spike is what proved the per-layer shape dump
    (`get_tensors()`, since exllamav3 `Module` has no `named_parameters`).
+9. **The plan does not mention QSA sparsity, and it dominates the long-ctx
+   numbers.** See the "QSA sparsifies it" section above: a query sees at most
+   2048 tokens, so coverage is 1.56% at ctx 131072. Nothing in the plan's
+   KLD-parity framing accounts for this, and reading the long-ctx rows as
+   evidence about kvarn's compression quality would be wrong. Recorded as a
+   finding rather than a deviation — the model behaves as designed — but it is
+   the first thing to read before quoting any of those rows.
 
 Raw evidence (all runs, guard min-free + Windows free-RAM before/after per
 run): `C:\Users\yoho\Downloads\exllamav3-kvarn\_fn_evidence\`. Harness used:
