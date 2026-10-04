@@ -1,0 +1,255 @@
+"""
+Micro-KLD: KVarN cache vs fp16 cache over one prefill on a real model.
+
+Compares per-position next-token KLD between a KVarN-cache forward and an
+fp16-cache forward of the same prompt. Two-phase (populate past, then score
+a continuation at past_len>0): a single past_len=0 prefill only attends
+over fresh exact projections, so scoring it measures nothing. NTOK is the
+total token count and must exceed ~320 so the populated past actually seals
+a 128-group; the tail floor keeps the suffix exact on both sides, so this
+measures body-format difference, not suffix policy.
+
+Needs a GPU box (the C++ extension is CUDA-only; CPU forward is unsupported).
+Example:
+    python eval/kvarn_microkld.py -m <model_dir> -cq kvarn4 -ntok 200
+"""
+
+import argparse
+import gc
+import time
+import torch
+import torch.nn.functional as F
+
+from exllamav3 import Config, Model, Tokenizer, Cache
+from exllamav3.cache import CacheLayer_fp16, CacheLayer_kvarn
+from exllamav3.cache.quant import CacheLayer_quant
+from exllamav3.cache.kvarn import kvarn_parse_preset
+
+SAMPLER_TEXT = ("The capital of France is Paris. It is known for the Eiffel "
+                "Tower, the Louvre, and its arrondissements along the Seine. ")
+
+
+def _bshape(n):
+    # batch_shape is a capacity: must be a 256-multiple and fit the cache.
+    return ((int(n) + 255) // 256) * 256
+
+
+def populate(model, cache, ids, chunk, stop=None):
+    # Chunked prefill to token position ``stop`` (default: full length).
+    # Chunking keeps peak VRAM flat: a full-length prefill materializes
+    # full-length fp32 logits (GBs at 8k) that the caller discards anyway.
+    # Returns (recurrent_states, past_len == stop).
+    n = int(ids.shape[1]) if stop is None else stop
+    states = None
+    past = 0
+    bs = _bshape(ids.shape[1])
+    while past < n:
+        c = min(chunk, n - past)
+        p = {"cache": cache, "attn_mode": "flash_attn",
+             "batch_shape": (1, bs), "past_len": past}
+        if states is not None:
+            p["recurrent_states"] = states
+        out = model.forward(ids[:, past:past + c], p)
+        states = p.get("recurrent_states")
+        past += c
+        del out
+    return states, past
+
+
+def run(model, cache, ids, chunk=2048):
+    # Two-phase: a past_len=0 prefill only attends over fresh (exact)
+    # projections -- the cache seals afterwards, so scoring it measures
+    # nothing. Instead populate the past first, then score a continuation
+    # at past_len>0, which actually attends over the sealed body.
+    n = int(ids.shape[1])
+    assert n > 256 + 8, \
+        f"need >264 tokens to seal a group and score a continuation, got {n}"
+    split = n - 64
+    states, _ = populate(model, cache, ids, chunk, split)
+    p2 = {"cache": cache, "attn_mode": "flash_attn",
+          "batch_shape": (1, _bshape(ids.shape[1])), "past_len": split}
+    if states is not None:
+        p2["recurrent_states"] = states
+    logits = model.forward(ids[:, split:], p2)
+    return logits.float(), p2.get("recurrent_states")
+
+
+def _peak_gb():
+    return torch.cuda.max_memory_allocated() / (1024 ** 3)
+
+
+def bench_decode(model, cache, ids, steps, states, tag):
+    # Greedy decode throughput continuing from the populated past left by
+    # run() (timing only; generated tokens differ between caches, which is
+    # irrelevant here). Exercises per-token store + get_kv + attention on
+    # the measured path. No repopulation: the cache already holds ids.
+    n = int(ids.shape[1])
+    total = _bshape(n + steps)
+    tok = ids[:, -1:]
+    past = n
+    torch.cuda.reset_peak_memory_stats()
+    t0 = time.time()
+    for _ in range(steps):
+        p = {"cache": cache, "attn_mode": "flash_attn",
+             "batch_shape": (1, total), "past_len": past}
+        if states is not None:
+            p["recurrent_states"] = states
+        logits = model.forward(tok, p)
+        states = p.get("recurrent_states")
+        tok = logits.argmax(dim=-1)[:, -1:]
+        past += 1
+        del logits
+    dt = time.time() - t0
+    print(f"{tag} decode: {steps / dt:.1f} tok/s "
+          f"({steps} steps from {n} ctx, peak {_peak_gb():.1f}GB)",
+          flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-m", "--model_dir", required=True)
+    parser.add_argument("-cq", "--cache_quant", default="kvarn4",
+                        help="KVarN preset, e.g. kvarn4 or kvarn5,kvarn4")
+    parser.add_argument("-ntok", "--ntok", type=int, default=200)
+    parser.add_argument("-maxtok", "--max_tokens", type=int, default=0,
+                        help="Cache max tokens (defaults to max(512, ntok))")
+    parser.add_argument("-chunk", "--chunk", type=int, default=2048,
+                        help="Phase-1 prefill chunk size (peak VRAM control)")
+    parser.add_argument("-dec", "--decode", type=int, default=0,
+                        help="Greedy decode steps to benchmark per path "
+                             "(0 = off)")
+    parser.add_argument("-d", "--device", default="cuda:0")
+    parser.add_argument("-corpus", "--corpus", default="prose",
+                        choices=["prose", "code"],
+                        help="Scoring corpus: prose (repetitive sampler "
+                             "text) or code (concatenated repo .py -- "
+                             "higher entropy, longer-range dependencies, "
+                             "stricter tripwire)")
+    parser.add_argument("-ref", "--ref_cache", default="fp16",
+                        choices=["fp16", "q8", "q4"],
+                        help="Reference cache for KLD/pp/tg: fp16 (quality "
+                             "gospel) or q8 (fits where fp16 spills to swap, "
+                             "e.g. 128k; KLD then reads kvarn-vs-q8) or q4 "
+                             "(bit-similar baseline: is kvarn4 at parity "
+                             "with plain 4-bit quant?)")
+    parser.add_argument("-mcl", "--moe_cpu_offload", type=int, default=0,
+                        help="Offload first N block-sparse MoE layers to CPU "
+                             "(e.g. 38 for Qwen3.8-Flash-Next 3.05bpw on 24GB VRAM)")
+    args = parser.parse_args()
+
+    k_bits, v_bits = kvarn_parse_preset(args.cache_quant)
+
+    # Eval hygiene: forwards must not build autograd graphs (same
+    # numerics, smaller pool; matters at 64k+ where pool headroom is
+    # thin). Affects all ctx sizes equally.
+    torch.set_grad_enabled(False)
+
+    config = Config.from_directory(args.model_dir)
+    if args.moe_cpu_offload:
+        config.infer_params.moe_cpu_offload = args.moe_cpu_offload
+    model = Model.from_config(config)
+    # Caches must be attached before load: the loader allocates cache and
+    # recurrent-state tensors for attached caches only (see model_init.init).
+    # Creating them after load leaves recurrent state on meta, which fails
+    # hybrid (GDN) forwards with "conv_state is on meta".
+    max_tok = args.max_tokens or max(512, args.ntok + args.decode)
+    max_tok = ((max_tok + 255) // 256) * 256
+    assert max_tok >= args.ntok + args.decode, \
+        f"max_tokens {max_tok} < ntok+decode {args.ntok + args.decode}"
+    if args.ref_cache == "q8":
+        c_ref = Cache(model, max_num_tokens=max_tok,
+                      layer_type=CacheLayer_quant, k_bits=8, v_bits=8)
+        ref_tag = "q8"
+    elif args.ref_cache == "q4":
+        c_ref = Cache(model, max_num_tokens=max_tok,
+                      layer_type=CacheLayer_quant, k_bits=4, v_bits=4)
+        ref_tag = "q4"
+    else:
+        c_ref = Cache(model, max_num_tokens=max_tok,
+                      layer_type=CacheLayer_fp16)
+        ref_tag = "fp16"
+    c_kvarn = Cache(model, max_num_tokens=max_tok, layer_type=CacheLayer_kvarn,
+                    k_bits=k_bits, v_bits=v_bits)
+    t0 = time.time()
+    model.load(args.device, progressbar=False)
+    print(f"load ok ({time.time() - t0:.1f}s)", flush=True)
+
+    tokenizer = Tokenizer.from_config(config)
+    if args.corpus == "code":
+        import glob as _glob
+        import os as _os
+        root = _os.path.join(_os.path.dirname(__file__), "..",
+                             "exllamav3")
+        src = []
+        for _f in sorted(_glob.glob(_os.path.join(root, "**/*.py"),
+                                    recursive=True)):
+            try:
+                with open(_f, encoding="utf-8") as _fh:
+                    src.append(_fh.read())
+            except OSError:
+                pass
+        one = tokenizer.encode("\n".join(src))
+        one = one if one.dim() == 2 else one.unsqueeze(0)
+        n1 = int(one.shape[1])
+        ids = one.repeat(1, (args.ntok + n1 - 1) // n1)[:, :args.ntok]
+        print(f"corpus: code ({len(src)} files, {n1} tok each)",
+              flush=True)
+    else:
+        reps = max(16, (args.ntok // 24) + 2)
+        ids = tokenizer.encode(SAMPLER_TEXT * reps)[:, :args.ntok]
+    print("tokens:", tuple(ids.shape), flush=True)
+
+    torch.cuda.reset_peak_memory_stats()
+    t0 = time.time()
+    l_ref, s_ref = run(model, c_ref, ids, args.chunk)
+    dt = time.time() - t0
+    print(f"{ref_tag} prefill: {dt:.1f}s ({args.ntok / dt:.0f} tok/s, "
+          f"peak {_peak_gb():.1f}GB)", flush=True)
+
+    # Long-context fit (64k+ on 24GB): the fp16/q8 reference cache
+    # (4.31GB fp16 @64k) must not stay resident during kvarn prefill
+    # (pool peaks ~19GB alone). fp16 decode runs on the reference
+    # cache FIRST, then it is freed; kvarn phases run alone; KLD
+    # scoring needs only the saved logits (tiny). Same forwards,
+    # same decode inputs -- only the phase order changes.
+    if args.decode > 0:
+        bench_decode(model, c_ref, ids, args.decode, s_ref, ref_tag)
+    # Release the reference cache's tensors explicitly: layer shells
+    # may outlive `del` (referrer hunt @64k: 4.31GB fp16 kept by
+    # CacheLayer_fp16 objects), and at 64k that residue + the kvarn
+    # pool exceeds 24GB. free() drops k/v tensors regardless.
+    for _lay in c_ref.layers.values():
+        _free = getattr(_lay, "free", None)
+        if callable(_free):
+            _free()
+    del c_ref, s_ref
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    torch.cuda.reset_peak_memory_stats()
+    t0 = time.time()
+    l_kvarn, s_kvarn = run(model, c_kvarn, ids, args.chunk)
+    dt = time.time() - t0
+    print(f"kvarn{k_bits}/kvarn{v_bits} prefill: {dt:.1f}s "
+          f"({args.ntok / dt:.0f} tok/s, peak {_peak_gb():.1f}GB)",
+          flush=True)
+
+    p = F.log_softmax(l_kvarn, dim=-1)
+    q = F.log_softmax(l_ref, dim=-1)
+    kld = (q.exp() * (q - p)).sum(-1).squeeze(0)
+    print(f"KLD kvarn{k_bits}/kvarn{v_bits} vs {ref_tag}-cache "
+          f"over {l_kvarn.shape[1]} scored continuation positions:", flush=True)
+    print(f"  median {kld.median().item():.6f}  mean {kld.mean().item():.6f}  "
+          f"max {kld.max().item():.6f}", flush=True)
+    print(f"  p99 {kld.quantile(0.99).item():.6f}  "
+          f"p99.9 {kld.quantile(0.999).item():.6f}", flush=True)
+    agree = (l_kvarn.argmax(-1) == l_ref.argmax(-1)).float().mean().item()
+    print(f"  same-top {agree * 100:.2f}%", flush=True)
+
+    if args.decode > 0:
+        bench_decode(model, c_kvarn, ids, args.decode, s_kvarn,
+                     f"kvarn{k_bits}/kvarn{v_bits}")
+
+
+if __name__ == "__main__":
+    main()
