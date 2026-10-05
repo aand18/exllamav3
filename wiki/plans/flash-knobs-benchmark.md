@@ -38,11 +38,37 @@ pp tok/s, tg tok/s, VRAM peak + min-free, sys-RAM free before/after.
 ## 0. Lock the baseline + instrument (no knob changes)
 
 1. Read `tabbyAPI/PERF_FINDINGS.md` fully + `tabbyAPI/config.yml`
-   model section. Derive the EXACT workload command from
-   `PERF_FINDINGS.md` logs section + `bench.ps1` (prompt set,
-   `-tokens 256`, greedy + one temp-1.0 arm). Write the chosen
-   command into §4's table header — if you cannot find it, STOP
-   and ask rather than inventing a workload.
+   model section. **REVISED 2026-10-05 — the original single-workload
+   line was wrong; there is no one command.** Knobs split three ways
+   by what their harness can actually reach (the split
+   `PERF_FINDINGS.md` already documents at lines 24-27 and 75-77,
+   which this plan originally failed to carry over):
+
+   | Phase | Harness | Server | Covers |
+   |---|---|---|---|
+   | A | `eval/perf.py` raw forwards (`bench.ps1` flags) | **STOPPED** | `cpu_moe_offload_layers` `-mcl`, `cpu_moe_threads` `-mct`, `cpu_moe_split_experts` `-mcs`, `cache_mode` `-cq`, `cache_size` `-cs`, `chunk_size` `-chunk_size`, `max_batch_size` `-ambs`, all `EXL3_MOE_*` env. Reports pp/tg + polled VRAM/RAM. |
+   | B | `eval/spec_decode.py` MTP (`mtp_sweep.ps1` flags) | **STOPPED** | `draft_num_tokens` `-ndt`, `dynamic_draft` `-dds`, draft-off. Reports tg t/s + acc/draft, greedy and temp-1.0. |
+   | C | live server via `start_tuned.ps1` + `config.yml` | RUNNING | everything server-only: boot time (start → ready → first token), `max_batch_size` concurrency, `warmup`, `recurrent_checkpoint_interval`, `cuda_malloc_async`, `draft_cache_mode`, `cache_size` as-shipped. Plus end-to-end validation of Phase A/B winners. |
+
+   Evidence: `bench.ps1:17-18` maps `-mcl -mct -cq -cs -chunk_size
+   -ambs -max_length`; `mtp_sweep.ps1:11-13` maps `-ndt -dds -tokens
+   256 -single "agentic, code"`; `exllamav3/model_init.py:64` adds
+   `-mcs` so split-experts is offline-testable too.
+   `bench.ps1:2` requires the full 24 GB VRAM, so Phases A/B hold the
+   server stopped; Phase C is the only phase that boots it.
+
+   **`draft_cache_mode` is server-only** — `model_init.py` builds
+   `draft_cache` with no corresponding CLI flag (lines 320-360), so
+   §1.5's draft-cache sweep runs in Phase C, not B. Everything else
+   in §1.5 stays in Phase B.
+
+   Perf.py prints a pp/tg ladder, not one number: `Length N: X
+   tokens/s` and `Context N: S=1 Y tokens/s`. Quote the
+   agent-follow-up context (256-4096) for pp and `Context 0` for tg;
+   state which context each pp figure came from.
+
+   Only Phase C produces boot time — offline harnesses load the model
+   inside the measured process and their load time is not boot time.
 2. `cp config.yml config.yml.bak-<date>` before the first edit.
    Every knob change = edit + server restart + grep the startup
    log for the intended value (settings fail silently on typo).
@@ -58,6 +84,44 @@ pp tok/s, tg tok/s, VRAM peak + min-free, sys-RAM free before/after.
 4. Run the baseline battery once → the reference row. All deltas
    vs this row, same day. If the box state changed (reboot,
    driver, server version), re-run baseline, never reuse old.
+
+### 0.5 Depth tiering (added 2026-10-05 — full depth on all ~35 settings was 8+ h)
+
+| Tier | Depth | Cost | Purpose |
+|---|---|---|---|
+| 0 smoke | every setting, 1 file × 1 rep greedy | ~1 min | kills guard-trips, crashes, >10% losers. Enforces the §1 STOP rule. |
+| 1 screen | survivors: 2 warmup + 2 files × 2 reps, greedy | ~2 min | resolves >5% effects. Boot/VRAM/RAM need 1 rep only (near-deterministic). Skip the temp arm here — it only adds sampling variance. |
+| 2 full | ~5-7 finalists + baseline: full 2 warmup + 5 files × 3 reps × 2 arms | ~12 min | **the only tier that quotes deltas.** |
+
+Re-run the baseline at every tier boundary — tiers use different
+workloads, so cross-tier numbers are not comparable. Any setting
+still inside noise after Tier 1 is promoted to Tier 2; clear losers
+stop at Tier 0/1 with their one bad row as proof (ladder rule).
+
+Phase A maps tiers onto perf.py flags instead of file counts, since
+perf.py measures a length ladder, not a prompt set:
+
+- Tier 0 → `-spf -max_length 1024 -dr 1` (decode only, one context)
+- Tier 1 → `-short -max_length 4096 -dr 2`
+- Tier 2 → `-short -sd -max_length 32768 -dr 3` (full `bench.ps1` BASE)
+
+Phase B maps them onto spec_decode.py `-single` categories, because
+`-single` filters by CATEGORY, not by file — there is no single-file
+selector (verified in `spec_decode.py:194-200`):
+
+- Tier 0 → `-single "Trivial"` (1 file)
+- Tier 1 → `-single "Coding"` (3 small files)
+- Tier 2 → `-single "agentic, code"` + `-temp` (5 files, both arms)
+
+**Rep reporting deviation from §0.3, deliberate.** §0.3 asks for a
+median of 3 reps. Cross-process medians are unusable here: §A records
+±25% process-to-process spread (fragmentation), which would swamp the
+>5% effects under test. Instead reps run INSIDE one process —
+perf.py `-dr N` reports mean plus min-max in a single load. Report
+that mean and quote the min-max as the spread. This keeps §Guards'
+single-process A/B discipline and is strictly more stable than the
+median it replaces. Phase B has no in-process rep flag, so its reps
+are separate processes: quote all three and the spread.
 
 ## 1. Knob sweep — one at a time, in this order
 
@@ -88,7 +152,8 @@ at <last-good value>", recorded with the one bad row as proof.
    from the server log/error on 5+ rather than assuming; cap the
    sweep at the confirmed max. Narrow: MTP sweep exists; only
    re-probe gaps.)
-   `draft_cache_mode`: sweep LOWEST first (Q2 if offered, else Q4
+   `draft_cache_mode`: **Phase C only** (no offline CLI flag, see
+   §0.1). Sweep LOWEST first (Q2 if offered, else Q4
    → Q8 → FP16 — enumerate from the sample). Prior finding: low
    draft-cache quants showed no slowdown, so press downward for
    VRAM until quality or speed moves, then stop.
