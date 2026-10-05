@@ -21,6 +21,7 @@ plan section before trusting it.
 | `ppl.py`, `qbench*.py`, `bbeh_mini.py`, `humaneval.py`, `ifbench.py`, `mmlu.py`, `diversity.py`, `longctx.py`, `model_diff*.py`, `prequant_test.py` | benches / upstream utils |
 | `_probe_mem64.py`, `_probe_vram.py`, `_probe_prefill.py`, `_probe_prefill_fp16.py`, `_probe_serve_delta.py`, `_probe_eref_delta.py`, `_probe_step.py`, `_probe_arm.py`, `_probe_seal_compile.py`, `_probe_geom.py` | committed diagnostics — probe before theorizing |
 | `_spike_graph_wrap.py` | LIVE: imported by `test_graph_wrap_matches_eager` (do not delete/move) |
+| `_spike_graph_full.py` | LIVE: graphs-v2 capture spike; named as the **Test** vehicle for graph work in `doc/graphs-v2-plan.md:42`, cited by `wiki/reports/2026-10-02-merge-audit.md:39`. Bit-exact replay + 2.2-2.55x are the numbers behind the shipped graph path — keep as the reference for any future graph change |
 | `_spike7_coal.py` | LIVE reference: production serve kernel is a verbatim copy (see comment at `kvarn_triton.py` promoted-serve header); delete only when dispatch owns the path |
 | `_spike9_ab.py` | LIVE method reference: single-process interleaved A/B protocol (the only quotable protocol on this box) |
 | `_spike23_q5.py` | LIVE: q5-vs-kvarn KLD harness (retained artifact; 27B re-measure pending) |
@@ -31,6 +32,7 @@ plan section before trusting it.
 | file | superseded by |
 |---|---|
 | `_spike2_online.py`, `_spike3_online.py`, `_spike4_online.py`, `_spike5_single.py`, `_spike6_mma.py` | early serve exploration → spike7 → production |
+| `_spike_graph_serve.py` | spike v1; superseded by `_spike_graph_full.py` (v2), which is what the graph path was built from — `doc/graphs-v2-plan.md:14` credits the pair, and the shipped code version is tagged `post-graphs-v2` in the ledger |
 | `_spike8_layer.py`, `_spike8_split.py` (+`.bat`) | task-6 STOP (+0.21%, plan §8) |
 | `_spike9_serve_bill.py`, `_spike9_dbg.py`, `_spike9_dbg2.py` | task-7 bill (numbers in plan §8) |
 | `_spike10_tailmerge.py` (+bats) | task-4 STOP (−4.5% end-to-end) |
