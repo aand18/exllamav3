@@ -104,3 +104,94 @@ CPU suite re-run green AFTER the move (cheap, proves the ref
 points at a working tree), outcome appended here (§7) with the
 §0 shas + new tip. Then report; the maintainer owns whatever
 runs next on the moved branch.
+
+## 7. Outcome (2026-10-05)
+
+**§0 shas (recorded):** `wip/kvarn-cache` = `584ec09`, `wip/kvarn-r154`
+= `08bb2e9`. `origin/wip/kvarn-r154` matched local, so no push was needed
+to satisfy §0.3.
+
+**New tip:** `wip/kvarn-r154` = `5892f6c`.
+
+| step | result |
+|---|---|
+| §0 preconditions | all 3 pass |
+| §1 cherry-pick `45e60f9` | **skipped, correctly** — already present |
+| §2 window_right/sink_key0 gate | done, `10efc54` |
+| §3 eval manifest | completed, `5892f6c` |
+| §4.1 push r154 | done |
+| §4.2 `wip/kvarn-cache-pre154` | done, pushed, verified |
+| §4.3 move the pointer | **BLOCKED — see below** |
+| §6 CPU suite after the move | 85 passed / 14 skipped on both refs |
+
+### §1 was already satisfied, and the plan's own rule covers it
+
+`eval/_spike23_q5.py` was already on r154, added by `9785256` — the rebase
+had replayed `45e60f9` under a new sha. Verified **byte-identical**
+(`md5 5031134b45eb3b6b96751a9c9cc0760e` both sides) rather than assuming,
+then `cherry-pick --skip` per the plan's instruction, with AST parse and the
+85/14 suite green.
+
+### §4.3 is structurally impossible: a ruleset forbids the force-push
+
+The push was **rejected**, and per §4.3 the instruction on rejection is
+STOP — do not `--force`. Cause, confirmed read-only via the GitHub API:
+
+```
+ruleset 24036645 "protect wip/kvarn-cache"
+  enforcement: active   target: branch
+  rules: deletion, non_fast_forward
+  bypass_actors: []            <-- nobody, admin included
+```
+
+```
+remote: - Cannot force-push to this branch
+ ! [remote rejected] wip/kvarn-cache -> wip/kvarn-cache
+        (push declined due to repository rule violations)
+```
+
+Note this is **not** a lease failure. A stale lease reports
+`(stale info)`; this is a rules rejection, and it would reject a plain
+`--force` identically. `gh api .../branches/wip%2Fkvarn-cache/protection`
+returns 404 (not classic branch protection — it is a ruleset), so the
+protection is invisible to the older API and easy to misdiagnose as
+"nothing is protected, retry harder".
+
+The plan's §5 carve-out ("Force-push anywhere except §4.3's single leased
+push") and its whole §4.3 design assume this push is available. It is not:
+`wip/kvarn-cache` carries a deliberate `non_fast_forward` rule, so the
+prescribed mechanism is forbidden by a control the owner put there on
+purpose. Circumventing it — `--force`, dropping the ruleset, or swapping in a
+merge, which §0 explicitly forbids — is not mine to do.
+
+**Local state left coherent, not diverged.** `reset --hard` had already run
+before the rejection, leaving local `wip/kvarn-cache` at `5892f6c` while the
+remote sat at `584ec09`. A local ref that disagrees with its remote is a
+hidden trap (the next plain push fails as non-fast-forward with no obvious
+cause), so local was reset back to `584ec09`. All three refs now agree with
+their remotes:
+
+| ref | sha | role |
+|---|---|---|
+| `wip/kvarn-cache` | `584ec09` | unchanged; the pointer move is pending |
+| `wip/kvarn-cache-pre154` | `584ec09` | backup of the pre-move line (also the §0 sha) |
+| `wip/kvarn-r154` | `5892f6c` | the completed 1.5.4 tree + §1–§3 |
+
+Nothing was lost: the old line is on `wip/kvarn-cache-pre154` (pushed) and
+the new one on `wip/kvarn-r154` (pushed).
+
+### To finish §4.3, a maintainer picks one
+
+1. **Relax the ruleset, then push** — edit ruleset `24036645` to drop
+   `non_fast_forward` (or add a bypass actor), then:
+   `git push --force-with-lease origin wip/kvarn-r154:wip/kvarn-cache`
+2. **Push it themselves** — anyone who can edit the ruleset can run the
+   force-push directly; the local ref is already correct and green.
+3. **Change the plan** — if non-fast-forward on `wip/kvarn-cache` is
+   intended to be permanent, then "single line of truth" needs a different
+   mechanism (the owner merges, or `wip/kvarn-cache` is renamed and replaced
+   by a fresh ref). That is a design call, not a mechanical one.
+
+`wip/kvarn-r154`, `wip/kvarn-r154-backup` and `wip/kvarn-cache-pre154` are
+all left in place per §4.4. Nothing was deleted. Box, venv and tabbyAPI
+untouched (§5).
