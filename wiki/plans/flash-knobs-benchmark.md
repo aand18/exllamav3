@@ -83,9 +83,10 @@ restore before the next. STOP a knob early if its first rep is
    sweep at the confirmed max. Narrow: MTP sweep exists; only
    re-probe gaps.)
 6. Env threads/streams: `EXL3_MOE_CPU_THREADS` 8 → 1 / 2 / 4
-   (LOW direction only: experience says low values score higher
-   on LLM work and saturation never pays on this CPU — do not
-   bother with 12/16); `STREAM_T` 6 → 3 / 12 with
+   first (experience says low values score higher on LLM work
+   and saturation rarely pays on this CPU; 12 / 16 only as
+   follow-up if low values don't resolve a trend);
+   `STREAM_T` 6 → 3 / 12 with
    `STREAM_BATCH_EXPERTS` 48 → 24. (Env read at server start —
    restart required, re-verify with a settings dump.)
 7. Ablations (one each, back to baseline between):
