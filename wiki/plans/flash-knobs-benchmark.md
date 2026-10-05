@@ -80,7 +80,10 @@ pp tok/s, tg tok/s, VRAM peak + min-free, sys-RAM free before/after.
    memory.free --format=csv` before/after + peak from the
    server log. RAM per run: PowerShell
    `[math]::Round((Get-CimInstance Win32_OperatingSystem).
-   FreePhysicalMemory/1MB)` before/after.
+   FreePhysicalMemory/1024)` before/after. **÷1024 for MB —
+   the original said `/1MB`, which is GB** (1MB is 1048576), so
+   it printed ~46 where the guards mean ~46000 MB. Guards are
+   stated in MB and FreePhysicalMemory is KB.
 4. Run the baseline battery once → the reference row. All deltas
    vs this row, same day. If the box state changed (reboot,
    driver, server version), re-run baseline, never reuse old.
@@ -107,11 +110,20 @@ perf.py measures a length ladder, not a prompt set:
 
 Phase B maps them onto spec_decode.py `-single` categories, because
 `-single` filters by CATEGORY, not by file — there is no single-file
-selector (verified in `spec_decode.py:194-200`):
+selector (verified in `spec_decode.py:194-200`, category list at
+`spec_decode.py:17-38`):
 
-- Tier 0 → `-single "Trivial"` (1 file)
-- Tier 1 → `-single "Coding"` (3 small files)
+- Tier 0 → `-single "Coding"` (3 small files, real prompts)
+- Tier 1 → `-single "Creative (reasoning)"` (3 files, thinking ON)
 - Tier 2 → `-single "agentic, code"` + `-temp` (5 files, both arms)
+
+Every tier uses real prompts on purpose. The cheapest category is
+`"Trivial repetition"` (1 file, 531 B), but a prompt that EOSes after a
+handful of tokens yields a meaningless t/s, and Tier 0 exists to detect
+a >10% loser — it cannot do that on a degenerate measurement. Tier 1
+keeps thinking ON because `dynamic_draft` trims drafts on
+low-confidence reasoning content, so a non-thinking tier would measure
+the wrong behaviour for the dyn arms.
 
 **Rep reporting deviation from §0.3, deliberate.** §0.3 asks for a
 median of 3 reps. Cross-process medians are unusable here: §A records
@@ -122,6 +134,50 @@ that mean and quote the min-max as the spread. This keeps §Guards'
 single-process A/B discipline and is strictly more stable than the
 median it replaces. Phase B has no in-process rep flag, so its reps
 are separate processes: quote all three and the spread.
+
+### 0.6 Premise corrections from the 2026-10-05 battery (measured, do not re-litigate)
+
+Four things this plan asserted turned out to be wrong on the box. They are
+recorded here so the next reader inherits the measurement, not the lore.
+
+1. **Thread count: "low values score higher" is backwards.** Tier 0 tg tok/s
+   by `EXL3_MOE_CPU_THREADS`: 1 → 7.07, 2 → 11.38, 4 → 20.25, 8 → 24.69,
+   12 → 30.33, 16 → 31.74, 24 → 30.68. Monotone up to 16, then it turns over
+   at 24 (the core count). §1.6's "12 / 16 only as follow-up if low values
+   don't resolve a trend" fires in the *upward* direction. This also
+   contradicts `PERF_FINDINGS.md`, which saw 16 peak ~32 t/s but rejected it
+   on **variance** ("swings 20–32"), not on the mean — so 16 likely wins on
+   median and loses on spread, which only Tier 2 (`-dr 3`) can settle.
+2. **The offload ladder's productive direction is DOWN.** `mcl34` was +22.3%
+   and `mcl36` +19.1% over `mcl38`; 40/42 were −6.6%/−8.9%. §1.1 only listed
+   36/40/42, so 34/32 were added by following the trend.
+3. **`mcl34` is UNSAFE, not fast.** It peaked at **203 MB free VRAM** — 3 MB
+   above the 200 MB guard — and died with `cudaErrorLaunchFailure` in
+   `decode_flash_attn` during the `-short` prefill sweep. `mcl32` never loads
+   at all: the engine raises `Insufficient VRAM in split for model and cache`.
+   §1.3's "mark UNSAFE not slow" applies. The usable boundary is **36**.
+4. **MTP max is not 4.** §1.5 said "4 is believed to be this model's MTP max".
+   exllamav3 1.5.4 runs `-ndt 5` clean (`logs/mtp-154/r06-ndt5.log`,
+   acc/draft 5.00), and production ships 5. The sweep ceiling is at least 5.
+
+Two more harness-level facts, both of which cost real runs:
+
+- **perf.py flakes with `ZeroDivisionError` on the `-short` sweep** (length-0
+  timer resolution; `PERF_FINDINGS.md` already noted it for 1.4.9 and it
+  survives into 1.5.4). It is benign — relaunch. It hit roughly half of all
+  Tier 1 arms. `Invoke-KBRun` retries *only* that signature and never retries
+  a guard trip or a CUDA failure.
+- **`spec_decode.py` reads nothing from `config.yml`.** Phase B must lead with
+  the production flags (`-mcl 38 -cq 5,4 -cs 262144 -chunk_size 4096
+  -ambs 2`) exactly as `mtp_sweep.ps1:11-13` does, or it tries to fit all
+  52.5 GB on the GPU and dies on the VRAM check.
+
+Cross-process baseline drift, measured on an unchanged config: **24.69 vs
+26.80 tok/s (−8%)** in two runs. So Tier 0 deltas are same-process only, and
+the ">10% worse" stop rule has a ±8% noise floor — it can only reliably kill
+large losers (PIN −19.8% qualifies; the −6…−8% cluster does not). In-process
+spreads are far tighter (0.8–4.5% at `-dr 2`), which is the whole reason
+§0.5 replaced cross-process medians with in-process reps.
 
 ## 1. Knob sweep — one at a time, in this order
 
