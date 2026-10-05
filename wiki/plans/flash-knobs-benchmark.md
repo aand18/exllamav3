@@ -135,6 +135,42 @@ single-process A/B discipline and is strictly more stable than the
 median it replaces. Phase B has no in-process rep flag, so its reps
 are separate processes: quote all three and the spread.
 
+### 0.7 Long-context requirement (added 2026-10-05 — do this LAST, after everything else)
+
+The operator needs **128k minimum, 260k desirable** context. Everything in
+§1/§2 above is measured at ~17k prompt tokens (the `agentic_code_*` files are
+11k–30k), which is only 6.8% of the 262144-token `cache_size`. A knob that
+wins at 17k can still lose at 128k+, so short-context results are a screen,
+not a verdict.
+
+**Run order, strictly in this order — this is the last work, not parallel to it:**
+
+1. Finish §1, §2, §3 as written (short context).
+2. **2x context pass (~35k)** on the *promising* knobs only. Pick the workload
+   by prompt length, not by category: synthesize prompts to ~35k tokens from
+   the `agentic_code_*` conversations by extending the message history. Test
+   the top ~4 knobs plus the baseline — do not re-run the full ladder.
+3. **Full-context validation** of the survivors at 128k, then 260k if 128k is
+   healthy. This is the only tier that decides what goes in `config.yml`.
+
+**Why the short-context VRAM numbers are more transferable than they look.**
+`cache_size` is the KV cache *allocated at load* ("Size of the key/value
+cache to allocate, in tokens"), so the ~20.5 GB steady-state peak already
+includes the full 262144-token allocation regardless of how much context a
+request actually uses. Longer context therefore costs mostly **prefill
+time**, which `chunk_size` bounds, plus transient attention working set — not
+a large new steady-state VRAM claim. The knobs most exposed to context length
+are `recurrent_checkpoint_interval` (checkpoints near the end of a prompt, so
+a 128k prompt hits very different paths than a 17k one),
+`cache_mode` (quality and re-use at length), and anything with VRAM headroom
+to spare — the winner below has ~1 GB, which is the real risk.
+
+**Known trap, already paid once:** a `-mcs` value that loads fine under
+`eval/perf.py` can fail to boot the live server, because the server carries
+~2 GB more VRAM overhead (23074 MB vs 21074 MB for the same `mcs380`). Every
+candidate config MUST get a live Phase C boot before it is proposed, no matter
+what Phase A said about it.
+
 ### 0.6 Premise corrections from the 2026-10-05 battery (measured, do not re-litigate)
 
 Four things this plan asserted turned out to be wrong on the box. They are
