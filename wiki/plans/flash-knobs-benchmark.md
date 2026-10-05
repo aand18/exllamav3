@@ -61,9 +61,15 @@ pp tok/s, tg tok/s, VRAM peak + min-free, sys-RAM free before/after.
 
 ## 1. Knob sweep — one at a time, in this order
 
-For each: change ONLY it, restart, 3 reps, all six metrics,
-restore before the next. STOP a knob early if its first rep is
->10% worse AND trips a guard (record + move on).
+For each: change ONLY it, restart, 3 reps, all six
+metrics, restore before the next. STOP a knob early if its first
+rep is >10% worse AND trips a guard (record + move on).
+Ladder rule: sweep in the listed order and STOP the series at
+the first setting that is obviously worse than baseline on the
+primary metric (pp/tg down >5% median with no guard headroom
+gained) — do not burn runs marching further down a degrading
+direction. The series result is then "baseline stands, boundary
+at <last-good value>", recorded with the one bad row as proof.
 
 1. `cpu_moe_offload_layers`: 38 → 36 / 40 / 42. (VRAM↔RAM↔speed
    frontier; fewer offloaded = faster until the VRAM guard
