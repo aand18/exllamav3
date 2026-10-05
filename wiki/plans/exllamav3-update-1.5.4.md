@@ -67,6 +67,43 @@ each other.
    tests/test_kvarn_m5_cpu.py tests/test_kvarn_triton.py -q`
    must be 85 passed / 12 skipped (CUDA tests skip here).
 
+### A1.5. Rebuild exllamav3_ext on the box (REQUIRED, was missing)
+
+v1.5.4's `loader/safetensors.py:1020` calls
+`ext.stloader_deferred_batch`, which neither the Sep-25 box `.pyd`
+nor tabbyAPI's 1.4.9 `.pyd` (verified: zero symbol matches)
+export. Without a fresh binary every box run dies at model load.
+Read `doc/local-build.md` FIRST (VsDevCmd trap, arch-list syntax,
+scratch-copy rule — all binding here).
+
+1. Build on the BOX (Windows + CUDA), never in WSL, never in a
+   working checkout: copy the rebased tree (minus `.git`,
+   `build/`, `*.pyd/obj`) to a scratch dir and build there.
+2. Toolchain: x64 Native Tools prompt (or manual MSVC/SDK PATH
+   per local-build.md — `VsDevCmd.bat` does NOT propagate
+   reliably). Check at build time: `nvcc --version` (13.x
+   present), cmake (VS generator — no ninja on box, budget
+   accordingly), `pip show torch` in the tabbyAPI venv (match
+   the CUDA major; minor skew tolerated per doc).
+3. Target: `exllamav3_ext` only, sm_89 (+PTX), ~190 TUs. Budget
+   1–3h wall; run detached with a log file; do not parallelize
+   past RAM (44GB free is plenty, keep 2GB system-RAM floor).
+4. Install WITHOUT touching the venv: place the fresh `.pyd`
+   in a shadow dir (e.g. box-side `ext-154/`) and PREPEND it
+   via `PYTHONPATH` in every test bat (Python resolves the
+   shadow copy before the venv's 1.4.9 one). NEVER overwrite
+   `venv\...\exllamav3_ext.cp312-win_amd64.pyd` — the tabbyAPI
+   server depends on it. Same for any Sep-25 box `.pyd`.
+5. Verify before any model load: fresh python,
+   `import exllamav3_ext as e;
+   assert hasattr(e, 'stloader_deferred_batch')`, plus print
+   which file was loaded (`e.__file__` must be the shadow
+   copy). Then one tiny load (512 ctx) before the battery.
+6. Track B is UNAFFECTED by this section (the pip 1.5.4 wheel
+   ships its own binary). A wrong/ABI-mismatched binary fails
+   loudly at import — that is the fail-closed behavior; on any
+   import error STOP, do not retry with flags.
+
 ### A2. Box re-validation (full gate battery — numbers WILL shift)
 
 Upstream changed perf-relevant paths (prefill, MoE, VRAM,
