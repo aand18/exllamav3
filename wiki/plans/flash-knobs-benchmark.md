@@ -166,22 +166,35 @@ a 128k prompt hits very different paths than a 17k one),
 to spare — the winner below has ~1 GB, which is the real risk.
 
 **Known trap, already paid once:** a config that loads under `eval/perf.py`
-can fail to boot the live server. The live server sits a roughly **constant
-+1.7–2.0 GB** above the raw-forward harness on the *same* config
-(`mcl38`: 18858 → 20546 MB; `mcs380`: 21074 → 23042 MB). That offset is NOT
-server framework overhead — it is model components `perf.py` never builds:
-the server log shows `Loading vision modules 30/30` and `Loading draft
-modules 3/3`, and with `vision: true` the vision tower (depth 27, hidden
-1152, inter 4304, 987 tensors) is **not EXL3-quantized**, so it loads at
-fp16 ≈ 1.1 GB, plus the MTP draft head, its draft KV cache, CUDA graph pools
-and serving buffers.
+can fail to boot the live server. The live server sits **+1.7 to +2.5 GB**
+above the raw-forward harness on the same config (`mcl38`: 18858 MB offline
+vs 20546–21378 MB live; the live figure varies ~830 MB run-to-run on an
+identical config, so the offset's own spread is comparable to its magnitude).
+That offset is NOT server framework overhead — it is components `perf.py`
+never builds: the server log shows `Loading vision modules 30/30` and
+`Loading draft modules 3/3`, plus the MTP draft head, its draft KV cache and
+serving buffers.
 
-Because the offset is fixed and config-independent, any setting that fits
+**Do NOT decompose that offset from parameter counts — it was tried and it is
+wrong.** The vision tower (depth 27, hidden 1152, inter 4304, 987 tensors) is
+unquantized fp16, which naively suggests ~1.1 GB. But a measured 2×2 of
+`vision_offload` × `warmup` shows `vision_offload: true` frees only
+**~150–190 MB**, not ~1.1 GB — so most of that tower was never resident in
+VRAM. The residual is unattributed; do not repeat the arithmetic.
+
+Likewise **CUDA graphs are not a VRAM cost.** The working hypothesis was that
+`warmup: true` captures graphs and that this costs persistent VRAM, eating the
+vision saving. The 2×2 refutes it: holding either key fixed, `warmup: true`
+*reduces* peak VRAM by ~40–80 MB. The real cost of `warmup` is entirely in
+boot time: **+12 s** (53.8 → 65.7 s, consistent in both columns), buying
+~1–2 s (5–8%) on the first real request.
+
+Because the offset is large and config-independent, any setting that fits
 offline by a thin margin will NOT fit live. `mcs360` loaded under `perf.py`
-(22486 MB peak) and then failed to boot the server at all. **Every candidate
-config MUST get a live Phase C boot before it is proposed, no matter what
-Phase A said about it** — and the safe offline margin is ~2 GB, not the
-200 MB guard.
+(22486 MB) and then failed to boot the server at all — still true after
+`vision_offload: true` freed 190 MB. **Every candidate config MUST get a live
+Phase C boot before it is proposed, no matter what Phase A said about it** —
+and the safe offline margin is ~2.5 GB, not the 200 MB guard.
 
 ### 0.6 Premise corrections from the 2026-10-05 battery (measured, do not re-litigate)
 
