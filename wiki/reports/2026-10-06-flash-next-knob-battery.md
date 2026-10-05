@@ -1,0 +1,187 @@
+# Flash-Next knob battery — results (2026-10-06)
+
+Measured impact of every tunable on 3.05bpw Flash-Next serving
+(48 MoE layers, MTP head), RTX 4090 24 GB + 7950X3D, Win11 + WSL2.
+Implements `wiki/plans/flash-knobs-benchmark.md`. All numbers are medians of
+in-process reps unless stated. **Short-context screen (~17k prompt tokens) —
+see §0.7 of the plan: these are a screen, not a verdict, and the long-context
+pass is still outstanding.**
+
+## Headline
+
+| config | live tg T/s | vs base | boot→1st tok | VRAM min free |
+|---|---|---|---|---|
+| production baseline (`mcl38`, 8 threads) | 34.4 [34.1–37.0] | — | 53.7 s | 3593 MB |
+| `thr16` only | 46.6 [44.9–48.4] | +35.4% | 53.5 s | 3561 MB |
+| `mcs380` only | 37.0 [36.5–37.3] | +7.6% | 51.8 s | 269–2089 MB ⚠ |
+| **`mcs380` + `thr16`** | **51.0 [48.1–53.1]** | **+48.3%** | 50.6 s | 1065 MB |
+
+Guards: VRAM kill <200 MB free, RAM kill <1 GB. Baseline n=4, combo n=4,
+`thr16` n=4, `mcs380` n=4. No guard ever tripped on a reported number.
+
+## config.yml DIFF PROPOSAL — proposal only, never committed
+
+```yaml
+model:
+  # CHANGED 38 -> (removed); split-experts replaces it. MUTUALLY EXCLUSIVE:
+  # set exactly one. Never both.
+  #cpu_moe_offload_layers: 38
+  cpu_moe_split_experts: 380      # +7.6% alone, +48.3% with thr16
+  cache_mode: 2,2                 # neutral tg, +2.8 GB VRAM free
+  # UNCHANGED: cache_size 262144, chunk_size 4096, max_batch_size 2
+
+draft_model:
+  dynamic_draft: true             # KEEP — +7.1%, static is slower despite
+                                  # higher acceptance (2.92/5.00 vs 2.78/4.29)
+  draft_cache_mode: Q4            # KEEP — 2,2 cost -23% tg AND -24pp acceptance
+  draft_num_tokens: 5             # KEEP (see §open: 6 ran clean, untested at 6)
+
+memory:
+  cuda_malloc_async: True         # KEEP — False costs ~760 MB VRAM, no gain
+```
+
+Expected total: **tg +48%** (34.4 → 51.0 T/s), boot unchanged, VRAM free
+3593 → ~1065 MB.
+
+### Risk, honestly
+
+- **`cpu_moe_split_experts: 380` is the whole win and the thinnest margin.**
+  Clean 4-run min-free ranged 269–2089 MB. At 269 MB it is 1.3× the guard.
+  At 128k+ context this is the first thing that will break. **Do not ship
+  without the 2× context pass.**
+- `cache_mode: 2,2` is **perf-only here** — quality not measured (KLD owns
+  quality). Safe to revert independently; it is the fallback for VRAM relief.
+- `mcs380` is the *only* viable split-experts value: 360 loads offline
+  (23308 MB) but **will not boot the server**; 400/500 are VRAM- or RAM-refused.
+- Mutually exclusive with `cpu_moe_offload_layers` — the server hard-errors.
+
+## start_tuned.ps1 — verdict per env line
+
+| line | verdict | evidence |
+|---|---|---|
+| `EXL3_MOE_CPU_THREADS=8` → **16** | **CHANGE** | +35.4% tg live, 4 reps, non-overlapping ranges. Peak is 16; 24 regresses. |
+| `EXL3_MOE_CPU_PIN=1` | KEEP | −19.8% without. |
+| `EXL3_MOE_CPU_SWIZZLE=1` | KEEP | −11.2% without. |
+| `EXL3_MOE_MEMOPS=0` | KEEP | plan says 29% gap; `PERF_FINDINGS` says +10%. Not re-measured (SKIP per plan). |
+| `EXL3_MOE_ZERO_COPY=1` | KEEP, low confidence | −2.5% without = inside noise. Prior work measured +3.3%. Not re-run at Tier 2. |
+| `EXL3_MOE_STREAM_T=6` | KEEP | `STREAM_T=12` cost **pp256 −38%**; `STREAM_T=3` +0.8% tg, neutral pp. |
+| `EXL3_MOE_STREAM_BATCH_EXPERTS=48` | KEEP | 24 → tg 25.6 vs 26.8 (−6.2%), pp4096 1867 vs 1826. |
+
+No line qualifies for removal. The one change is threads.
+
+## Full knob table
+
+Phase A (offline `eval/perf.py`, Tier 1, `-short -max_length 4096 -dr 2`).
+Baseline re-anchored in-run: tg0 24.91 [24.25–25.56], pp256 311.5, pp4096 2117.4.
+
+| knob | setting | tg0 [min-max] | Δtg | pp256 | pp4096 | VRAM peak / min free | verdict |
+|---|---|---|---|---|---|---|---|
+| — | baseline (`mcl38`) | 24.91 | — | 311.5 | 2117.4 | 20350 / 3923 | ref |
+| threads | 16 | 29.02 [28.45–29.58] | +16.5% | 335.1 | 1781.7 | 19926 / 4213 | **ADOPT** |
+| threads | 12 | 30.89 [30.76–31.02] | +24.0% | 342.5 | 1837.2 | 20350 / 3789 | ok, 16 better live |
+| `mcs` | 360 | 30.00 [29.93–30.08] | +20.4% | 323.4 | 2170.8 | 23308 / **831** | **won't boot live** |
+| `mcs` | 380 | 28.66 [28.35–28.96] | +15.1% | 306.1 | 2112.3 | 21186 / 2953 | **ADOPT** |
+| `mcs380`×`thr16` | combo | 30.29 [29.99–30.59] | +21.6% | **356.5** | 2093.1 | 21186 / 2953 | **ADOPT (headline)** |
+| `mcl` | 36 | 28.90 [28.50–29.30] | +16.0% | 328.3 | 2167.2 | 22110 / 2029 | reject: -1.5% live tg, +1.7 GB |
+| `mcl` | 34 | — | — | — | — | 24010 / **129** | **UNSAFE** — tripped guard |
+| `mcl` | 32 | — | — | — | — | — | refused by engine VRAM check |
+| `cache_mode` | 2,2 | 24.42 [24.17–24.68] | −2.0% | 305.9 | 2163.5 | **19356 / 4783** | adopt (VRAM lever) |
+| `cache_mode` | 4,4 / 8,8 | 26.52 / 26.64 | +6% | — | — | 18644 / 20268 | no benefit |
+| `chunk_size` | 2048 | 24.72 [24.38–25.05] | −0.8% | 293.9 | **1231.7** | 18998 / 5141 | reject (−42% pp4096) |
+| `chunk_size` | 8192 | 25.96 [24.90–27.02] | +4.2% | 307.7 | 1816.4 | 20008 / 4131 | neutral, keep 4096 |
+| `max_batch_size` | 1 | 25.38 | +1.9% | 311.1 | 1798.6 | 20216 / 4449 | reject: halves capacity |
+| `STREAM_T` | 3 | 25.29 [24.72–25.85] | +1.5% | 307.7 | 1855.8 | 19928 / 4211 | neutral |
+| `STREAM_T` | 12 | 25.15 [24.29–26.00] | +1.0% | **185.9** | 1595.6 | 20350 / 3789 | **reject (−40% pp256)** |
+| `BATCH_EXPERTS` | 24 | 25.64 [25.06–26.22] | +2.9% | 310.2 | 1867.4 | 20352 / 3787 | neutral |
+| PIN | 0 | 21.49 (T0) | −13.0% | — | — | 18858 / 5281 | keep pinned |
+| SWIZZLE | 0 | 23.81 (T0) | −3.6% | — | — | 18794 / 5345 | keep |
+| ZERO_COPY | 0 | 25.56 [24.92–26.20] | +3.5% | 304.1 | 1924.6 | 18858 / 5281 | keep (noise) |
+
+Phase B (offline `eval/spec_decode.py`, Tier 0, `-single Coding`). MTP
+auto-engages when `-dm == -m`; `-nbl` so each arm measures only its own.
+
+| knob | setting | tg t/s | vs base | acc/draft | VRAM min free | verdict |
+|---|---|---|---|---|---|---|
+| draft | ndt5 + dyn (prod) | 32.11 | — | 2.78/4.29 | 2731 | ref |
+| draft | ndt6 + dyn | 32.40 | +0.9% | **2.98/4.66** | 2477 | works; ceiling >6 |
+| draft | ndt4 + dyn | 32.71 | +1.9% | 2.73/3.80 | 2969 | neutral |
+| draft | ndt3 + dyn | **34.05** | +6.0% | 2.20/2.95 | 2987 | speed/quality trade |
+| draft | ndt5 static | 29.82 | **−7.1%** | 2.92/5.00 | 2775 | **dyn on** |
+| draft | ndt3 static | 33.81 | +5.3% | 2.19/3.00 | 2997 | dominated by dyn |
+| draft | **off** | 27.21 | **−15.3%** | — | **4381** | MTP stays on |
+
+Phase C (live server). All six metrics; boot = process start → first token.
+
+| arm | n | boot→1st tok | tg T/s | pp T/s | acc% | VRAM peak / min free | RAM after |
+|---|---|---|---|---|---|---|---|
+| baseline | 4 | 53.7 s | 34.4 | 1204 | 79% | 20546 / 2761–3593 | ~9.3 GB |
+| `thr16` | 4 | 53.5 s | 46.6 | 1260 | 71% | 20578 / 3465 | ~9.4 GB |
+| `mcs380` | 4 | 51.8 s | 37.0 | 1308 | 75% | 22050–23870 / **269** | ~9.6 GB |
+| **combo** | 4 | **50.6 s** | **51.0** | 1320 | 78% | 22050–23074 / 1065 | ~9.5 GB |
+| `offload36` | 1 | 51.6 s | 33.9 | 1280 | 70% | 22306 / 1833 | 11.1 GB |
+| `ambs1` | 1 | 53.7 s | 35.8 | 1186 | 76% | 19874 / 4265 | 9.6 GB |
+| `warmup:true` | 1 | **65.7 s** | 35.3 | 1184 | 75% | 21378 / 2761 | 9.2 GB |
+| `rci512` | 1 | 53.7 s | 35.6 | 1225 | 77% | 21346 / 2793 | 9.8 GB |
+| `malloc_async:False` | 1 | 53.7 s | 34.5 | 1199 | 72% | 21306 / 2833 | 9.7 GB |
+| `dcm 2,2` | 1 | 53.7 s | **26.4** | 1218 | **55%** | 20482 / 3657 | 9.8 GB |
+| `mcs360` | — | **will not boot** | — | — | — | — | — |
+
+Boot time is very stable: 53.5–53.9 s across baseline/`thr16`/`combo` (n=12).
+`load` = 38.7–39.3 s. Warmup adds +12 s boot for no measurable gain.
+
+## §2 interaction
+
+Top-2 winners combined once: `mcs380` + `thr16`.
+Individual gains +7.6% and +35.4% sum to +43.0%; measured +48.3%.
+**Combo does NOT underperform the sum by >30%** — it exceeds it by ~5pp, so
+the interaction is mildly *sub-additive-but-positive* and both changes are kept.
+Mechanism: they attack the same bottleneck from opposite ends (more CPU
+workers vs less CPU work), so each supplies part of what the other needs.
+
+## Why the offline tier understates the winner
+
+Offline, combo beats `mcs380` alone by only **+5.7%** (30.29 vs 28.66).
+Live, the same pair goes 37.0 → 51.0 T/s (**+38%**). Same knobs, ~7× difference
+in apparent interaction size.
+
+Cause: `eval/perf.py` measures **raw forwards with no MTP drafting**, so it
+never spends the CPU budget `thr16` buys. Real serving is draft-heavy
+(198/264 accepted), so extra CPU headroom converts into accepted draft tokens.
+**Consequence: the offline screen is valid for ranking single knobs but not
+for interactions involving drafting.** Screening alone would have rejected the
+winner. Always validate a proposed combo on the live server.
+
+## Premise corrections (plan was wrong four times)
+
+1. **"Low thread values score higher" is backwards.** tg by thread count:
+   1→7.07, 2→11.38, 4→20.25, 8→24.69, 12→30.33, 16→31.74, 24→30.68 (T0).
+   Monotone up to 16, turning over at 24. `PERF_FINDINGS` rejected 16 on
+   *variance*, not mean — and 4 live reps show spread 7.4% vs baseline 8.0%,
+   i.e. not the high-variance config that note feared.
+2. **Offload ladder's productive direction is down**, not up: `mcl34` +22.3%
+   (T0), `mcl36` +19.1%, while 40/42 were −6.6%/−8.9%.
+3. **`mcl34` is UNSAFE, not fast** — 129 MB free (guard is 200), and
+   `cudaErrorLaunchFailure` in `decode_flash_attn` under prefill. `mcl32`
+   never loads (`Insufficient VRAM in split for model and cache`).
+4. **MTP max is not 4** (plan said "4 is believed to be this model's max").
+   `-ndt 6` runs clean with the best acceptance measured (2.98/4.66).
+   Ceiling is above 6; `ndt7`/`ndt8` untested.
+
+Also: `split-experts` VRAM-matched value is the *worst* viable one. Matching
+VRAM to `mcl38` (405) is backwards — VRAM headroom is what you spend to buy
+speed, because CPU MoE is the bottleneck. Sweep **down** from it.
+
+## Open / not established
+
+- **Long context (§0.7): NOT DONE.** Everything above is ~17k prompt tokens.
+  `mcs380`'s 269–2089 MB spread is the specific risk at 128k/260k.
+- `draft_num_tokens` 3 vs 5 is +6.0% tg but drops acceptance 2.78→2.20.
+  Quality not measured (KLD owns it).
+- `ZERO_COPY` at Tier 2; Tier 2 `-dr 3` not run for most finalists.
+- `cache_mode` quality (KLD).
+- MTP `ndt7`/`ndt8` ceiling.
+- Skipped per plan: `MEMOPS` (29% / +10% gap — note the two sources disagree),
+  `PYTORCH_CUDA_ALLOC_CONF`, TP, rope_*, `ngram_ram`.
+- Vision tower is ~1.1 GB of VRAM (`Loading vision modules 30/30`, unquantized
+  fp16) for a capability this workload never uses. Outside the knob list —
+  worth a look if VRAM ever binds at 260k.
