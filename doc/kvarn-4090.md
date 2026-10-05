@@ -166,6 +166,73 @@ recorded, per the plan — not chased. The 8k tg figure is a parity-setting
 mismatch, not a moved path; the pp gain is upstream's, and no
 per-path attribution beyond that was attempted.
 
+### tabbyAPI serving on exllamav3 1.5.4 (2026-10-05, separate track)
+
+tabbyAPI runs a **prebuilt wheel** in its own venv, so it was upgraded
+independently of the branch above: 1.4.9 → 1.5.4, Flash-Next 3.05bpw,
+`config.yml` production settings (mcl 38, cache 262144, tuned MoE env,
+`MEMOPS=0`, `draft_mode: mtp`). Numbers here are **tabbyAPI's harness on
+their model** and must never be compared against the kvarn tables above —
+different model, different cache class, different harness.
+
+Compat was checked before touching the venv: the backend imports **26
+symbols** from 4 modules, and **all 26 resolve at 1.5.4 with signatures
+identical to 1.4.9**; all 25 call sites' keywords/arities still accepted;
+no removed or changed methods among the ones it touches. Zero breaking
+changes. Upgrade used `uv pip install --no-deps` (the venv has no pip, and
+`--no-deps` keeps `torch==2.11.0` pinned under a live server). Backup at
+`venv\exl3_149_backup\` verified: 712 files, every size byte-matched, pyd
+intact, and the backup imports standalone at 1.4.9. **Retain it a month.**
+
+Perf battery (reimplemented against the venv — `bench.ps1` wants a
+separate upstream checkout that does not exist on this box). tg is the
+mean over 9 context rows at S=1:
+
+| arm | 1.4.9 tg | 1.5.4 tg | Δ | note |
+|-----|---------|---------|---|------|
+| 01-base (MEMOPS default) | 26.23 | 21.12 | **−19.5%** | default path got slower |
+| 02-memops0 | 29.25 | 28.63 | −2.1% | production setting, flat |
+| 03-tg-repeat | 23.03 | 22.58 | −1.9% | `-dr 4`, matches 02 within noise |
+| 05-pp-stream | 29.02 | 23.23 | −20.0% | prefill-focus arm |
+
+Prefill improved: 1768 / 1790 / 1766 → 1887 / 1927 / 1911 tok/s at 8 / 16 /
+32k (+7–8%).
+
+**MEMOPS verdict: the workaround is still mandatory, and matters MORE.**
+The gap did not close — it widened from 11.5% on 1.4.9 to **29% on
+1.5.4**. Confirmed order-controlled (both arm orders, disjoint ranges:
+default 21.3–23.3 it/s vs `MEMOPS=0` 28.4–29.4, `-dr 4`), so it is not
+measurement order or drift. `memops_win_issue.md` and
+`MEMOPS_FIX_PROMPT.md` stay open; upstream 1.5.x did **not** fix it.
+Note the second-order consequence: upstream made the MEMOPS-**on** path
+~19.5% slower on this box while leaving `MEMOPS=0` flat, so any default
+config on Windows/WDDM gets worse on 1.5.4. Our production config already
+sets `MEMOPS=0`, so serving is unaffected.
+
+Serving spot-checks on 1.5.4, all green: model loads in 38–44s; **38**
+offloaded expert layers logged as configured; MTP draft engaged ("Using
+main model MTP component for drafting"), 24/45 tokens accepted (53%); a
+**151k-token** prompt (past the 131k cache) returns `DONE` with
+`finish_reason: stop` in 102.7s. VRAM at the production config: 20546 MiB
+used / 3593 MiB free idle, 21704 / 2435 after the long generation —
+comfortably above the 200 MiB guard, and 1.5.2's transient-VRAM fixes did
+not squeeze the envelope.
+
+Harness gotchas recorded so the next run does not repeat them: their
+`logs\perf\*.log` are **UTF-16LE** with ANSI escapes (naive `grep` finds
+nothing); the headline tg is the mean over 9 rows, not the last; a
+`set BASE=...` var passed to a `:run` subroutine must be passed as ONE
+quoted string (`call :run "name" "%BASE% -short -sd"`, read via `%~2`) or
+the tokens interleave with `shift`; and `bench.ps1`'s per-arm env
+discipline (clear `MEMOPS`/`STREAM_T`/`STREAM_BATCH_EXPERTS`, then set only
+that arm's keys) must be copied or every comparison is void. Two arms
+(`04-threads16`, `06-mcl40`) abort with `ZeroDivisionError` at
+`eval/perf.py:115` when a short prefill length times to exactly 0 — an
+upstream harness bug, not a config error. Also: tabbyAPI's Flash-Next is
+a **reasoning** model, so a smoke test needs `max_tokens` ≥ 512 or the
+entire budget goes to `reasoning_content` and `content` comes back `null`
+with `finish_reason: length`.
+
 ### Qwen3.8-27B dense 1.40bpw (`SC_1.40bpw_H3_V3`, Qwen3_5, hd 256)
 
 | ctx (tok) | preset | median | mean | max | p99 | p99.9 | fp16 pre (s) | kvarn pre (s) |
