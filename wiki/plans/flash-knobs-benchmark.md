@@ -135,6 +135,58 @@ single-process A/B discipline and is strictly more stable than the
 median it replaces. Phase B has no in-process rep flag, so its reps
 are separate processes: quote all three and the spread.
 
+### 0.8 Test protocol decided 2026-10-06 (supersedes parts of §0/§0.5)
+
+**KVaRN is out of scope.** The operator may not ship it, so nothing here may
+depend on it. `model_init.py:288` gates the KVaRN cache on
+`cq.startswith("kvarn")` — it is the only path that passes `kvarn_kwargs`. A
+bare `k,v` pair (`5,4`, `2,2`, `4,4`, `8,8`) takes the plain-`Cache` branch.
+So: use bare pairs only, never a `kvarn*` preset, and treat `-kvt`,
+`-kvt_type`, `-kvsk`, `-kvsv` as inert and out of scope. Already-correct
+measurements stay valid; every `cache_mode` row in the report is a plain pair.
+
+**Sustained conversation replay is the primary metric** (§0.3's "1 request per
+boot" is retired). Protocol: replay `agentic_code_10.json` progressively — turn
+*i* sends `messages[0..i]` — so one boot yields a real
+`prompt → answer → prompt` series with a growing, realistically warm prefix.
+
+- Compare **the same turn index** across configs. Turn cost scales with prompt
+  length (turns ran 11k → 16k prompt tokens), so a median across heterogeneous
+  turns is not a stable metric — measured spread was 24–36%, which is prompt
+  difficulty, not config.
+- Primary estimator: **median of per-turn ratios** (config B ÷ config A at the
+  same turn index). Prompt difficulty cancels by construction.
+- Use per-turn **wallSec** as the raw signal; it is far more reproducible than
+  parsed tg (combo turn 4: 7.02 s / 7.55 s across runs vs tg 43.4–55.6).
+- `pp` from the server log is **unreliable in this mode** (parsed 102 where the
+  real value is ~1200–1600). Use tg + wallSec; get pp from `-Rotate` instead.
+- Boot time is still reported — it gates *testing* throughput — but as a cost
+  to minimize, not a target.
+
+**Determinism mode (operator: determinism worth a prefill penalty).** The DSA
+staged-prefill path switches numerics on a context-length threshold:
+`EXL3_DSA_QC_STAGE` (default `1`) selects a gather-once fp16 transient
+(~3.9× faster attention at 16k) instead of the online dequantize path, gated
+by `0 < pool_len <= EXL3_DSA_QC_STAGE_MAX_ENTRIES` (default 1M entries, ~1.2 GB
+transient). `pool_len` is the *actual context*, so past that cap the same
+config silently takes the other path — different numerics, different speed.
+With a non-KVaRN cache this path is live, so it applies to this box.
+
+- `EXL3_DSA_QC_STAGE=0` pins the online path: deterministic, no cliff, and
+  costs the prefill speedup. **Use it for any run where A/B determinism
+  matters more than wall-clock** — screening passes may use the default.
+- `EXL3_DSA_QC_STAGE_MAX_ENTRIES` raises the threshold at ~1.2 GB VRAM per 1M
+  entries. At 260k the default cap is a live risk on a config already near
+  ~1 GB free, so either raise it or pin `EXL3_DSA_QC_STAGE=0` before the
+  long-context passes.
+
+**No seed parameter exists** and none is needed: `GreedySampler` is
+`ArgmaxSampler` (`SS_Argmax`, no RNG), and the API accepts no `seed` field. The
+whole battery already runs `temperature: 0.0`, so output token selection is
+deterministic; residual spread is numerical (kernel/reduction-order, tied to
+the ~830 MB VRAM swing on identical configs). Consequence: **draft-acceptance
+differences under ~3pp are noise**, not quality signal.
+
 ### 0.7 Long-context requirement (added 2026-10-05 — do this LAST, after everything else)
 
 The operator needs **128k minimum, 260k desirable** context. Everything in
