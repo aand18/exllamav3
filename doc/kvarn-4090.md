@@ -253,6 +253,42 @@ Note the second-order consequence: upstream made the MEMOPS-**on** path
 config on Windows/WDDM gets worse on 1.5.4. Our production config already
 sets `MEMOPS=0`, so serving is unaffected.
 
+**MTP draft sweep** (`mtp_sweep.ps1`, 11 arms, agentic-code workload,
+`-tokens 256`). Re-run by changing exactly three lines — `$SD` to our
+mirror's `eval/spec_decode.py` (the upstream checkout it points at does not
+exist on this box), `$LOG` to `logs/mtp-154`, and `Tee-Object` to
+`Out-File -Encoding utf8`. Flags, env and arm list are verbatim, and
+`spec_decode.py` is byte-identical to v1.5.4 upstream (its only 1.4.9→1.5.4
+delta is `-ngram_corpus` plumbing, unused here), so the comparison against
+`logs/mtp` is fair. tg per arm (1.4.9 → 1.5.4):
+
+| arm | 1.4.9 | 1.5.4 | Δ | acc/draft 1.4.9 → 1.5.4 |
+|-----|-------|-------|---|----------------------|
+| r01 ndt3+dyn | 29.76 | 26.09 / 27.67 | −9.7% | 2.56/3.00 → 2.49–2.55/3.00 |
+| r02 ndt1 | 31.56 | 26.14 / 30.40 | −10.4% | 0.94/1.00 → 0.93/1.00 |
+| r03 ndt2 | 34.21 | 32.79 | −4.2% | 1.79/2.00 → 1.81/2.00 |
+| r04 ndt3 | 32.76 | 35.00 | +6.8% | 2.52/3.00 → 2.50/3.00 |
+| r05 ndt4 | 34.33 | 35.58 | +3.6% | 3.13/4.00 → 3.20/4.00 |
+| r06 ndt5 | 34.80 | 36.12 | +3.8% | 3.72/5.00 → 3.73/5.00 |
+| r07 ndt1+dyn | 31.89 | 30.40 / 30.32 | −4.8% | 0.93/1.00 → 0.93/1.00 |
+| r08 ndt2+dyn | 31.27 | 33.07 | +5.8% | 1.83/2.00 → 1.84/2.00 |
+| r09 ndt3+dyn | 35.66 | 35.50 | −0.4% | 2.56/3.00 → 2.55/3.00 |
+| r10 ndt4+dyn | 33.27 | 35.54 | +6.8% | 3.17/3.98 → 3.17/3.97 |
+| r11 ndt5+dyn | 34.31 | 36.57 | +6.6% | 3.80/4.90 → 3.63/4.80 |
+
+Mean −0.5%; the three arms that moved most were re-run to separate
+regression from noise, and all three swing 6–16% between identical
+back-to-back passes (r02 26.14 vs 30.40), so no single-arm delta here is
+significant — this workload's own run-to-run spread exceeds every effect
+being measured. Acceptance rates are unchanged to ±0.06 tokens/draft, which
+is the meaningful check: **draft quality did not move**.
+
+The one number that *is* stable and improved is the drafting payoff:
+r01's MTP-vs-baseline speedup went **1.07x → 1.27–1.31x**. On 1.4.9
+drafting barely paid for itself (1.07x); on 1.5.4 it is worth ~30%, so the
+drafting path got materially more useful even though its absolute
+throughput is flat.
+
 Serving spot-checks on 1.5.4, all green: model loads in 38–44s; **38**
 offloaded expert layers logged as configured; MTP draft engaged ("Using
 main model MTP component for drafting"), 24/45 tokens accepted (53%); a
@@ -276,6 +312,16 @@ upstream harness bug, not a config error. Also: tabbyAPI's Flash-Next is
 a **reasoning** model, so a smoke test needs `max_tokens` ≥ 512 or the
 entire budget goes to `reasoning_content` and `content` comes back `null`
 with `finish_reason: length`.
+
+**Never reimplement a PowerShell harness in batch.** `spec_decode.py`'s
+workload selector is `-single "Agentic, code"` — one argv token that
+*contains a space*. Batch re-splits it under every form tried (quoted,
+caret-escaped, `=`-joined, via `%~2`), so argparse silently drops the
+workload and every arm produces an empty result table while still exiting
+0. The tell is an empty table body under a populated header. The fix is
+not more quoting gymnastics: keep the harness in PowerShell and change only
+what has to change. A zero-exit-code run with no result rows is a failed
+run, not a fast one — check the table has rows.
 
 ### Qwen3.8-27B dense 1.40bpw (`SC_1.40bpw_H3_V3`, Qwen3_5, hd 256)
 
