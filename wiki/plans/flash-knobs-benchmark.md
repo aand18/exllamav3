@@ -82,6 +82,10 @@ restore before the next. STOP a knob early if its first rep is
    from the server log/error on 5+ rather than assuming; cap the
    sweep at the confirmed max. Narrow: MTP sweep exists; only
    re-probe gaps.)
+   `draft_cache_mode`: sweep LOWEST first (Q2 if offered, else Q4
+   → Q8 → FP16 — enumerate from the sample). Prior finding: low
+   draft-cache quants showed no slowdown, so press downward for
+   VRAM until quality or speed moves, then stop.
 6. Env threads/streams: `EXL3_MOE_CPU_THREADS` 8 → 1 / 2 / 4
    first (experience says low values score higher on LLM work
    and saturation rarely pays on this CPU; 12 / 16 only as
