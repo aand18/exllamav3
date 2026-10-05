@@ -31,8 +31,25 @@ each other.
 
 ### A1. Rebase + conflicts
 
-1. On `wip/kvarn-r154`: `git rebase --onto v1.5.4
-   origin/fork-overview` (replays our diff onto 1.5.4).
+0. **Do NOT run step 1 as originally written.** `git rebase --onto v1.5.4
+   origin/fork-overview` is silently destructive: `fork-overview` is
+   upstream `6b84a21` + 15 docs commits (`AGENTS.md`, `BRANCHES.md`, the
+   README fork header, `doc/local-build.md`), and rebasing onto bare
+   `v1.5.4` drops that whole layer **with no conflict** — the diff just
+   shows those files "no longer in our diff", which reads like a clean
+   win. Build the base first, then rebase onto it:
+
+   ```sh
+   git checkout -b wip/fork-docs-154 v1.5.4
+   git rebase --onto v1.5.4 6b84a21 origin/fork-overview   # fork docs onto 1.5.4
+   git checkout wip/kvarn-r154
+   git rebase --onto wip/fork-docs-154 v1.5.4              # our diff onto that
+   ```
+
+   Verify: `git diff --stat wip/fork-docs-154 origin/fork-overview -- AGENTS.md
+   BRANCHES.md doc/local-build.md` must be empty, and `git merge-base
+   --is-ancestor v1.5.4 HEAD` must pass.
+
    Expect conflicts in: `exllamav3/modules/attn.py`,
    `exllamav3/modules/attention_fn/dispatch.py`, possibly
    `triton_paged.py`, `model/*`, `model_init.py`.
@@ -51,6 +68,13 @@ each other.
      `decode_flash_attn` hooks (`get_for_device` calls,
      `block_table`/`cache_seqlens` handling). If upstream moved
      code you hook into, move the hook with it.
+     **Actual outcome (1.5.4):** the only conflict is
+     `_autosplit_layer`. Upstream **moved** the
+     `isinstance(layer, QSAPlanes)` check OUT of `_autosplit_layer`
+     and into its two callers (`autosplit_prepare`,
+     `autosplit_extra_measure`). Take upstream's shape and re-insert
+     ONLY the kvarn guard — keeping the old guard as well
+     double-returns. `decode_flash_attn` did not conflict.
    - `triton_paged.py`, `model/*`, `model_init.py`: keep both
      sides; if a hunk is purely upstream bookkeeping around our
      untouched code, take upstream.
@@ -65,7 +89,17 @@ each other.
    tests/test_kvarn_cpu.py tests/test_kvarn_tail_cpu.py
    tests/test_kvarn_widths_cpu.py tests/test_kvarn_m4_cpu.py
    tests/test_kvarn_m5_cpu.py tests/test_kvarn_triton.py -q`
-   must be 85 passed / 12 skipped (CUDA tests skip here).
+   must be **85 passed / 14 skipped** (CUDA tests skip here). The
+   original "12 skipped" in this plan was stale: all 14 skips are
+   `needs CUDA + triton` in `tests/test_kvarn_triton.py`, and those
+   files are byte-identical before and after the rebase.
+6. **Audit for content loss by diffing TREES, not diffs.** Comparing
+   `git diff v1.5.1 <old>` against `git diff <new-base> HEAD` reports
+   a phantom multi-thousand-line "deficit" that is only reindentation
+   and duplicated blank lines. Use `git diff <old-branch> HEAD`
+   (old tree vs new tree) and then, per file, ask whether each removed
+   line is absent from upstream `v1.5.4` too (upstream removed it) or
+   still present there (we dropped it).
 
 ### A1.5. Rebuild exllamav3_ext on the box (REQUIRED, was missing)
 
@@ -94,6 +128,13 @@ scratch-copy rule — all binding here).
    shadow copy before the venv's 1.4.9 one). NEVER overwrite
    `venv\...\exllamav3_ext.cp312-win_amd64.pyd` — the tabbyAPI
    server depends on it. Same for any Sep-25 box `.pyd`.
+   **The shadow dir must NOT be inside the mirror tree root.**
+   `sys.path[0]` is the *script's own directory*, so a `.pyd`
+   sitting in the tree root silently wins over `PYTHONPATH` — this
+   produced a false "the venv is already on 1.5.4" reading that
+   looked like a completed upgrade when nothing had been installed.
+   Always confirm `e.__file__` from a **neutral cwd** (`C:\`), never
+   from the repo dir.
 5. Verify before any model load: fresh python,
    `import exllamav3_ext as e;
    assert hasattr(e, 'stloader_deferred_batch')`, plus print
@@ -122,6 +163,24 @@ targets. Do NOT "fix" code to reproduce old numbers.
 5. PARITY 8k green required before push. Push ONLY
    `wip/kvarn-r154` (never force-push `wip/kvarn-cache`;
    the maintainer merges).
+6. **Write each gate's log to a per-setting filename**
+   (`a2_ntok<N>_parity<P>.log`), never a single `a2.log`. A shared
+   name means the last run overwrites the earlier evidence, and the
+   overwritten numbers then survive only in the operator's transcript.
+   Each log should also carry a provenance header (tree version, which
+   `.pyd` loaded, `smem.py`, `CacheLayer_kvarn` importable) so a row
+   can never be attributed to the wrong build.
+7. **When a number lands inside the noise band, re-run it and report
+   the range.** A single sample that sits near the baseline is not
+   evidence of "no change" — quoting the pessimistic sample of a noisy
+   measurement understates the result. See the ledger's 64k tg row,
+   where one pass read 51.4/51.7 and a repeat read 52.2/52.2 against
+   a 52.2 baseline.
+8. **Validate a cross-setting comparison against a control, not by
+   reasoning.** A `PARITY=1` number cannot be compared to a
+   `PARITY=0` baseline — but the ledger already contains a population
+   of historical `PARITY=1` validation runs, and landing inside it is
+   the actual proof.
 
 ### A3. Done means (Track A)
 
@@ -156,13 +215,29 @@ not WSL, in an x64 Native Tools prompt (see
    `venv\exl3_149_backup\` (precedent exists:
    `exl3_148_backup`). Verify the backup imports (spot-check
    file count matches source). No backup = no upgrade.
-2. `pip install --upgrade` the 1.5.4 wheel (exact release asset
-   `+cuXX.torch2.XX` matching the venv's torch/CUDA — check
-   `pip show torch` first; wrong CUDA build = brokenestensibly
-   working install, so match it exactly).
+2. Install the 1.5.4 wheel (exact release asset `+cuXX.torch2.XX`
+   matching the venv's torch/CUDA — check torch first; wrong CUDA
+   build = brokenestensibly working install, so match it exactly).
+   **The venv has NO pip** (`python -m pip` → "No module named pip",
+   `Scripts\pip.exe` absent); `start.bat` bootstraps via `uv`. Use:
+
+   ```bat
+   uv pip install --python venv\Scripts\python.exe --no-deps --reinstall <wheel>
+   ```
+
+   `--no-deps` is load-bearing: the wheel pins `torch==2.11.0`, and
+   letting the resolver run risks upgrading torch under a live server.
+   Confirm the interpreter is the venv's, not system `C:\Python312`.
 3. Smoke: import exllamav3, print `__version__` (expect 1.5.4),
    load the Flash-Next production config, one short greedy
    generation. Any failure: STOP, do not debug forward.
+   Two traps here: `config.yml` pins `host: 0.0.0.0` / `port: 5000`
+   and CLI `--port` does **not** override it, so poll 5000; and auth
+   needs `Authorization: Bearer <api_key>` from `api_tokens.yml`
+   (regenerated on each boot). Flash-Next is a **reasoning** model, so
+   budget `max_tokens` ≥ 512 or the whole budget goes to
+   `reasoning_content`, `content` comes back `null`, and
+   `finish_reason: length` — that is not a failure.
 
 ### B2. Re-validate serving (their metrics, their harness)
 
@@ -170,6 +245,20 @@ not WSL, in an x64 Native Tools prompt (see
    from `tabbyAPI/PERF_FINDINGS.md`, same workload): expect
    shifts (1.5.0/1.5.1 MoE opts + 1.5.2 VRAM should HELP, but
    record, don't assume). Compare vs B0 baseline.
+   `bench.ps1` / `mtp_sweep.ps1` point at a **separate upstream
+   checkout** (`Downloads\exllamav3`) that does not exist on this box.
+   Point `$PERF`/`$SD` at our mirror instead and change nothing else —
+   `perf.py` and `spec_decode.py` there are byte-identical to v1.5.4
+   upstream, so the comparison stays fair. **Keep the harness in
+   PowerShell**: `spec_decode.py`'s `-single "Agentic, code"` is one
+   argv token containing a space, and batch re-splits it under every
+   form (quoted, caret, `=`-joined, `%~2`). The failure is silent —
+   argparse drops the workload and every arm exits 0 with an empty
+   result table. Zero exit + no rows is a FAILED run.
+   Copy `bench.ps1`'s per-arm env discipline exactly: clear
+   `EXL3_MOE_MEMOPS`/`_STREAM_T`/`_STREAM_BATCH_EXPERTS`, then set only
+   that arm's keys, or arms inherit each other's env and every
+   comparison is void.
 2. Confirm: tuned env still respected (`start_tuned.ps1` vars
    take effect — spot-check one, e.g. offload behavior),
    `cpu_moe_offload_layers: 38` still valid (VRAM re-measure!),
@@ -178,6 +267,10 @@ not WSL, in an x64 Native Tools prompt (see
    `MEMOPS=1` vs `0` once (10% gap on 1.4.9); if 1 closed it,
    say so loudly (kills a workaround + maybe the upstream issue
    draft in `memops_win_issue.md`).
+   Verify the unset case really is `MEMOPS=1` before labelling it:
+   `moe_cpu_host.py` reads `os.environ.get("EXL3_MOE_MEMOPS", "1") != "0"`.
+   Run the A/B **order-controlled** (both arm orders) — a single pass
+   ordering can manufacture or hide a gap this size.
 4. Rollback (if anything is red and not trivially explained):
    copy `exl3_149_backup\*` back over `site-packages`, re-run
    B0 smoke, confirm `__version__` reads 1.4.9 again. Report.
@@ -189,6 +282,46 @@ VRAM re-measured, MEMOPS verdict recorded, backup retained
 (do NOT delete `exl3_149_backup` for a month). Report to
 maintainer; `PERF_FINDINGS.md` updated ONLY if they own it
 (ask before editing their docs).
+
+## Outcome (2026-10-05) — what actually happened
+
+Both tracks ran to completion. Full numbers and evidence live in
+`doc/kvarn-4090.md` (§ "v1.5.4 re-baseline" and § "tabbyAPI serving on
+exllamav3 1.5.4"). Headlines, including the ones that contradict the
+plan's expectations:
+
+**Track A** — rebased 320 commits onto v1.5.4 (branch `wip/kvarn-r154`,
+3 conflicts, keep-both). CPU suite 85 passed / 14 skipped. Box gates
+green. KLD **unchanged** (median 1e-6, same-top 100.00% at 8k and 64k,
+digit-identical across all 4 runs); prefill +36% @8k / +17% @64k from
+upstream work; decode **flat at matched parity** (64k: 52.2/52.2 against a
+52.2 baseline). Pushed.
+
+**Track B** — 26/26 backend symbols resolve at 1.5.4 with 1.4.9-identical
+signatures, 0 call-site breaks. Installed via `uv --no-deps`. Serving
+green: mcl 38 honored, MTP drafting engaged, a 151k-token prompt completes
+past the 131k cache, VRAM 20546 MiB used / 3593 free idle.
+
+Two findings that invert the plan's expectations:
+
+1. **The MEMOPS workaround got *more* important, not obsolete.** The gap
+   widened from 11.5% (1.4.9) to **29% (1.5.4)**, order-controlled with
+   disjoint ranges. Upstream also made the MEMOPS-**on** default path
+   ~19.5% slower while leaving `MEMOPS=0` flat. `memops_win_issue.md` and
+   `MEMOPS_FIX_PROMPT.md` stay **open**; production is unaffected only
+   because it already sets `MEMOPS=0`.
+2. **Drafting got materially better**: r01's MTP-vs-baseline speedup went
+   **1.07x → 1.27–1.31x**, with acceptance rates unchanged to ±0.06
+   tokens/draft.
+
+Plan defects found and corrected above (A1 step 1's destructive rebase,
+the stale "12 skipped", A1.5's shadow-dir/`sys.path[0]` trap, B1's
+pip→uv, B2's harness-portability and order-control gaps) — each is now
+written back here so the next agent does not rediscover it.
+
+**Still open, needs a human:** whether tabbyAPI's owner publishes the
+MEMOPS finding in `PERF_FINDINGS.md` (their doc), the maintainer merge of
+`wip/kvarn-r154`, and pruning `exl3_149_backup` after a month.
 
 ## Global non-goals + guards (binding)
 
