@@ -68,20 +68,26 @@ restore before the next. STOP a knob early if its first rep is
 1. `cpu_moe_offload_layers`: 38 → 36 / 40 / 42. (VRAM↔RAM↔speed
    frontier; fewer offloaded = faster until the VRAM guard
    bites. Interacts with everything — first for a reason.)
-2. `cache_mode`: 5,4 → 6,5 → 8,8. (Quality NOT measured here —
-   label all rows perf-only; KLD owns quality separately.)
+2. `cache_mode`: baseline 5,4 → 2,2 → 4,4 → 8,8. (Full ladder
+   ordered low→high; quality NOT measured here — label all rows
+   perf-only; KLD owns quality separately. 2,2 may trip guards —
+   that is data, record + move on.)
 3. `chunk_size`: 4096 → 2048 / 8192. (8192 needs guard headroom
    — abort past it, mark UNSAFE not slow.)
 4. `max_batch_size`: 2 → 1. (Single-stream ceiling vs contended
    reality. Do not "recommend" 1 on speed alone — it halves
    serving capacity; report both numbers.)
-5. Draft: `draft_num_tokens` 5 → 3 / off; `dynamic_draft`
-   on/off. (Narrow: MTP sweep exists; only re-probe gaps.)
-6. Env threads/streams: `EXL3_MOE_CPU_THREADS` 8 → 4 / 12 / 16;
-   `STREAM_T` 6 → 3 / 12 with `STREAM_BATCH_EXPERTS` 48 → 24.
-   (16 threads contends with serving; interior optimum likely.
-   Env read at server start — restart required, re-verify with
-   a settings dump, not assumption.)
+5. Draft: `draft_num_tokens` 5 → 4 / 3 / off; `dynamic_draft`
+   on/off. (4 is believed to be this model's MTP max — confirm
+   from the server log/error on 5+ rather than assuming; cap the
+   sweep at the confirmed max. Narrow: MTP sweep exists; only
+   re-probe gaps.)
+6. Env threads/streams: `EXL3_MOE_CPU_THREADS` 8 → 1 / 2 / 4
+   (LOW direction only: experience says low values score higher
+   on LLM work and saturation never pays on this CPU — do not
+   bother with 12/16); `STREAM_T` 6 → 3 / 12 with
+   `STREAM_BATCH_EXPERTS` 48 → 24. (Env read at server start —
+   restart required, re-verify with a settings dump.)
 7. Ablations (one each, back to baseline between):
    `EXL3_MOE_CPU_PIN` 1→0, `SWIZZLE` 1→0, `ZERO_COPY` 1→0.
    (Keeps `start_tuned.ps1` honest — drop zero-effect lines.)
