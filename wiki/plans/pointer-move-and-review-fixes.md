@@ -95,6 +95,18 @@ Merging (forbidden here). Touching `master`,
 `fork-overview`, `wip/fork-docs-154`, the venv, or tabbyAPI.
 Force-push anywhere except §4.3's single leased push.
 
+### §4.3 re-test 2026-10-05 (maintainer run, real push, not dry-run)
+
+`git reset --hard wip/kvarn-r154` + real
+`git push --force-with-lease origin wip/kvarn-cache` → **rejected**:
+`push declined due to repository rule violations`. The block is real
+(ruleset, not lease, not auth). Corollaries now proven: (1) `push
+--dry-run` does NOT evaluate rulesets — a dry-run success earlier the
+same day meant nothing; never cite dry-runs as clearance. (2) Local
+was reset back to `584ec09` immediately, refs coherent. The three
+options in the outcome log stand; the pointer is unmoved pending one
+of them.
+
 ## 6. Done means + outcome log
 
 `wip/kvarn-cache` == old r154 tip (verify: `git rev-parse`
