@@ -107,6 +107,17 @@ was reset back to `584ec09` immediately, refs coherent. The three
 options in the outcome log stand; the pointer is unmoved pending one
 of them.
 
+## 7. Outcome II — move executed 2026-10-05 (maintainer relaxed rule)
+
+Ruleset 24036645 (`deletion`, `non_fast_forward`) disabled
+2026-10-05 (full JSON backed up first), pointer moved
+(`584ec09..3c5e84f`, force-with-lease accepted), ruleset
+re-enabled and re-verified (`active`, both rules present via
+fresh GET). CPU suite on moved tip: 85 passed / 14 skipped.
+Refs: `wip/kvarn-cache` == `origin/wip/kvarn-cache` ==
+`3c5e84f`; `wip/kvarn-cache-pre154` == `584ec09` (backup);
+`wip/kvarn-r154` + backup retained.
+
 ## 6. Done means + outcome log
 
 `wip/kvarn-cache` == old r154 tip (verify: `git rev-parse`
