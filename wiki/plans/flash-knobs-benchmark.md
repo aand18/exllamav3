@@ -57,7 +57,21 @@ rep is >10% worse AND trips a guard (record + move on).
 
 SKIP (already known): `MEMOPS` 0/1 (29% gap, MEMOPS=0 stands),
 `PYTORCH_CUDA_ALLOC_CONF` (unsupported on Windows, no-op),
-tensor_parallel (single GPU), rope_* (model-driven, not perf).
+tensor_parallel (single GPU), rope_* (model-driven, not perf),
+`ngram_ram` (tens of GB RAM for PLE table — violates the 2GB
+floor rule; revisit only with RAM headroom).
+
+ADDED 2026-10-05 (present in sample, now commented in
+`config.yml` — uncomment to test, never both MoE modes):
+- `cpu_moe_split_experts` + `cpu_moe_threads` COMBINED knob
+  (finer than whole-layer offload + thread shape together;
+  mutually exclusive with `cpu_moe_offload_layers`).
+- `warmup` true/false (boot time vs cold-start stability).
+- `recurrent_checkpoint_interval` (GDN-layer VRAM/compute).
+- `cuda_malloc_async` True (current) vs False (upstream
+  default since 2026-09-07 — allocator-behavior fork, affects
+  all fragmentation findings; verify state before quoting
+  any VRAM number).
 
 ## 2. Interactions (only the top-2 §1 winners)
 
