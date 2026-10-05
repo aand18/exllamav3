@@ -134,10 +134,19 @@ must not live inside the mirror root: `sys.path[0]` is the script's own
 directory, so a `.pyd` sitting in the tree root silently wins over
 `PYTHONPATH`.
 
+Raw evidence: `a2_ntok8192_parity1.log` and `a2_ntok65536_parity0.log`
+(box mirror). Both log their own provenance header (tree version, which
+`.pyd` loaded, `smem.py`, `CacheLayer_kvarn`), so a row can never be
+attributed to the wrong build.
+
 | ctx | setting | fp16 pp | kvarn4 pp | fp16 tg | kvarn4 tg | KLD med/mean/max | same-top | peak pp / tg (fp16/kvarn) |
 |-----|---------|---------|-----------|---------|-----------|------------------|----------|--------------------------|
-| 8192 | `PARITY=1`, 64 dec | 3.0s (2767) | 3.5s (2309/2340) | 85.6 / 86.6 | 42.9 / 42.8 | 1e-6 / 2.6e-5 / 5.99e-4 | 100.00% | 14.5/14.6, 10.3/10.6 GB |
-| 65536 | `PARITY=0`, 256 dec | 27.0/27.1s (2426/2420) | 30.5/30.5s (2148) | 64.9 / 65.0 | 51.4 / 51.7 | 1e-6 / 2.6e-5 / 1.04e-3 | 100.00% | 19.0/19.1, 14.7/15.3 GB |
+| 8192 | `PARITY=1`, 64 dec | 3.0s (2715/2770) | 3.6/3.5s (2300/2329) | 84.7 / 86.2 | 42.4 / 43.2 | 1e-6 / 2.6e-5 / 5.99e-4 | 100.00% | 14.5/14.6, 10.3/10.6 GB |
+| 65536 | `PARITY=0`, 256 dec | 27.0/27.1s (2424/2418) | 30.4/30.5s (2152/2151) | 65.3 / 65.1 | 52.2 / 52.2 | 1e-6 / 2.6e-5 / 1.04e-3 | 100.00% | 19.0/19.1, 14.7/15.3 GB |
+
+KLD digits are byte-identical across all 4 runs at each length (only
+throughput moves), which is the strongest form of the correctness claim:
+the rebase changed the arithmetic nowhere.
 
 Drift vs the v1.5.1 tables above, and what it means:
 
@@ -145,18 +154,22 @@ Drift vs the v1.5.1 tables above, and what it means:
   lengths; mean 1.8e-5 -> 2.6e-5 at 8k is within this box's measured
   KLD noise floor — fp16-vs-fp16 on the native CPU MoE worker alone
   reads 2.7e-5–9.4e-5). Quality verdict unchanged: no action.
-- **pp: kvarn got faster** (8k 1696 -> 2309 tok/s, +36%; 64k 1844 ->
-  2148, +16%), and the kvarn/fp16 ratio improved at 8k (0.69 -> 0.83).
+- **pp: kvarn got faster** (8k 1696 -> ~2315 tok/s, +36%; 64k 1844 ->
+  ~2152, +17%), and the kvarn/fp16 ratio improved at 8k (0.69 -> 0.84).
   Upstream 1.5.0–1.5.2 prefill/MoE work, not our kernels.
-- **tg: kvarn4 8k graph 58.9 -> 42.9 tok/s under `PARITY=1`** — but that
-  is NOT an apples-to-apples regression: the v1.5.1 8k table was
-  `PARITY=0` (CleanPerf) and the standing rule in this file is "never
-  compare across parity settings". `PARITY=1`'s full-refresh asserts
-  cost ~15% on the old code, and here fp16 also dropped 87.6 -> 85.6
-  while kvarn fell further. The like-for-like 64k comparison IS valid
-  (both `PARITY=0`): kvarn4 52.2 -> 51.4/51.7 (-1.4%, inside run
-  spread) and fp16 62.2 -> 64.9/65.0 (+4.3%). **No real decode
-  regression at matched parity.**
+- **tg: kvarn4 8k reads 42.4–43.2 tok/s under `PARITY=1`**, against the
+  v1.5.1 table's 58.9. That is NOT an apples-to-apples comparison and must
+  not be recorded as a regression: the v1.5.1 v3 table is the CleanPerf
+  (`PARITY=0`) sweep, and this file's standing rule is "never compare
+  across parity settings". `PARITY=1`'s full-refresh asserts cost ~15%,
+  and the ledger's own `PARITY=1 @8k` validation runs cluster at
+  **41.3–43.3 tok/s** (L394/400/405/467/494) — i.e. our 42.4–43.2 lands
+  exactly on the historical `PARITY=1` population, which is the check that
+  actually confirms continuity.
+- **The like-for-like 64k comparison is valid** (both `PARITY=0`):
+  kvarn4 **52.2 / 52.2** vs the v1.5.1 row's 52.2 — no movement at all —
+  and fp16 65.3 / 65.1 vs 62.2 (+4.8%). **No decode regression at matched
+  parity; fp16 gained.**
 - Peaks are within 0.1 GB of the v1.5.1 rows at both lengths (19.0/19.1
   and 14.7/15.3 GB @64k), so 1.5.2's transient-VRAM fixes did not move
   this model's envelope.
@@ -165,6 +178,37 @@ Drift ≥5% items were investigated one level only (which path moved) and
 recorded, per the plan — not chased. The 8k tg figure is a parity-setting
 mismatch, not a moved path; the pp gain is upstream's, and no
 per-path attribution beyond that was attempted.
+
+### Rebase content-loss audit (2026-10-05)
+
+Loss checks must compare **trees**, not two diffs against different bases —
+the first attempt (`git diff v1.5.1 wip/kvarn-cache` vs
+`git diff <base> HEAD`) reported a phantom 7400-line deficit that was
+entirely reindentation and duplicated blank lines. Base-independent method
+and results:
+
+- Every file that is ours alone is **byte-identical** pre vs post:
+  `cache/kvarn.py`, `attention_fn/kvarn_triton.py`, `cache/qsa.py`,
+  `eval/kvarn_{microkld,needle,torture}.py`,
+  `test_kvarn_{slots,eref}_cpu.py`.
+- Shared/conflicted files: `dispatch.py` and `model_init.py` are
+  `+4/-0` and `+4/-0` old-tree-vs-new-tree, and every one of those added
+  lines is **upstream's** (`window_right`/`sink_key0` in
+  `attn_dispatch`; `-embd` and `-ngram_corpus` CLI flags). Our hook
+  symbol counts are unchanged: `_try_kvarn_online_decode` 2, `_kvarn_past`
+  5, `_ov_dec_n_mirror` 1, `kvarn_triton` 27; `kvarn_parse_preset`,
+  `kvarn_parse_swa_pair`, `kv_tail_tokens`, `kv_tail_type`, `kv_swa_k`,
+  `kv_swa_v`, `CacheLayer_kvarn` all identical pre/post.
+- `attn.py` shows `+104/-40` old-vs-new, but only **6 distinct non-blank
+  lines** actually left the file, and **all 6 were removed by upstream
+  1.5.4** (absent from `v1.5.4` too). Zero lines still present upstream
+  were dropped by us. Both our hooks survive (`cache_layer_type` →
+  `CacheLayer_kvarn_qsa`, and the `_autosplit_layer` kvarn guard).
+- The 3 files that left our diff (`README.md`, `doc/local-build.md`,
+  `exllamav3/exllamav3_ext/quant/frac.cu`) are now **identical to the
+  base** — i.e. their content moved into `wip/fork-docs-154`, which is
+  where fork docs belong. All three still exist in the tree (318 / 65 /
+  126 lines).
 
 ### tabbyAPI serving on exllamav3 1.5.4 (2026-10-05, separate track)
 
