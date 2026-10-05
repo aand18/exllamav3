@@ -165,11 +165,23 @@ a 128k prompt hits very different paths than a 17k one),
 `cache_mode` (quality and re-use at length), and anything with VRAM headroom
 to spare — the winner below has ~1 GB, which is the real risk.
 
-**Known trap, already paid once:** a `-mcs` value that loads fine under
-`eval/perf.py` can fail to boot the live server, because the server carries
-~2 GB more VRAM overhead (23074 MB vs 21074 MB for the same `mcs380`). Every
-candidate config MUST get a live Phase C boot before it is proposed, no matter
-what Phase A said about it.
+**Known trap, already paid once:** a config that loads under `eval/perf.py`
+can fail to boot the live server. The live server sits a roughly **constant
++1.7–2.0 GB** above the raw-forward harness on the *same* config
+(`mcl38`: 18858 → 20546 MB; `mcs380`: 21074 → 23042 MB). That offset is NOT
+server framework overhead — it is model components `perf.py` never builds:
+the server log shows `Loading vision modules 30/30` and `Loading draft
+modules 3/3`, and with `vision: true` the vision tower (depth 27, hidden
+1152, inter 4304, 987 tensors) is **not EXL3-quantized**, so it loads at
+fp16 ≈ 1.1 GB, plus the MTP draft head, its draft KV cache, CUDA graph pools
+and serving buffers.
+
+Because the offset is fixed and config-independent, any setting that fits
+offline by a thin margin will NOT fit live. `mcs360` loaded under `perf.py`
+(22486 MB peak) and then failed to boot the server at all. **Every candidate
+config MUST get a live Phase C boot before it is proposed, no matter what
+Phase A said about it** — and the safe offline margin is ~2 GB, not the
+200 MB guard.
 
 ### 0.6 Premise corrections from the 2026-10-05 battery (measured, do not re-litigate)
 
