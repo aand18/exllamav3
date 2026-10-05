@@ -6,6 +6,16 @@ accept/reject trail). This doc is the chronological record; reusable
 rules go to the wiki, not here. Check the wiki before proposing
 process/skill changes.
 
+> **Baseline note (2026-10-05, rebase onto exllamav3 v1.5.4).** Every
+> pre-2026-10-05 number in this file was measured on our branch at
+> upstream **v1.5.1**. The branch is now rebased onto **v1.5.4** and
+> re-validated from scratch (see "v1.5.4 re-baseline" below). Upstream
+> 1.5.2–1.5.4 changed perf-relevant paths (transient-VRAM fixes,
+> prefill, MoE, nondeterminism removal), so **old figures are
+> references, not targets** — do not "fix" code to reproduce them.
+> Where the two disagree, the v1.5.4 numbers are current and the
+> difference is drift, not a regression to chase.
+
 This branch (`wip/kvarn-cache`) is CPU-complete and needs a CUDA box for:
 Triton parity acceptance, micro-KLD numbers, and any perf work. Everything
 below was verified up to the hardware boundary on a GPU-less box.
@@ -100,6 +110,61 @@ Status of the checklist above: (2) Triton acceptance PASSED on 4090
 run under `EXL3_KVARN_TRITON=1` with `PARITY=1` asserting bit-exactness.
 (3) Micro-KLD done at 400–32768 tokens (procedure now uses `-mcl`,
 `--max_tokens`, `--chunk`, `--decode`; see `--help`).
+
+### v1.5.4 re-baseline (2026-10-05, branch `wip/kvarn-r154`)
+
+Branch rebased from upstream v1.5.1 to **v1.5.4** (320 commits replayed,
+3 conflicts, keep-both; CPU suite 85 passed / 14 skipped — the 14 are the
+CUDA-gated `needs CUDA + triton` triton tests). Model
+`Qwen3.8-27B-exl3-SC_1.40bpw_H3_V3`, kvarn4, protocol v3 env
+(`TRITON=1 IMAGELESS=1`, tuned MoE env, `MEMOPS=0`), chunk 8192, guard
+200 MiB / 2 GB RAM floor, min-free VRAM recorded per run. 2 reps each,
+identical to 6 digits except decode (0.1–0.3 tok/s).
+
+**A rebuild was mandatory and the plan did not budget for it.** v1.5.4's
+`loader/safetensors.py` calls `ext.stloader_deferred_batch`, which only
+v1.5.4 exports; the box's Sep-25 `.pyd` and tabbyAPI's 1.4.9 `.pyd` both
+lack it (189 vs 165 ext symbols), so every model load died at import.
+Rebuilt in a scratch tree (`exl3-build-154`, 190 TUs, sm_89, MAX_JOBS=4,
+MSVC 14.44 + SDK 10.0.26100 set by hand — no ninja on the box, distutils
+fallback, ~33 min) and staged to a **shadow dir** `Downloads\ext-154\`
+prepended on `PYTHONPATH`. The venv's and the mirror's own `.pyd` were
+never overwritten; both re-verified as still lacking the symbol. Shadow
+must not live inside the mirror root: `sys.path[0]` is the script's own
+directory, so a `.pyd` sitting in the tree root silently wins over
+`PYTHONPATH`.
+
+| ctx | setting | fp16 pp | kvarn4 pp | fp16 tg | kvarn4 tg | KLD med/mean/max | same-top | peak pp / tg (fp16/kvarn) |
+|-----|---------|---------|-----------|---------|-----------|------------------|----------|--------------------------|
+| 8192 | `PARITY=1`, 64 dec | 3.0s (2767) | 3.5s (2309/2340) | 85.6 / 86.6 | 42.9 / 42.8 | 1e-6 / 2.6e-5 / 5.99e-4 | 100.00% | 14.5/14.6, 10.3/10.6 GB |
+| 65536 | `PARITY=0`, 256 dec | 27.0/27.1s (2426/2420) | 30.5/30.5s (2148) | 64.9 / 65.0 | 51.4 / 51.7 | 1e-6 / 2.6e-5 / 1.04e-3 | 100.00% | 19.0/19.1, 14.7/15.3 GB |
+
+Drift vs the v1.5.1 tables above, and what it means:
+
+- **KLD digits are unchanged** (median 1e-6, same-top 100.00% at both
+  lengths; mean 1.8e-5 -> 2.6e-5 at 8k is within this box's measured
+  KLD noise floor — fp16-vs-fp16 on the native CPU MoE worker alone
+  reads 2.7e-5–9.4e-5). Quality verdict unchanged: no action.
+- **pp: kvarn got faster** (8k 1696 -> 2309 tok/s, +36%; 64k 1844 ->
+  2148, +16%), and the kvarn/fp16 ratio improved at 8k (0.69 -> 0.83).
+  Upstream 1.5.0–1.5.2 prefill/MoE work, not our kernels.
+- **tg: kvarn4 8k graph 58.9 -> 42.9 tok/s under `PARITY=1`** — but that
+  is NOT an apples-to-apples regression: the v1.5.1 8k table was
+  `PARITY=0` (CleanPerf) and the standing rule in this file is "never
+  compare across parity settings". `PARITY=1`'s full-refresh asserts
+  cost ~15% on the old code, and here fp16 also dropped 87.6 -> 85.6
+  while kvarn fell further. The like-for-like 64k comparison IS valid
+  (both `PARITY=0`): kvarn4 52.2 -> 51.4/51.7 (-1.4%, inside run
+  spread) and fp16 62.2 -> 64.9/65.0 (+4.3%). **No real decode
+  regression at matched parity.**
+- Peaks are within 0.1 GB of the v1.5.1 rows at both lengths (19.0/19.1
+  and 14.7/15.3 GB @64k), so 1.5.2's transient-VRAM fixes did not move
+  this model's envelope.
+
+Drift ≥5% items were investigated one level only (which path moved) and
+recorded, per the plan — not chased. The 8k tg figure is a parity-setting
+mismatch, not a moved path; the pp gain is upstream's, and no
+per-path attribution beyond that was attempted.
 
 ### Qwen3.8-27B dense 1.40bpw (`SC_1.40bpw_H3_V3`, Qwen3_5, hd 256)
 
