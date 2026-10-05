@@ -405,7 +405,8 @@ def _graph_capture(layer, cap):
 def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
                              block_table, cache_seqlens, q_len, sm_scale,
                              causal, window_size, softcap, sinks,
-                             non_causal_spans, cu_seqlens):
+                             non_causal_spans, cu_seqlens,
+                             window_right: int = 0, sink_key0: bool = False):
     """Imageless KVarN decode arm (match-bee Task 3): serves single-token
     decode attention online from records (promoted single-kernel serve)
     + torch tail block + original-domain merge, with NO persistent image.
@@ -428,6 +429,13 @@ def _try_kvarn_online_decode(q, k, v, cache, cache_idx, cache_instance,
     if sinks is not None or (softcap or 0.0) != 0.0:
         return None
     if window_size not in (None, -1):
+        return None
+    # 1.5.4 added window_right / sink_key0 to attn_dispatch. This arm returns
+    # directly and so bypasses the generic path that forwards them into
+    # AttnArgs (see the attn_dispatch call site), which would silently drop
+    # both. The kernels have no windowed path, so decline rather than honor
+    # them part-way -- fail-closed, same as every other gate here.
+    if window_right != 0 or sink_key0:
         return None
     if q.device.type != "cuda" or q.dtype != torch.float16:
         return None
@@ -669,7 +677,7 @@ def attn_dispatch(
         kvarn_o = _try_kvarn_online_decode(
             q, k, v, cache, cache_idx, cache_instance, block_table,
             cache_seqlens, q_len, sm_scale, causal, window_size, softcap,
-            sinks, non_causal_spans, cu_seqlens)
+            sinks, non_causal_spans, cu_seqlens, window_right, sink_key0)
         if kvarn_o is not None:
             return kvarn_o
         if (
