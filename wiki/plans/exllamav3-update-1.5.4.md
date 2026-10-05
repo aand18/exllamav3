@@ -304,10 +304,15 @@ past the 131k cache, VRAM 20546 MiB used / 3593 free idle.
 
 Two findings that invert the plan's expectations:
 
-1. **The MEMOPS workaround got *more* important, not obsolete.** The gap
-   widened from 11.5% (1.4.9) to **29% (1.5.4)**, order-controlled with
-   disjoint ranges. Upstream also made the MEMOPS-**on** default path
-   ~19.5% slower while leaving `MEMOPS=0` flat. `memops_win_issue.md` and
+1. **The MEMOPS workaround is still mandatory — the plan's hope that 1.5.x
+   closed it is not supported.** Within 1.5.4, `MEMOPS=0` is **29%** faster
+   than default (four runs, both arm orders, disjoint ranges). The
+   "widened from 11.5%" framing rests on tabbyAPI's archived September logs
+   for the 1.4.9 side, not on a run of ours — see the ledger's
+   "MEMOPS: what the flag actually switches" section for the mechanism, the
+   per-claim strength split, and what may not be quoted. The session-solid
+   fact to pass on: **on 1.5.4, default settings decode at ~22 it/s and
+   `MEMOPS=0` at ~29 it/s on this workload.** `memops_win_issue.md` and
    `MEMOPS_FIX_PROMPT.md` stay **open**; production is unaffected only
    because it already sets `MEMOPS=0`.
 2. **Drafting got materially better**: r01's MTP-vs-baseline speedup went

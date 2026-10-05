@@ -242,16 +242,79 @@ mean over 9 context rows at S=1:
 Prefill improved: 1768 / 1790 / 1766 → 1887 / 1927 / 1911 tok/s at 8 / 16 /
 32k (+7–8%).
 
-**MEMOPS verdict: the workaround is still mandatory, and matters MORE.**
-The gap did not close — it widened from 11.5% on 1.4.9 to **29% on
-1.5.4**. Confirmed order-controlled (both arm orders, disjoint ranges:
-default 21.3–23.3 it/s vs `MEMOPS=0` 28.4–29.4, `-dr 4`), so it is not
-measurement order or drift. `memops_win_issue.md` and
-`MEMOPS_FIX_PROMPT.md` stay open; upstream 1.5.x did **not** fix it.
-Note the second-order consequence: upstream made the MEMOPS-**on** path
-~19.5% slower on this box while leaving `MEMOPS=0` flat, so any default
-config on Windows/WDDM gets worse on 1.5.4. Our production config already
-sets `MEMOPS=0`, so serving is unaffected.
+#### MEMOPS: what the flag actually switches, and how strong each claim is
+
+**Mechanism** (`exllamav3/exllamav3_ext/cpu/moe_handoff.cu`). Not a general
+CUDA memory toggle. With MoE experts offloaded to the native CPU worker, each
+handoff signals completion through "flag" words in GPU memory, and there are
+two ways to read/write them:
+
+- **MEMOPS on (the default)** — `cuStreamWriteValue32` /
+  `cuStreamWaitValue32`, executed by the GPU front-end. Per the source
+  comment: "no SM occupancy (nothing to co-schedule against exllamav3's
+  all-blocks-resident launch) and **no kernel-launch cost per wait**."
+- **MEMOPS off (`EXL3_MOE_MEMOPS=0`)** — falls back to
+  `moe_flag_write_kernel<<<1,1>>>` plus a polling wait: an actual kernel
+  launch per flag operation.
+
+So `MEMOPS=0` forces every handoff signal through a real launch. Cheap
+where launches are cheap; on this Windows/WDDM box it is not.
+
+`MEMOPS` unset means `=1`, verified in code
+(`moe_cpu_host.py:142`: `os.environ.get("EXL3_MOE_MEMOPS", "1") != "0"`), so
+the A/B below is genuinely 1-vs-0 and not 0-vs-0.
+
+**Measurement.** tg at S=1, mean over 9 context rows, `-dr 4`, Flash-Next
+3.05bpw, `mcl 36`, `cq 5,4`, `cs 131072` — `bench.ps1`'s BASE, with its
+per-arm env discipline. Order-controlled: pass 1 ran default → `MEMOPS=0`,
+pass 2 ran `MEMOPS=0` → default, in one sequence each.
+
+| | 1.4.9 | 1.5.4 (pass 1) | 1.5.4 (pass 2) | 1.5.4 pooled |
+|---|---|---|---|---|
+| MEMOPS=1 (default) | 26.23 | 22.73 [22.0–23.3] | 22.04 [21.3–22.7] | 22.39 [21.3–23.3] |
+| MEMOPS=0 | 29.25 | 28.97 [28.6–29.4] | 28.77 [28.4–29.2] | 28.87 [28.4–29.4] |
+| **MEMOPS=0 advantage** | **11.5%** | **+27.4%** | **+30.5%** | **29.0%** |
+
+**Two claims, and they are not equally strong.**
+
+1. **Solid — within 1.5.4, `MEMOPS=0` is ~29% faster than default.** All
+   four runs are from this session, same harness, both arm orders, and the
+   two ranges are **disjoint** (default tops out at 23.3, `MEMOPS=0` starts at
+   28.4). Ordering and within-session drift are both ruled out.
+2. **Weaker — that the gap *widened* from 11.5% to 29%.** The 1.4.9 side is
+   tabbyAPI's archived `logs/perf` from 11–12 September, measured on a box
+   state I did not control, not by me. The direction is consistent with claim
+   1's own data (the default arm dropped 26.2 → 22.4 while `MEMOPS=0` stayed
+   flat), but the *magnitude* of the widening rests on their logs. Do not
+   quote "29% vs 11.5%" as if both sides were measured the same way.
+
+**What is worth acting on** is the *asymmetry* between the two arms across
+versions: MEMOPS-**on** decode fell 26.2 → 22.4 it/s while `MEMOPS=0` moved
+29.3 → 28.9. That says upstream made the default path slower while leaving
+the workaround alone. Note this asymmetry rests on the **same** weak 1.4.9
+baseline as claim 2 — it is not independently established by this session,
+only the 29% gap is. What *is* session-internal is that the 1.5.4 default arm
+is genuinely slow (21.3–23.3 across four runs), which is the actionable half:
+whatever 1.4.9 measured, a default-config run on 1.5.4 today lands near 22
+it/s.
+
+> **Hypothesis, not a finding.** `moe_handoff.cu` notes the memop wait "has no
+> timeout, so dead-worker detection moves to the host-side watchdog". If the
+> wait itself got slower in 1.5.x, that compounds every handoff. This is
+> consistent with the data but **was not measured** — separating wait cost
+> from launch cost needs a per-handoff timing that no exposed env knob
+> provides. Do not report it upstream as a cause until it is instrumented.
+
+**Consequences.** `memops_win_issue.md` and `MEMOPS_FIX_PROMPT.md` stay
+**open** — on the evidence here, upstream 1.5.x did not close the gap, and
+the 1.5.4 default arm is measurably slow. (Stating it as "widened" carries
+the caveat in claim 2.) Our production config already sets `MEMOPS=0`
+(`start_tuned.ps1`), so serving is unaffected. The reportable fact for the
+tabbyAPI owner is the session-internal one: **on 1.5.4 with default settings
+this workload decodes at ~22 it/s; with `MEMOPS=0` it is ~29 it/s.** Note
+also that two of the seven vars in `start_tuned.ps1`
+(`EXL3_MOE_CPU_PIN`, `EXL3_MOE_ZERO_COPY`) are **not read anywhere in this
+tree** — no-ops, harmless, but do not credit them with the speedup.
 
 **MTP draft sweep** (`mtp_sweep.ps1`, 11 arms, agentic-code workload,
 `-tokens 256`). Re-run by changing exactly three lines — `$SD` to our
