@@ -434,6 +434,31 @@ so the largest file could never have loaded. Targets that are correct:
 **Always name files for their MEASURED prompt length, never the target**, and
 confirm from the server log before quoting any length-dependent result.
 
+### Noise floor grows with prompt length — budget reps accordingly
+
+Boot-to-boot variance is **not** constant across lengths, and this determines how
+many samples a stage needs:
+
+| prompt len | baseline boot-to-boot spread | reps needed |
+|---|---|---|
+| ~224k | **0.08 s** (0.06%) | 2 variants × 1 boot is enough |
+| ~130k | **8.9 s (11.2%)** across 3 boots | 2 variants × 1 boot is NOT enough |
+
+At 224k prefill is ~95% of wall-clock and is highly deterministic, so the
+between-boot spread is negligible. At 130k there is enough decode and cache
+interaction that run-to-run drift reaches 11% — **larger than every
+between-config effect being measured**.
+
+Measured 130k baselines: 77.9 / 79.1 / 86.8 s. `thr16` ranged 85.2–87.6,
+`mcs380` 78.1–87.6. Every range overlaps the baseline range, so **a
+1-boot-per-arm design cannot produce a valid 130k verdict at all.**
+
+**Rule: check the baseline's own spread before quoting any ratio.** If the
+within-config spread exceeds the between-config spread, the stage is
+uninformative regardless of how the medians look. The fix is more samples
+*within* each boot (`-Sustained 4` over 4 distinct variants, taking the
+within-boot median) rather than more boots, since the drift is between boots.
+
 **Known trap, already paid once:** a config that loads under `eval/perf.py`
 can fail to boot the live server. The live server sits **+1.7 to +2.5 GB**
 above the raw-forward harness on the same config (`mcl38`: 18858 MB offline
