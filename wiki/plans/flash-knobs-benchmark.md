@@ -163,6 +163,43 @@ boot" is retired). Protocol: replay `agentic_code_10.json` progressively — tur
 - Boot time is still reported — it gates *testing* throughput — but as a cost
   to minimize, not a target.
 
+**Cache sweeps are symmetric-only.** Do not test asymmetric `k,v` pairs. The
+arms measured so far were `2,2` / `4,4` / `8,8` — all symmetric — so nothing in
+the report needs retracting. The one asymmetric value in the data is `5,4`,
+which is the **production baseline** and is measured as-is because it is what
+actually ships; it is not a candidate. Note the recommended change
+(`5,4 → 2,2`) is symmetric, but it is also a *quality* change
+(asymmetric k=5/v=4 vs symmetric k=2/v=2) that remains unvalidated here — KLD
+owns that. KVaRN presets stay excluded entirely (§0.8 above).
+
+**Recorded metrics — per-process first, system-wide retained.** Both old
+metrics were system-wide, so they silently attributed the desktop, the RDP
+session, and any other process to our result. Record, per run:
+
+| metric | scope | notes |
+|---|---|---|
+| `procRamWSMB` | our process tree | max resident working set. **exact** |
+| `procPrivateMB` | our process tree | max commit charge. **exact** |
+| `procVramMB` | our process | `nvidia-smi` per-process GPU bytes |
+| `procCpuPct` | our process tree | % of all logical cores, peak |
+| `gpuWattsPeak` / `gpuLimitW` | board | power draw |
+| `gpuUtilPeakPct` | board | SM utilisation |
+| `sysRamFreeMinMB` / `sysRamUsedPeakMB` | system | **keep** — feeds the RAM guard |
+| `vramPeak` / `vramMinFree` | system | feeds the VRAM guard |
+
+Two honest limits, both labelled in the output rather than smoothed over:
+- **Per-process VRAM is usually `[N/A]` under WDDM**, so it is opt-in
+  (`$KBWantProcVram`) and reported as unavailable instead of being faked from a
+  system-wide delta.
+- `PercentProcessorTime` is already a per-logical-core percentage, so the tree
+  sums to `cores × 100` at saturation. Divide by core count — do **not**
+  multiply by 100 again (that reported 5415% for a real ~54% load).
+
+All fields come from **one** consolidated probe per poll (single `nvidia-smi`
+query for memory+power+utilisation, single `Win32_OperatingSystem`, single
+`Win32_PerfFormattedData_PerfProc_Process`), and the guards read that same
+sample rather than re-querying.
+
 **Determinism mode (operator: determinism worth a prefill penalty).** The DSA
 staged-prefill path switches numerics on a context-length threshold:
 `EXL3_DSA_QC_STAGE` (default `1`) selects a gather-once fp16 transient
