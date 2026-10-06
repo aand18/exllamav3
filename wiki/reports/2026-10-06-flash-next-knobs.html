@@ -1,0 +1,160 @@
+<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Flash-Next knob battery — results (2026-10-06)</title>
+<style>
+:root{
+  --bg:#fbfaf9; --fg:#1c1a19; --mut:#6b6560; --line:#e4e0dc; --card:#fff;
+  --ok:#0f7b4f; --okbg:#e6f4ec; --mid:#8a5a00; --midbg:#fdf3e0;
+  --low:#b3261e; --lowbg:#fdeceb; --none:#6b6560; --nonebg:#f0eeec;
+  --accent:#7a3e9d;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#16151a;--fg:#e9e6e2;--mut:#a09a94;--line:#33313a;--card:#1e1d23;
+       --ok:#5fd39b;--okbg:#12301f;--mid:#e0a84a;--midbg:#33280f;
+       --low:#f28b82;--lowbg:#3a1512;--none:#a09a94;--nonebg:#26252b;
+       --accent:#c39ee0;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+  font-variant-numeric:tabular-nums}
+.wrap{max-width:1080px;margin:0 auto;padding:40px 24px 96px}
+header.top{border-bottom:2px solid var(--line);padding-bottom:20px;margin-bottom:8px}
+h1{font-size:1.9rem;line-height:1.2;margin:0 0 6px}
+.sub{color:var(--mut);font-size:.95rem;margin:0}
+.meta{color:var(--mut);font-size:.83rem;margin-top:10px}
+h2{font-size:1.32rem;margin:44px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+h3{font-size:1.03rem;margin:26px 0 8px;color:var(--fg)}
+p,li{max-width:74ch}
+code{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  background:var(--nonebg);padding:1.5px 5px;border-radius:4px}
+a{color:var(--accent)}
+.tw{overflow-x:auto;margin:12px 0 18px}
+table{border-collapse:collapse;width:100%;font-size:.88rem}
+caption{caption-side:top;text-align:left;color:var(--mut);font-size:.83rem;
+  padding-bottom:6px}
+th{text-align:left;font-weight:600;border-bottom:2px solid var(--line);
+  padding:8px 10px;white-space:nowrap}
+td{border-bottom:1px solid var(--line);padding:8px 10px;vertical-align:top}
+tbody tr:nth-child(even){background:var(--card)}
+.badge{display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.03em;
+  padding:2px 7px;border-radius:10px;white-space:nowrap}
+.badge.ok{color:var(--ok);background:var(--okbg)}
+.badge.mid{color:var(--mid);background:var(--midbg)}
+.badge.low{color:var(--low);background:var(--lowbg)}
+.badge.none{color:var(--none);background:var(--nonebg)}
+.good{color:var(--ok)}.bad{color:var(--low)}
+.callout{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);
+  border-radius:6px;padding:14px 18px;margin:16px 0}
+.callout.warn{border-left-color:var(--low)}
+.callout.ok{border-left-color:var(--ok)}
+.callout h3{margin-top:0}
+.callout p:last-child{margin-bottom:0}
+pre{background:var(--card);border:1px solid var(--line);border-radius:6px;
+  padding:14px 16px;overflow-x:auto;font-size:.84rem;line-height:1.5}
+ul.tight{margin:.4em 0}
+.legend{display:flex;flex-wrap:wrap;gap:14px;margin:12px 0 18px;font-size:.84rem}
+.legend div{display:flex;align-items:center;gap:7px}
+details{border:1px solid var(--line);border-radius:6px;margin:14px 0;background:var(--card)}
+details>summary{cursor:pointer;padding:11px 16px;font-weight:600;font-size:.95rem}
+details[open]>summary{border-bottom:1px solid var(--line)}
+details .inner{padding:14px 16px 6px}
+footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);
+  color:var(--mut);font-size:.83rem}
+@media print{
+  :root{--bg:#fff;--fg:#000;--mut:#444;--line:#bbb;--card:#fff;
+       --ok:#0a5c39;--okbg:#fff;--mid:#6b4400;--midbg:#fff;
+       --low:#8f1d17;--lowbg:#fff;--none:#555;--nonebg:#fff}
+  body{font-size:10.5pt}
+  .wrap{max-width:none;padding:0}
+  details{border:1px solid #bbb}
+  details>summary{list-style:none}
+  details:not([open])>summary::after{content:" (expand to print)"}
+  details .inner{padding:8px 10px}
+  /* NOTE: CSS cannot force <details> open. Collapsed sections stay collapsed
+     in print output -- that is the trade for a static, JS-free, digestible
+     page. The ::after hint above tells the reader to expand them first. */
+  details .inner{display:block}
+  h2{page-break-after:avoid;break-after:avoid}
+  h3{page-break-after:avoid;break-after:avoid}
+  tr, .callout, pre{page-break-inside:avoid;break-inside:avoid}
+  thead{display:table-header-group}
+  .badge{border:1px solid currentColor}
+}
+</style></head><body><div class='wrap'>
+<header class='top'><h1>Flash-Next knob battery — results</h1>
+<p class='sub'>Measured impact of every tunable on 3.05bpw Flash-Next serving (48 MoE layers, MTP head), RTX 4090 24 GB + 7950X3D (16C/32T), Win11 + WSL2.</p>
+<p class='meta'>2026-10-06 &middot; 24 knobs judged &middot; measured 11k–259k prompt tokens, up to 96–99% of <code>cache_size</code> &middot; production <code>config.yml</code> never modified &middot; no JavaScript, prints cleanly</p></header>
+<h2>Read this first</h2>
+<div class='callout warn'><h3>The long-context gain is not uniform</h3>
+<p>This workload runs <strong>200k+ prompts</strong>, so the right-hand rows of the long-context table are what matter — and they are the <em>weakest</em> evidence here. The combo is <strong>1.157× at 130k</strong> (well established) but at <strong>parity at 250k</strong>. A <strong>1.36× figure from short prompts would badly overstate</strong> what this battery can say about your traffic.</p></div>
+<div class='callout'><h3>How to read the confidence markers</h3>
+<p><strong>HIGH</strong> means the reference arm was measured in the <em>same time window</em> as the candidate, and replicated. That single rule caught more errors than any other part of the protocol — session drift is ~10% while drift between consecutive boots is 0.07%, so a carried-forward baseline is invisible to any within-batch check.</p></div>
+<div class='legend'><div><span class='badge ok'>HIGH</span> settled</div><div><span class='badge mid'>MED</span> n small / single pair</div><div><span class='badge low'>LOW</span> screen, confounded, superseded</div><div><span class='badge none'>SCREEN</span> not measured — don't re-test</div></div>
+<h2>The change</h2>
+<pre>model:
+  #cpu_moe_offload_layers: 38      # mutually exclusive with the line below
+  cpu_moe_split_experts: 380
+  cache_mode: 2,2
+draft_model:
+  draft_num_tokens: 3              # was 5
+  dynamic_draft: true
+  draft_cache_mode: Q4
+memory:
+  cuda_malloc_async: True
+
+# start_tuned.ps1:
+#   EXL3_MOE_CPU_THREADS=8 -> 16</pre>
+<div class='callout ok'><h3>Fallback order if VRAM ever binds</h3>
+<p>Drop <code>cpu_moe_split_experts</code>, keep the threads change. <code>thr16</code> costs <strong>no VRAM at all</strong> and carries the largest decode win in the battery.</p></div>
+<details open><summary>Adopted changes — evidence</summary><div class='inner'>
+<div class="tw"><table class=""><thead><tr><th>knob</th><th>change</th><th>measured effect</th><th>cost</th><th>confidence</th><th>why</th></tr></thead><tbody><tr><td><code>EXL3_MOE_CPU_THREADS</code></td><td><code>8 → 16</code></td><td>+26.1% offline decode; +35.4% live tg; 1.026x at 130k (prefill-neutral)</td><td>none (no VRAM)</td><td><span class="badge ok">HIGH</span></td><td>Largest single win. KEEP if VRAM binds; costs nothing.</td></tr><tr><td><code>cpu_moe_split_experts</code></td><td><code>(absent, mcl38) → 380</code></td><td>1.135x alone at 130k (prefill 1507-&gt;1725 T/s, +14%); 1.157x combined</td><td>~2.5 GB VRAM (min-free 1479-1543MB at 96-99% cache use)</td><td><span class="badge ok">HIGH at 130k / MED short-ctx</span></td><td>Floor is measured: 375 boots but is 0.3% (noise) for 35% less margin; 360 will not boot.</td></tr><tr><td><code>draft_num_tokens</code></td><td><code>5 → 3</code></td><td>+7.2% tg, baseline-bracketed sweep 3-10</td><td>none</td><td><span class="badge ok">HIGH</span></td><td>Quality is unaffected by drafting, so acceptance is a speed-only constraint. Ceiling above 5 closed: speed decays past ndt6.</td></tr><tr><td><code>cache_mode</code></td><td><code>5,4 → 2,2</code></td><td>-2.1% decode (noise), +5.2% pp4096, +998 MB VRAM</td><td>none</td><td><span class="badge ok">HIGH (null result)</span></td><td>Kept as VRAM relief, not as a speed change.</td></tr></tbody></table></div>
+</div></details>
+<h2>Long context — the gain by prompt length</h2>
+<div class="tw"><table class=""><caption>Ratio is turn-matched on identical prompt-token counts. ratio &amp;lt; 1 means the candidate was faster.</caption><thead><tr><th>stage</th><th>prompt tokens</th><th>combo vs baseline</th><th>what improved</th><th>confidence</th></tr></thead><tbody><tr><td>11-16k turnmatch</td><td>10,956–16,135</td><td><strong>0.735×</strong></td><td>decode</td><td><span class="badge ok">HIGH</span></td></tr><tr><td>55-62k</td><td>55,239</td><td><strong>1.010×</strong></td><td>— (neutral)</td><td><span class="badge low">LOW</span></td></tr><tr><td>130k</td><td>129,910</td><td><strong>1.157×</strong></td><td>prefill, +14% T/s</td><td><span class="badge ok">HIGH</span></td></tr><tr><td>250k</td><td>249,642</td><td>—</td><td><br><small>state-matched: fast 1.063× / slow 1.063× — see caveat</small></td><td><span class="badge mid">MED</span></td></tr></tbody></table></div>
+<details><summary>Why 224k and 250k are not trustworthy at face value</summary>
+<div class='inner'><p>At 250k the machine enters a <strong>fast/slow state that both arms enter</strong> — one baseline boot reached 1715 T/s, matching the combo's fast cluster. Matched <em>within</em> state the combo is at parity (fast 1.144× / slow 1.017×). The apparent 1.11–1.13× win came from comparing the combo's <em>fast</em> state against the baseline's <em>normal</em> state.</p>
+<p><strong>130k is the only long-context length with state-matched evidence.</strong> The 224k figure rests on a single interleaved pair and carries the same suspicion.</p>
+<p>The state is <em>not</em> paging, clock, or VRAM — all measured and flat: pagefile reads (two of three slow boots had <em>near-zero</em> reads while the fast boot had the third-highest), CPU <code>% Processor Performance</code> (113.9–114.4% of nominal, fully overlapping), available RAM, WDDM <code>SharedUsage</code>, run order, and config application. <strong>Cause still unidentified.</strong></p>
+<p><strong>VRAM is comfortable throughout:</strong> min-free 1479–1543 MB at 96–99% cache utilisation, and the spread does <em>not</em> widen with context.</p></div></details>
+<h2>Draft / MTP</h2>
+<h3><code>draft_num_tokens</code> — swept 3 to 10, baseline bracketed</h3>
+<div class="tw"><table class=""><thead><tr><th>setting</th><th>tg t/s</th><th>vs base</th><th>accepted</th><th>drafted</th></tr></thead><tbody><tr><td><code>ndt3_dyn</code></td><td>35.34</td><td>7.2%</td><td>2.3</td><td>2.96</td></tr><tr><td><code>ndt5_dyn_prod</code></td><td>33.85</td><td>2.7%</td><td>3.0</td><td>4.38</td></tr><tr><td><code>ndt6_dyn</code></td><td>33.13</td><td>0.5%</td><td>3.11</td><td>4.77</td></tr><tr><td><code>ndt7_dyn</code></td><td>32.68</td><td>-0.9%</td><td>3.13</td><td>4.89</td></tr><tr><td><code>ndt5_dyn_prod</code></td><td>32.08</td><td>-2.7%</td><td>2.76</td><td>4.23</td></tr><tr><td><code>ndt10_dyn</code></td><td>31.06</td><td>-5.8%</td><td>3.31</td><td>5.57</td></tr><tr><td><code>ndt8_dyn</code></td><td>30.81</td><td>-6.5%</td><td>3.17</td><td>5.29</td></tr><tr><td><code>off</code></td><td>27.21</td><td>-15.3%</td><td>—</td><td>—</td></tr></tbody></table></div>
+<p><strong>Acceptance rises monotonically (2.76 → 3.31); speed does not.</strong> Speed peaks at <code>ndt3</code> and decays past <code>ndt6</code>. The ceiling above 5 is closed — it is not a speed win. Confidence <span class="badge ok">HIGH</span>.</p>
+<h3>Acceptance by content category</h3>
+<div class="tw"><table class=""><thead><tr><th>category</th><th>tools</th><th>draft cache</th><th>acceptance</th><th>accepted</th><th>drafted</th></tr></thead><tbody><tr><td>agentic_curl</td><td>29</td><td>Q4_baseline</td><td><strong>75.4%</strong></td><td>1150</td><td>1525</td><td><span class="badge mid">MED</span></td></tr><tr><td>agentic_code</td><td>11</td><td>FP16</td><td><strong>70.3%</strong></td><td>1561</td><td>2219</td><td><span class="badge mid">MED</span></td></tr><tr><td>agentic_code</td><td>11</td><td>Q4_baseline</td><td><strong>68.7%</strong></td><td>1495</td><td>2177</td><td><span class="badge mid">MED</span></td></tr><tr><td>prose_translate</td><td>0</td><td>Q4_baseline</td><td><strong>61.0%</strong></td><td>2061</td><td>3378</td><td><span class="badge mid">MED</span></td></tr><tr><td>agentic_curl</td><td>29</td><td>2,2</td><td><strong>57.3%</strong></td><td>461</td><td>805</td><td><span class="badge mid">MED</span></td></tr><tr><td>prose_translate</td><td>0</td><td>2,2</td><td><strong>47.2%</strong></td><td>811</td><td>1719</td><td><span class="badge mid">MED</span></td></tr></tbody></table></div>
+<p><strong>Confounded, unresolved:</strong> prose and tool count are entangled — <code>translate_02</code> has 0 tools, the others 11 and 29. The milder prose result is as consistent with “untooled prompts degrade less” as with “prose degrades less”, and no fixture provides prose-with-tools. The direction (<code>2,2</code> is worse everywhere) is solid; the prose-vs-code ordering is not.</p>
+<h3><code>draft_cache_mode</code> — a pure VRAM knob</h3>
+<div class="tw"><table class=""><thead><tr><th>mode</th><th>n</th><th>speed vs Q4</th><th>VRAM min-free (MB)</th></tr></thead><tbody><tr><td><code>Q4</code></td><td>2</td><td><strong>neutral</strong></td><td>3003; baseline Q4=1.000</td></tr><tr><td><code>Q8</code></td><td>1</td><td><strong>neutral</strong></td><td>2825; baseline Q4=1.000</td></tr><tr><td><code>FP16</code></td><td>2</td><td><strong>neutral</strong></td><td>2619; baseline Q4=1.000</td></tr><tr><td><code>3,3</code></td><td>1</td><td><strong class='bad'>slower</strong></td><td>3067; baseline Q4=1.000</td></tr><tr><td><code>2,2</code></td><td>1</td><td><strong class='bad'>slower</strong></td><td>3657; baseline Q4=1.000</td></tr></tbody></table></div>
+<p>Monotone in VRAM, flat in speed down to Q8, a real penalty below. The VRAM it buys is not needed on this box (RAM binds), so there is no reason to move either way. <code>Q4</code> was chosen deliberately to recover VRAM without hurting tg — the ladder <em>confirms</em> that choice.</p>
+<h2>Rejected</h2>
+<div class="tw"><table class=""><thead><tr><th>knob</th><th>current</th><th>proposed</th><th>measured effect</th><th>cost</th><th>confidence</th></tr></thead><tbody><tr><td><code>cpu_moe_offload_layers</code></td><td>38</td><td>(removed)</td><td>mcl34 is faster (Tier 0 +22.3%) but UNSAFE: 129 MB free, cudaErrorLaunchFailure. mcl32 will not load.</td><td>n/a</td><td><span class="badge ok">HIGH</span></td></tr><tr><td><code>cpu_moe_offload_layers</code></td><td>36</td><td>(keep 38)</td><td>-1.5% live tg, +1.7 GB VRAM</td><td>+1.7 GB</td><td><span class="badge mid">MED</span></td></tr><tr><td><code>mcs value below 380</code></td><td>-</td><td>375</td><td>boots (967 MB free) but 38.5 vs 38.4 tok/s = 0.3% noise</td><td>35% less VRAM margin</td><td><span class="badge mid">MED</span></td></tr><tr><td><code>mcs 390 / 405</code></td><td>-</td><td>390, 405</td><td>SLOWER (26.68 / 23.60 tg0) AND smaller footprint (4075 / 5599 MB free)</td><td>gains VRAM, loses speed</td><td><span class="badge mid">MED</span></td></tr></tbody></table></div>
+<details><summary>Guard-trips and hard failures</summary><div class='inner'>
+<div class="tw"><table class=""><thead><tr><th>setting</th><th>outcome</th><th>confidence</th></tr></thead><tbody><tr><td><code>cpu_moe_offload_layers: 32</code></td><td><code>Insufficient VRAM in split for model and cache</code></td><td><span class="badge ok">HIGH</span></td></tr><tr><td><code>cpu_moe_offload_layers: 34</code></td><td><strong class='bad'>UNSAFE</strong> — 129 MB free (guard is 200), <code>cudaErrorLaunchFailure</code> in <code>decode_flash_attn</code>. It is <em>faster</em> at Tier 0 (+22.3%) and trips the guard.</td><td><span class="badge ok">HIGH</span></td></tr><tr><td><code>mcs 360</code></td><td>loads offline (23308 MB) but <strong class='bad'>will not boot the server</strong></td><td><span class="badge ok">HIGH</span></td></tr><tr><td><code>mcs 375</code></td><td>boots (967 MB free) but 38.5 vs 38.4 tok/s — 0.3%, noise, for 35% less margin</td><td><span class="badge mid">MED</span></td></tr><tr><td><code>mcs 300 / 340 / 390 / 405 / 500</code></td><td>refused, or slower <em>and</em> smaller; 390/405 were never live-booted</td><td><span class="badge mid">MED</span></td></tr><tr><td><code>sysmem_kv_cache: 8192</code></td><td><strong class='bad'>RAM guard: 492 MB free during load</strong></td><td><span class="badge ok">HIGH</span></td></tr><tr><td><code>sysmem_kv_cache: 24576</code></td><td><strong class='bad'>RAM guard: 88 MB free during load</strong></td><td><span class="badge ok">HIGH</span></td></tr></tbody></table></div>
+</div></details>
+<h2>Neutral — measured, nothing to gain</h2>
+<p>Given equal weight deliberately: these are real measurements that produced no action, listed so they are not re-tested.</p>
+<div class="tw"><table class=""><thead><tr><th>knob</th><th>current</th><th>proposed</th><th>measured effect</th><th>cost</th><th>confidence</th></tr></thead><tbody><tr><td><code>draft_cache_mode</code></td><td>Q4</td><td>Q4</td><td>Q8 1.001 and FP16 1.021 both neutral but cost 178/384 MB; 2,2 and 3,3 slower in all 3 categories</td><td>none</td><td><span class="badge mid">MED</span></td></tr><tr><td><code>dynamic_draft</code></td><td>true</td><td>true</td><td>static is -7.1% tg despite HIGHER acceptance (2.92/5.00 vs 2.78/4.29)</td><td>none</td><td><span class="badge mid">MED</span></td></tr><tr><td><code>cuda_malloc_async</code></td><td>True</td><td>True</td><td>False costs ~760 MB VRAM, no gain</td><td>none</td><td><span class="badge mid">MED</span></td></tr><tr><td><code>sysmem_kv_cache</code></td><td>0</td><td>0</td><td>8192 -&gt; RAM guard 492 MB free; 24576 -&gt; RAM guard 88 MB free</td><td>n/a</td><td><span class="badge ok">HIGH</span></td></tr><tr><td><code>recurrent_checkpoint_interval</code></td><td>(unset)</td><td>(unset)</td><td>4096 -&gt; ratio 1.013, VRAM unchanged; 512 -&gt; +1.7% pp for +800 MB</td><td>none if unset</td><td><span class="badge mid">MED</span></td></tr><tr><td><code>recurrent_checkpoint_interval_pp</code></td><td>32768</td><td>(keep)</td><td>8192 gives 6.7% cheaper early edits vs 0.7% on default (confirmed: 11% vs 6% cached)</td><td>2.3 GiB RAM</td><td><span class="badge mid">MED</span></td></tr><tr><td><code>EXL3_MOE_CPU_PIN</code></td><td>1</td><td>1</td><td>-13.0% to -19.8% without</td><td>none</td><td><span class="badge mid">MED</span></td></tr><tr><td><code>EXL3_MOE_CPU_SWIZZLE</code></td><td>1</td><td>1</td><td>-3.6% to -11.2% without</td><td>none</td><td><span class="badge mid">MED</span></td></tr><tr><td><code>EXL3_MOE_ZERO_COPY</code></td><td>1</td><td>1</td><td>-2.5% to +3.5% -- straddles zero across sources</td><td>none</td><td><span class="badge low">LOW</span></td></tr><tr><td><code>EXL3_MOE_STREAM_T</code></td><td>6</td><td>6</td><td>STREAM_T=12 costs pp256 -40%; STREAM_T=3 is +1.5% tg (noise)</td><td>none</td><td><span class="badge mid">MED</span></td></tr><tr><td><code>EXL3_MOE_STREAM_BATCH_EXPERTS</code></td><td>48</td><td>48</td><td>24 -&gt; +2.9% tg (noise)</td><td>none</td><td><span class="badge low">LOW</span></td></tr><tr><td><code>warmup</code></td><td>true</td><td>true</td><td>+12 s boot, no sustained gain, REDUCES VRAM ~40-80 MB</td><td>+12 s boot</td><td><span class="badge ok">HIGH</span></td></tr><tr><td><code>vision_offload</code></td><td>true</td><td>true</td><td>false costs ~1.1 GB VRAM, no speed change</td><td>none</td><td><span class="badge ok">HIGH</span></td></tr><tr><td><code>max_batch_size</code></td><td>2</td><td>2</td><td>1 -&gt; +1.9% tg but HALVES serving capacity</td><td>halves capacity</td><td><span class="badge low">LOW</span></td></tr><tr><td><code>chunk_size</code></td><td>4096</td><td>4096</td><td>8192 -&gt; +4.7 GB VRAM, no gain</td><td>none</td><td><span class="badge low">LOW</span></td></tr></tbody></table></div>
+<h2>Memory findings</h2>
+<div class='callout warn'><p><strong>RAM, not VRAM, is the binding constraint.</strong> Free RAM looks comfortable at rest (~49 GB of 64 GB) but is nearly gone during load — the CPU-offloaded experts need a ~34 GB large-page arena. <code>sysmem_kv_cache</code> failed on the RAM guard twice.</p></div>
+<ul class='tight'><li>The live server sits <strong>+1.7 to +2.5 GB above</strong> <code>eval/perf.py</code> on the same config, because it builds components <code>perf.py</code> never does. <strong>A config that fits offline by a thin margin will not fit live</strong> — the safe offline margin is ~2.5 GB, not the 200 MB guard. This is why <code>mcs360</code> fails live.</li><li><strong>Do not decompose that offset from parameter counts</strong> — measured twice and wrong. <code>vision_offload: true</code> frees only ~150–190 MB, not the ~1.1 GB the vision tower's fp16 weights suggest.</li><li><strong>CUDA graphs are not a VRAM cost.</strong> <code>warmup: true</code> <em>reduces</em> peak VRAM by ~40–80 MB. Its cost is entirely the <strong>+12 s boot</strong>.</li></ul>
+<h2>Measurement rules we had to learn</h2>
+<p>Each rule exists because its absence produced a wrong conclusion, not as a precaution.</p>
+<div class="tw"><table class=""><thead><tr><th>rule</th><th>why it exists</th><th>error it prevented</th></tr></thead><tbody><tr><td><strong>Interleave the reference arm with every candidate</strong></td><td>Session drift is ~10%; consecutive-boot drift is 0.07%. A carried-forward baseline is invisible to any same-batch check.</td><td>Two wrong 130k verdicts (&#x27;11% slower&#x27;, then &#x27;inconclusive&#x27;).</td></tr><tr><td><strong>Verify the baseline is stable across its own interleaved runs before quoting a ratio</strong></td><td>The 250k batches looked conclusive until this was done.</td><td>Revealed the 250k cross-state artifact.</td></tr><tr><td><strong>Compare turn-matched prompts, not medians over different prompts</strong></td><td>Prompt difficulty otherwise dominates the ratio.</td><td>Used for every long-context stage.</td></tr><tr><td><strong>For two-role workloads (cold prefill then replay) use the within-boot ratio t2/t1</strong></td><td>Identical requests ran 20% apart across boots.</td><td>Would have handed rci_pp=8192 a spurious 1.22x.</td></tr><tr><td><strong>Never quote a ratio before the last interleaved arm has finished</strong></td><td>Cheapest rule, most recently learned.</td><td>250k was committed as 1.144x from boot 1 of 2; settled at ~1.06x, then parity.</td></tr><tr><td><strong>Verify time alignment before believing any time-correlated claim</strong></td><td>Two false correlations came from windows that did not map to the phase discussed.</td><td>Killed both the &#x27;cache pressure&#x27; theory and the pagefile correlation.</td></tr><tr><td><strong>Sweep any knob whose benefit depends on a learned predictor across content categories</strong></td><td>Content changes the mechanism, not just the constants.</td><td>Would have caught that code is NOT MTP&#x27;s best case.</td></tr><tr><td><strong>Any candidate must live-boot before being proposed</strong></td><td>The live server sits +1.7 to +2.5 GB above eval/perf.py on the same config; safe offline margin is ~2.5 GB, not the 200 MB guard.</td><td>mcs360 loads offline and will not boot the server.</td></tr><tr><td><strong>Predict every prompt variant before the first request at a new length</strong></td><td>actual = 0.2383*text + 294.4*msgs + 9,110. A variant over cache_size wastes a 65 s boot and looks like a config regression.</td><td>A 258k file would have been ~474k tokens and could never load.</td></tr><tr><td><strong>Capture anything suspected of being boot-level per boot</strong></td><td>The server log used to be &lt;arm&gt;.server.log, so every boot overwrote the last.</td><td>The only surviving 250k lead (CPU MoE arena reservation) was unreadable for exactly this reason.</td></tr></tbody></table></div>
+<details><summary>Prompt-length calibration</summary><div class='inner'>
+<p>The synthesiser's <code>--target</code> is <strong>text</strong> tokens; the server counts <em>prompt</em> tokens, which are far larger because every message carries template scaffolding:</p>
+<pre>actual ≈ 0.2383 × text_tokens + 294.4 × n_messages + 9,110</pre>
+<p>Verified to 0.35%. The single-variable form <code>text × 1.797 + 10,000</code> agrees at short lengths and <strong>diverges near the ceiling</strong> — always predict every variant with both terms and reject a batch if any exceeds <code>cache_size</code> minus generation.</p></div></details>
+<h2>What this does <em>not</em> establish</h2>
+<div class='callout warn'><ol style='margin:0;padding-left:1.3em'><li><strong>The 250k fast/slow machine state is unidentified.</strong> Both arms enter it. Operators should match on it before quoting any 250k ratio.</li><li><strong>224k is a single pair</strong> and may be another cross-state comparison.</li><li><strong>Losslessness of speculative drafting at temp &gt; 0 is theoretical here</strong> — Phase C ran temperature 0 only; the <code>-temp</code> arm was never run.</li><li><strong><code>ZERO_COPY</code> is unmeasured at every tier</strong> — it straddles zero in both directions across sources.</li><li><strong>Content vs tool count is confounded</strong> in the cross-category check.</li><li><strong>Tier 2 covers only the 5 Phase A finalists.</strong> Every other Phase A row is a Tier 1 screen and is not quote-quality.</li><li><strong><code>cache_mode</code> and draft-length output quality were never assessed</strong> — KLD owns those. <code>cache_mode 2,2</code> is a perf-only and VRAM-only line here.</li></ol></div>
+<h2>Retractions (11)</h2>
+<p>Claims made during this work and withdrawn. Kept visible because the pattern is the useful part: <strong>every one was over-reading too few samples or an unmeasured mechanism.</strong></p>
+<details><summary>All 11 retractions in full</summary><div class='inner'>
+<div class="tw"><table class=""><thead><tr><th>#</th><th>claim withdrawn</th><th>why it was wrong</th><th>correction</th></tr></thead><tbody><tr><td>1</td><td><strong>Prefill is flat / never improves at any length</strong></td><td>Read the 62k point as the general case; it was one point on a non-monotonic curve.</td><td>Prefill improves at 130k (+14% T/s) and 224k.</td></tr><tr><td>2</td><td><strong>The combo is ~11% SLOWER at 130k</strong></td><td>Compared arms against a baseline measured in an EARLIER, faster session window (~10% drift).</td><td>With the baseline interleaved: combo is 1.157x FASTER at 130k.</td></tr><tr><td>3</td><td><strong>130k is inconclusive (11.2% spread exceeds the effect)</strong></td><td>Correct observation, wrong diagnosis -- blamed boot-to-boot noise. Real consecutive-boot drift is 0.07%; the gap was SESSION drift.</td><td>n=4 resolved it; and the reference had to be re-measured in-window.</td></tr><tr><td>4</td><td><strong>EXL3_MOE_CPU_THREADS=16 is separable and safe alone, a pure decode win at every length</strong></td><td>Inferred from short-context evidence only.</td><td>It IS decode-only (prefill unchanged) but worth only 1.026x at 130k; mcs380 carries the long-context win.</td></tr><tr><td>5</td><td><strong>The 224k prefill win comes from KV-cache pressure pushing CPU MoE work into the prefill path</strong></td><td>Speculative mechanism, never measured.</td><td>mcs380 speeds prefill +14% at 130k where the cache is only ~50% full. No paging story needed.</td></tr><tr><td>6</td><td><strong>MTP acceptance tracks intrinsic token predictability; code is the most predictable case</strong></td><td>Asserted a mechanism with no measurement, on a contested premise.</td><td>Measured acceptance: curl 75.4% &gt; code 68.7% &gt; prose 61.0%. Code is NOT the best case.</td></tr><tr><td>7</td><td><strong>The config.yml md5 invariant was vacuous (0fe01cc8 = the combo config)</strong></td><td>Misread a backup filename as an applied config.</td><td>config.yml.kb-&lt;arm&gt; is the PRISTINE snapshot taken BEFORE that arm ran. The invariant was valid all along.</td></tr><tr><td>8</td><td><strong>250k is bimodal: 1.134x or 1.016x depending on the boot</strong></td><td>Compared combo&#x27;s FAST machine state against baseline&#x27;s NORMAL state.</td><td>Both arms enter the state. Matched within state: 1.011x slow / 0.978x fast = PARITY.</td></tr><tr><td>9</td><td><strong>Pagefile reads correlate with the 250k fast/slow mode</strong></td><td>Time window misaligned: jsonl ts is written at END of run, so the window captured post-run teardown.</td><td>Anchored to the real sustained window: 2 of 3 SLOW boots had near-zero reads while the FAST boot had the third-highest.</td></tr><tr><td>10</td><td><strong>ndt6 beating ndt5 on both axes means the knob is still rising, sweep up</strong></td><td>Treated two axes moving together as a trend signal; acceptance is not the objective.</td><td>Swept 3-10: acceptance rises monotonically but speed peaks at ndt3 (+7.2%) and decays past ndt6.</td></tr><tr><td>11</td><td><strong>&#x27;mcs380 is the only viable value&#x27; / &#x27;405 is backwards&#x27;</strong></td><td>Overstated: 390/405 were measured offline but NEVER live-booted. And the direction claim was right.</td><td>375 tested live: boots, 0.3% gain (noise). 380 stands as the measured floor.</td></tr></tbody></table></div>
+</div></details>
+<h2>Production state</h2>
+<p>Production <code>config.yml</code> was <strong>never modified</strong> and <strong>never committed</strong>. It is restored after every arm; pristine md5 <code>0fe01cc8f2e1e4cd2de7b1a1648ecb4f</code>.</p>
+<p><small><strong>Printing:</strong> this page is JS-free by design, and CSS cannot force the collapsible sections open — expand them before printing if you want that content in the PDF.</small></p>
+<p><small>Trap worth knowing: the per-arm files <code>config.yml.kb-&lt;arm&gt;</code> are snapshots of the <em>pristine</em> config taken <em>before</em> that arm ran. The name identifies the arm about to run, not a config with it applied.</small></p>
+<footer>Generated from the CSV data set by <code>eval/_kb_mkhtml.py</code>, which reads <code>wiki/reports/data-2026-10-06-flash-next-knobs/</code>. Full run-by-run provenance, including every retraction, is in <code>wiki/reports/2026-10-06-flash-next-knob-battery.md</code>.</footer>
+</div></body></html>
