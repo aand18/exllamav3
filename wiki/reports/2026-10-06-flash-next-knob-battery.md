@@ -146,6 +146,42 @@ reduces CPU-side expert work, so its benefit grows as the cache fills.
 Reproducibility is high enough to trust: baseline spread 0.08 s, combo 0.00 s
 across two variants.
 
+### 130k stage — the combo is SLOWER. This decides the recommendation.
+
+Correctly sized (`--target 65664`; server confirmed **129,998 / 129,910** prompt
+tokens, so the calibration formula held to ~1%).
+
+| variant | prompt tok | baseline | combo | ratio |
+|---|---|---|---|---|
+| v0 | 129,998 | 78.03 s | 87.19 s | **1.117** |
+| v1 | 129,910 | 77.77 s | 86.33 s | **1.110** |
+
+**Median ratio 1.114 — the combo is ~11% SLOWER at 130k**, consistent across
+both variants. Prefill confirms it is prefill, with identical token counts:
+
+| prompt tok | new tok | baseline prefill | combo prefill |
+|---|---|---|---|
+| 129,998 | 121,806 | 71.7 s | **82.2 s (+13%)** |
+| 129,910 | 121,718 | 71.5 s | **81.8 s (+13%)** |
+
+So at 130k the change actively regresses the dominant cost. This is **not**
+explained by cache pressure, which would predict monotonic improvement toward
+the 262k ceiling — the curve dips at 130k and recovers by 224k. The mechanism
+is **unknown and not yet investigated**; no theory is offered here because the
+data does not support one.
+
+### Full regime table
+
+| prompt len | cache occupancy | combo vs baseline |
+|---|---|---|
+| 11–16k | negligible | **1.36× faster** |
+| ~55–62k | low | ~1.00× |
+| **~130k** | ~50% | **0.90× — SLOWER** |
+| ~224k | ~85% | 1.096× faster |
+
+Non-monotonic, with a regression at the length closest to the operator's
+stated 128k minimum.
+
 ### Revised regime table
 
 | prompt length | cache pressure | measured |
@@ -176,6 +212,14 @@ wall-clock. **The gain shrinks toward zero as prompt length grows.** For a
 and buys **nothing** in prefill, which is the dominant cost at the target
 context length. That is the central open question, and it is what the 128k and
 258k stages exist to settle.
+
+**UPDATE — answered, and the answer is negative.** At 130k prompt the combo is
+**~11% slower** (prefill 71.7 s → 82.2 s on identical token counts), at the
+length closest to the stated 128k minimum. **Do not apply the
+`cpu_moe_split_experts` part of this proposal until that regression is
+explained and fixed.** `EXL3_MOE_CPU_THREADS=16` is separable and safe to take
+alone — it is a pure decode win at every length tested, with no prefill
+regression.
 
 ### Risk, honestly
 
