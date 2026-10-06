@@ -118,6 +118,24 @@ memory:
 Expected total: **~1.36× sustained throughput** (5-turn conversation
 28.87 s → 20.75 s), boot unchanged, VRAM free 3593 → ~1065 MB.
 
+### Scope of the win — read before applying
+
+The combo's benefit is **decode-bound, not prefill-bound**:
+
+| regime | measured effect |
+|---|---|
+| decode-bound turns (11–16k prompt, 256+ out) | **1.36× faster** (turn-matched, 3 boots) |
+| prefill-bound turns (55–62k prompt) | **~1.00×** — prefill flat at ~1640 T/s |
+
+At 2× context a request is ~95% prefill, so the decode win is invisible in
+wall-clock. **The gain shrinks toward zero as prompt length grows.** For a
+128k+ workload where most turns are prefill-bound, expect far less than 1.36×.
+
+`cpu_moe_split_experts: 380` also costs VRAM headroom (3593 → ~1100 MB free)
+and buys **nothing** in prefill, which is the dominant cost at the target
+context length. That is the central open question, and it is what the 128k and
+258k stages exist to settle.
+
 ### Risk, honestly
 
 - **`cpu_moe_split_experts: 380` is the whole win and the thinnest margin.**
