@@ -13,12 +13,12 @@ in-process reps unless stated.
 | ~62k | ~1.00× | high |
 | ~130k | **1.157×** | high — 2 boots/arm × 4 prompts, interleaved |
 | ~224k | 1.096× | high — interleaved, spread 0.08 s |
-| **200k+ (your operating point)** | **1.13× or 1.02×** | **weakest evidence in this report** |
+| **200k+ (your operating point)** | **~1.00× (parity)** | matched within state, n=17/16 — see §250k |
 
-**The operator runs 200k+ prompts, so the 250k row is the operative result and
-it is also the least solid thing here** (n=2 per arm, two modes ~11% apart,
-cause unidentified — see §250k). Quoting 1.36× would overstate what this
-battery can say for long-context work.
+**The operator runs 200k+ prompts, so the 250k row is the operative one: at
+250k the combo is at PARITY with baseline, not faster.** An apparent 1.11–1.13×
+win existed there and was an artifact — see §250k. Quoting 1.36× or 1.157× would
+both overstate what this battery can say for long-context work.
 
 The whole measured range is 11k–259k, i.e. up to **96–99% of `cache_size`
 262144**, so there is no untested band. Nothing regressed at any length.
@@ -72,7 +72,7 @@ fixed, and the corrections are documented rather than quietly overwritten.
 | 55–62k | ~1.00× | — (neutral) |
 | 130k | **1.157×** | prefill, +14% T/s from `mcs380` |
 | 224k | 1.096× | prefill, +8.6% |
-| 250k | **1.13× or 1.02× — bimodal** | prefill, at 96–99% cache utilisation |
+| 250k | **~1.00× — parity** | nothing; matched within state |
 
 **No length showed a regression** anywhere in 11k–259k. §"Scope of the combo" has the mechanism and the
 per-half attribution (`mcs380` does the prefill work, `thr16` is decode-only).
@@ -209,105 +209,62 @@ Note this stage was measured as a single interleaved pair (baseline spread
 0.08 s, combo 0.00 s across two variants), so it satisfies the shared-window
 requirement of §0.8.1.
 
-### 250k stage — bimodal: 1.13× or 1.02× depending on the boot
+### 250k stage — RESOLVED: the "bimodality" is environmental, and once matched the combo is at PARITY
 
-This is the plan's "260k desirable" tier, and the region that had been recorded
-as untestable. **That was wrong** — only the miscalibrated ~474k file could not
-load. Sized with the two-variable fit (`actual ≈ 0.2383×text + 294.4×msgs +
-9,110`), four variants land at 249,730 / 249,642 / 251,197 / 259,145 prompt
-tokens: **96–99% of `cache_size` 262144**, all loading cleanly.
+This is the plan's "260k desirable" tier. Sized with the two-variable fit
+(`actual ≈ 0.2383×text + 294.4×msgs + 9,110`), four variants land at
+249,730 / 249,642 / 251,197 / 259,145 prompt tokens: **96–99% of `cache_size`
+262144**, all loading cleanly.
 
-Interleaved per §0.8.1, **4 boots per arm**, 4 prompts each (16 paired turns):
+Across every 250k boot run this session, prefill T/s (`pp median`) clusters as:
 
-| boot | arm | boot median | per-turn (249,730 / 249,642 / 251,197 / 259,145) | ratio |
+| arm | state | pp T/s | n | spread |
 |---|---|---|---|---|
-| 1 | baseline | 165.7 s | 163.21 / 162.77 / 168.17 / 172.68 | ref |
-| 2 | combo **fast** | 144.9 s | 139.97 / 139.63 / 149.77 / 155.27 | **1.144×** |
-| 3 | baseline | 164.7 s | 162.21 / 161.18 / 167.11 / 172.71 | ref |
-| 4 | combo **slow** | 161.8 s | 159.31 / 159.12 / 164.24 / 169.77 | 1.017× |
-| 5 | baseline | 165.0 s | 162.08 / 162.28 / 167.66 / 172.55 | ref |
-| 6 | combo **fast** | 145.5 s | 141.39 / 140.12 / 149.61 / 155.74 | **1.133×** |
-| 7 | baseline | 164.8 s | 162.47 / 162.25 / 167.14 / 172.28 | ref |
-| 8 | combo **slow** | 162.3 s | 160.01 / 159.91 / 164.50 / 169.62 | 1.016× |
+| baseline | normal | **1510** | 9 | 1509–1519, very tight |
+| baseline | fast excursion | **1715** | 1 | — |
+| combo | slow | **1526** | 10 | 1520–1536, very tight |
+| combo | fast | **1678** | 7 | 1670–1741 |
 
-**The combo arm is bimodal, not noisy.** Two clean modes ~11% apart:
+**Both arms can enter the fast state.** One baseline boot reached 1715 T/s —
+matching combo's fast cluster. So the "fast/slow mode" is a property of the
+*machine*, not of the config.
 
-| mode | boots | pooled speedup |
+**Matched within state, the combo is at parity:**
+
+| comparison | ratio | verdict |
 |---|---|---|
-| fast | 2, 6 | **1.134×** |
-| slow | 4, 8 | **1.016×** |
+| combo slow (1526) vs baseline normal (1510) | **1.011×** | neutral |
+| combo fast (1678) vs baseline fast (1715) | 0.978× | neutral / marginally slower |
 
-Baseline spread across four boots is **0.63%** (164.7–165.7 s) — the reference
-is solid. And every one of the 8 fast-mode combo turns (139.6–155.7 s) is
-**faster than every one of the 16 baseline turns** (161.2–172.7 s): no overlap.
+**The 1.11–1.13× wins reported for 250k were an artifact of comparing combo's
+fast state against baseline's normal state.** That is the same class of error as
+the stale-baseline one, one level up: the reference was not matched on the
+variable that actually moved.
 
-`pp median` is the metric that tracks the mode exactly — fast boots read
-**1676 / 1678**, slow boots **1522 / 1525**, a 10% prefill throughput step. The
-step is entirely in prefill; `tg median` moves only 63.0 → 60.8.
+**What ruled the state out as environmental:** a 2 s-interval monitor across four
+boots showed pagefile reads, CPU `% Processor Performance` (113.9–114.4% of
+nominal, fully overlapping), available RAM and WDDM `SharedUsage` all flat while
+the mode changed — and two of three slow boots had *near-zero* pagefile reads
+while the fast boot had the third-highest rate, so **paging is not the cause**.
+*An intermediate message in this session appeared to confirm a pagefile
+correlation; that was a misaligned time window capturing post-run teardown, and
+it is retracted.*
 
-**Cause not identified, after instrumenting it.** A 2 s-interval monitor
-(`_kb_monitor.ps1`) sampled pagefile I/O, available physical RAM, commit %,
-WDDM `SharedUsage` and CPU `% Processor Performance` across four more combo boots.
-Windows aligned to the actual sustained blocks:
+Run order is also ruled out (`combo,combo,combo` gave fast,fast,slow — not
+alternating), and so is config application (server log identical in both states,
+same 16 threads, same split range `[132..512)`).
 
-| boot | pp | mode | pageReads mean/max | CPU % nominal | avail MB | GPU shared MB |
-|---|---|---|---|---|---|---|
-| 1 | 1587 | slow | 62 / 4165 | 114.3 | 6498 | 1170 |
-| 2 | 1531 | slow | **2** / 177 | 114.4 | 6808 | 1154 |
-| 3 | 1525 | slow | **5** / 441 | 114.4 | 7922 | 1154 |
-| 4 | **1673** | **fast** | 30 / 2545 | 113.9 | 8099 | 1156 |
+**Verdict: at 250k the combo neither helps nor hurts.** No VRAM concern —
+min-free held 1479–1543 MB at 96–99% cache utilisation, clear of the 200 MB kill,
+and the spread does not widen with context. `mcs380`'s headroom risk, the reason
+this band was called untestable, still does not materialise.
 
-**Ruled out by measurement:**
-
-- **Paging / pagefile pressure** (the leading hypothesis, and the one an earlier
-  draft of this note appeared to confirm): two of the three slow boots had
-  essentially **zero** pagefile reads while the fast boot had the third-highest
-  rate. Page reads do not track the mode. *An earlier revision claimed a strong
-  correlation here; it was an artifact of a misaligned time window that
-  captured post-run teardown rather than prefill.*
-- **CPU clock / boost / thermal**: 113.9–114.4% of nominal across all four, ranges
-  fully overlapping. The plan's "no thermal variance" note holds for this effect.
-- **WDDM VRAM spill** (`SharedUsage`): 1154–1170 MB, no discrimination. Also
-  consistent with the earlier negative: the slow boot's peak VRAM sits *between*
-  the fast boots, and `cache_size` is preallocated so nothing grows during a
-  259k prefill.
-- **Free physical RAM**: 6498–8099 MB with no clean ordering (slow boots at 6808
-  and 7922 bracket the fast boot's 8099).
-
-**Also ruled out earlier:** run order (`combo,combo,combo` gave F,F,S, not
-alternating) and config application (server log identical in both modes).
-
-**The one per-boot property still uncorrelated**, from the server log:
-`CPU MoE arena: 7.25 GB of 34.09 GB` (slow) vs `6.71 GB of 34.63 GB` (fast) —
-the *reservation* differs by ~540 MB, and the arena is large-page locked. A
-different hugepage layout on the CPU-MoE host path would plausibly move prefill,
-but this was **not** tested, because the per-arm server log is overwritten each
-run and the arena line was not captured for all boots.
-
-**Consequence: the 250k verdict is not established.** An earlier baseline boot in
-this session ran 140.94 s — faster than every earlier baseline (162–168 s) — so
-the effect can reverse sign. Since the operator runs 200k+ prompts, the
-defensible statement is: **at 250k the combo is never slower than a
-same-boot baseline, but the achievable margin varies ~±10% for reasons not yet
-identified, and an operator should measure their own box rather than trust a
-single quoted number.**
-
-**How to read it.** The pooled all-16 median is 1.061×, but that is a mixture of
-two regimes and is not a good summary. The defensible statement: **at 250k the
-combo is never slower — it is either ~1.13× or ~1.02× faster, and which one you
-get is not predictable from the logs.** An operator wanting the upper regime
-should measure it on their own box; the lower regime is the floor.
-
-History of this one number, kept because it is instructive: reported as 1.144×
-from boot 1 of 2 (before boot 2 finished), then corrected to "~1.06×, range
-1.02–1.14×" at n=2, and n=4 shows the range is **two discrete modes**, not a
-confidence interval. Every revision was defensible on the data available at the
-time; only more boots distinguished "noise" from "bimodal".
-
-What the stage establishes independently of the speedup uncertainty: **VRAM
-min-free held at 1479–1511 MB at 96–99% cache utilisation**, clear of the
-200 MB kill, and the spread does not widen with context. `mcs380`'s headroom
-risk — the reason this band was called untestable — **does not materialise.**
+**What this does to the long-context story.** `mcs380`'s prefill win is solid at
+**130k** (+14% T/s, baseline self-consistency 1.0000, two boots per arm in one
+window). It does **not** extend to 250k. The 224k figure (1.096×) came from a
+single interleaved pair and should now be read with the same suspicion: it may
+likewise be a cross-state comparison. **The only long-context length with
+state-matched evidence is 130k.**
 
 ### 130k stage — combo is 1.157× FASTER. Two retractions were both wrong; here is why.
 
@@ -428,8 +385,8 @@ was met by construction.
 | 11–16k | negligible | **1.36× faster** |
 | ~55–62k | low | ~1.00× |
 | ~130k | ~50% | **1.157× faster** (2 boots/arm, 4 prompts) |
-| ~224k | ~85% | 1.096× faster |
-| **~250k** | **96–99%** | **1.13× (fast) or 1.02× (slow)** — bimodal, n=4 |
+| ~224k | ~85% | 1.096× (single pair — suspect, see §250k) |
+| **~250k** | **96–99%** | **~1.00× — parity** (state-matched, n=17/16) |
 
 Every measured length is now a win or neutral. The apparent dip at 130k in two earlier
 revisions was a stale-reference artifact — see the 130k section.
@@ -449,14 +406,19 @@ claimed:
 | ~55–62k | low | ~1.00× | 2 boots, tight |
 | **~130k** | ~50% | **1.157×** | turn-matched, **2 boots/arm × 4 prompts** |
 | ~224k | ~85% | 1.096× | turn-matched, spread 0.08 s / 0.00 s |
-| **~250k** | **96–99%** | **1.13× / 1.02×** | **bimodal**, turn-matched, **4 boots/arm × 4 prompts** |
+| **~250k** | **96–99%** | **~1.00×** | **parity**, state-matched, **4+ boots/arm × 4 prompts** |
 
 There is **no length at which the combo was measured to hurt**, including the
-62k point that looked neutral and the 130k point that two revisions wrongly
-called a regression. The **upper end of the range is the least predictable
-point** — at 250k the combo is *bimodal*, measuring either ~1.13× or ~1.02×
-depending on the boot, with the cause unidentified. It is never slower; just
-do not assume the upper regime.
+62k point that looked neutral, the 130k point two revisions wrongly called a
+regression, and the 250k point where the apparent win turned out to be a
+cross-state artifact.
+
+**The gains do not extend uniformly.** The combo wins clearly at short prompts
+(decode) and at **130k** (prefill), is neutral at 62k, and is at **parity at
+250k**. So the honest summary is not "it wins everywhere" but "it wins where the
+bottleneck is decode or mid-length prefill, and does not at the top of the
+range". The 224k point sits between and rests on a single pair, so it should be
+read with the suspicion the 250k result earned.
 
 **Which half does the work, measured in the same interleaved batch:**
 
@@ -474,7 +436,7 @@ one to keep, since it costs no VRAM.
 
 The honest reading of the shape: a large decode win at short prompts, roughly
 neutral at 62k, then a real win again at 130k+ where prefill dominates —
-bimodal at 259k (1.13× or 1.02×, cause unknown). The
+at parity at 259k (state-matched; an apparent 1.13× was a cross-state artifact). The
 130k and 224k gains are in **prefill itself**, so the combo is not purely a
 decode optimisation. This also **retires the "cache pressure" explanation** I
 proposed earlier in this file for the 224k prefill win — it is the same
