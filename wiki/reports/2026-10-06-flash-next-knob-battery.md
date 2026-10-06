@@ -185,6 +185,33 @@ Note this stage was measured as a single interleaved pair (baseline spread
 0.08 s, combo 0.00 s across two variants), so it satisfies the shared-window
 requirement of §0.8.1.
 
+### 250k stage — 1.144× faster at 96% cache utilisation. The last band is now measured.
+
+This is the plan's "260k desirable" tier and the region that had been recorded as
+untestable. **That was wrong** — only the miscalibrated ~474k file could not
+load. Correctly sized with the two-variable fit
+(`actual ≈ 0.2383×text + 294.4×msgs + 9,110`), four variants land at
+249,730 / 249,642 / 251,197 / 259,145 prompt tokens: **96–99% of `cache_size`
+262144**, all loading cleanly.
+
+Interleaved per §0.8.1, 2 boots per arm, 4 prompts each:
+
+| prompt tok | baseline | combo | ratio |
+|---|---|---|---|
+| 249,730 | 163.2 / 162.2 s | 140.0 s | 0.859 |
+| 249,642 | 162.8 / 161.2 s | 139.6 s | 0.858 |
+| 251,197 | 168.2 / 167.1 s | 149.8 s | 0.890 |
+| 259,145 | 172.7 / 162.2 s | 155.3 s | 0.899 |
+
+**Median ratio 0.874 — 1.144× faster**, range 0.858–0.899.
+
+Evidence quality: baseline self-consistency across its two interleaved boots is
+**1.0000**, so the reference is sound. VRAM min-free held at **1479 MB** at 96%
+cache utilisation, clear of the 200 MB kill — so `mcs380`'s headroom concern does
+**not** materialise at the top of the range, which was the specific fear.
+
+This closes the only genuine gap in the recommendation.
+
 ### 130k stage — combo is 1.157× FASTER. Two retractions were both wrong; here is why.
 
 **This section supersedes two earlier revisions of this report**, which said
@@ -344,7 +371,8 @@ the same kind of change: if VRAM ever forces a rollback, the threads knob is the
 one to keep, since it costs no VRAM.
 
 The honest reading of the shape: a large decode win at short prompts, roughly
-neutral at 62k, then a real win again at 130k+ where prefill dominates. The
+neutral at 62k, then a real win again at 130k+ where prefill dominates —
+holding at ~1.14× all the way to 259k. The
 130k and 224k gains are in **prefill itself**, so the combo is not purely a
 decode optimisation. This also **retires the "cache pressure" explanation** I
 proposed earlier in this file for the 224k prefill win — it is the same
