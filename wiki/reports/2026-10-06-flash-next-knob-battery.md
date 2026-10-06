@@ -569,6 +569,9 @@ Phase C (live server). All six metrics; boot = process start → first token.
 | `malloc_async:False` | 1 | 53.7 s | 34.5 | 1199 | 72% | 21306 / 2833 | 9.7 GB |
 | `dcm 2,2` | 1 | 53.7 s | **26.4** | 1218 | **55%** | 20482 / 3657 | 9.8 GB |
 | `mcs360` | — | **will not boot** | — | — | — | — | — |
+| `rci_pp 8192` | 2 | 64.3 s | — | — | — | 21104 / 3035 | 5.1 GB RAM — see §0.9 #2b |
+| `sysmem_kv 8g` | 1 | **RAM guard: 492 MB free** | — | — | — | — | killed during load |
+| `sysmem_kv 24g` | 1 | **RAM guard: 88 MB free** | — | — | — | — | killed during load |
 
 Boot time is very stable: 53.5–53.9 s across baseline/`thr16`/`combo` (n=12).
 `load` = 38.7–39.3 s. Warmup adds +12 s boot for no measurable gain.
