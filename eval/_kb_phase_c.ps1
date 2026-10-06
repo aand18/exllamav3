@@ -413,6 +413,14 @@ $arms = @{
     # guard at 129 MB. 380 gives up 0.29 tg/s (noise) for 1.4 GB more headroom.
     'c16-mcs380'       = @{ cfg = @{ cpu_moe_split_experts = '380' }; cfgDrop = @('cpu_moe_offload_layers'); env = @{} }
     'c17-mcs360'       = @{ cfg = @{ cpu_moe_split_experts = '360' }; cfgDrop = @('cpu_moe_offload_layers'); env = @{} }
+    # The only value between 360 (measured: will not boot live) and 380 (boots,
+    # 565-1365MB projected live headroom). mcs N = TAIL N experts on CPU, so
+    # LOWER is both faster AND larger in footprint -- offline min-free falls
+    # 3065 (380) -> 2506 (375, interpolated) -> 1948 (370, interpolated).
+    # Projected live headroom at 375 is -9..590MB, i.e. right at the 200MB guard,
+    # and 370 is negative. 375 is therefore the only refinement worth testing.
+    'c26-mcs375'       = @{ cfg = @{ cpu_moe_split_experts = '375' }; cfgDrop = @('cpu_moe_offload_layers'); env = @{} }
+    'c27-mcs390'       = @{ cfg = @{ cpu_moe_split_experts = '390' }; cfgDrop = @('cpu_moe_offload_layers'); env = @{} }
     # Plan section 2: combine the top-2 winners once.
     'c18-combo'        = @{ cfg = @{ cpu_moe_split_experts = '380' }; cfgDrop = @('cpu_moe_offload_layers'); env = @{ EXL3_MOE_CPU_THREADS = '16' } }
 

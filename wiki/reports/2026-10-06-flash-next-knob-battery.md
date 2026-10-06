@@ -478,8 +478,38 @@ is a capacity question rather than a performance one — see below.
   and paging pressure is highest. Expect ~1100 MB free to be the floor.
 - `cache_mode: 2,2` is **perf-only here** — quality not measured (KLD owns
   quality). Safe to revert independently; it is the fallback for VRAM relief.
-- `mcs380` is the *only* viable split-experts value: 360 loads offline
-  (23308 MB) but **will not boot the server**; 400/500 are VRAM- or RAM-refused.
+- **How far can `mcs` be refined? `380` is at the practical floor, and here is
+  the arithmetic.** `-mcs N` means the **tail N** routed experts move to the CPU
+  (`model_init.py:64`), so **lower is both faster and larger in footprint**:
+
+  | mcs | CPU experts | offline peak | offline min-free | decode tg0 |
+  |---|---|---|---|---|
+  | 360 | 360 | 23308 | 831 | **30.00** |
+  | **380** | 380 | 21074 | 3065 | 28.66 |
+  | 390 | 390 | 20064 | 4075 | 26.68 |
+  | 405 | 405 | 18540 | 5599 | 23.60 |
+
+  VRAM falls and speed falls together as mcs rises, so the original "VRAM headroom
+  is what you spend to buy speed, sweep down from 405" was correct. (An earlier
+  note in this session called that backwards; it was wrong and is retracted.)
+
+  Applying the **measured** live offset of +1.7…+2.5 GB over `perf.py`:
+
+  | value | offline min-free | projected live headroom | feasibility |
+  |---|---|---|---|
+  | 360 | 831 (measured) | −869 … −1669 | confirmed **will not boot** |
+  | 370 | ~1948 *(interp.)* | −643 … −18 | will not boot |
+  | 375 | ~2506 *(interp.)* | **−9 … 590** | the only candidate |
+  | **380** | 3065 (measured) | **565 … 1365** | boots; observed 1479–1543 |
+
+  **Only `375` is worth testing, and the trade is poor**: ~+0.7 tok/s (~2.4%) of
+  decode for halving headroom you already hold at ~1.5 GB. `390`/`405` are the
+  wrong direction — both slower *and* smaller.
+
+- `mcs380` is the lowest value confirmed to **boot the live server**. `360` loads
+  offline (23308 MB) but will not boot; 400/500 are VRAM- or RAM-refused.
+  `390` and `405` have more offline headroom but were **never live-booted**, so
+  "only viable value" means *only tested one*.
 - Mutually exclusive with `cpu_moe_offload_layers` — the server hard-errors.
 
 ### `recurrent_checkpoint_interval_pp` — MEASURED, and it works
