@@ -727,7 +727,13 @@ speed, because CPU MoE is the bottleneck. Sweep **down** from it.
 
 - **`draft_num_tokens` 3 vs 5 is +6.0% tg but drops acceptance 2.78→2.20.**
   Quality not measured (KLD owns it).
-- `ZERO_COPY` at Tier 2; Tier 2 `-dr 3` not run for most finalists.
+- **`ZERO_COPY` remains unmeasured at any tier** — Tier 1 put it at −2.5%
+  without, inside noise, and prior work at +3.3%. It is neither a finalist nor
+  worth a Tier 2 slot on that evidence, so it stays "KEEP, low confidence".
+- **Tier 2 covers only the 5 finalists.** Every non-finalist row in the Phase A
+  table is still a Tier 1 screen. That is consistent with the plan's ladder rule
+  (promote survivors, let clear losers keep one bad row as proof) but means those
+  rows are not quote-quality.
 - `cache_mode` quality (KLD).
 - MTP `ndt7`/`ndt8` ceiling.
 - Skipped per plan: `MEMOPS` (29% / +10% gap — note the two sources disagree),
