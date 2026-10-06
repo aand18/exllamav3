@@ -39,6 +39,49 @@ workload repeated one prompt until the KV prefix cache was ~100% warm, so it
 measured decode on a saturated cache rather than a production turn mix.
 **1.36× supersedes it.** Quoting 1.50× would overstate the win.
 
+## Long context (plan §0.7) — the gain is decode-bound, not prefill-bound
+
+Stage 1 at **~55–62k prompt tokens**, 3 distinct cold-prefix variants per
+config (`-Rotate`), so each request pays a real prefill.
+
+| variant | prompt tok | baseline | combo | speedup |
+|---|---|---|---|---|
+| v0 | 55,239 | 30.71 s | 30.63 s | 1.00× |
+| v1 | 60,634 | 32.85 s | 33.37 s | 0.98× |
+| v2 | 62,189 | 39.25 s | 37.36 s | 1.05× |
+| **total** | | **102.8 s** | **101.4 s** | **1.01×** |
+
+**The combo's advantage vanishes at 2× context** — median ratio 0.997. Server
+prefill confirms why:
+
+| prompt tok | new tok | baseline prefill | combo prefill |
+|---|---|---|---|
+| 55,239 | 47,047 | 28.6 s | 28.7 s |
+| 60,634 | 52,442 | 31.6 s | 31.6 s |
+| 62,189 | 53,997 | 33.2 s | 32.8 s |
+
+Prefill is **flat** at ~1640 T/s for both configs. At 2× context a request is
+~95% prefill (≈30 s) and only ~4 s of decode, so a decode-side win is
+arithmetically invisible in wall-clock.
+
+Note the two metrics disagree here and **wall-clock is the one to trust**:
+`tg median` reads 61.0 vs 41.2 (+48%) while total wall is 1.01×. The tg column
+measures only the generation phase, so at prefill-bound lengths it overstates
+the user-visible win. This is the same trap as the earlier cache-saturated
++50.4%, in a different guise — **always check which phase dominates before
+quoting a tok/s figure.**
+
+### Scope of the combo, stated precisely
+
+- **Decode-bound turns** (short prompt, long generation — e.g. 11–16k prompt,
+  256+ tokens out): **1.36× faster** measured turn-matched.
+- **Prefill-bound turns** (long prompt — 55–62k here): **~1.00×**, because
+  prefill is unchanged.
+
+Both regimes are real for agentic coding with long context, so the combo is a
+**conditional** win rather than a uniform one. It does not slow anything down;
+it simply stops helping once prefill dominates.
+
 ## Headline (single-request, superseded by the above)
 
 | config | live tg T/s | vs base | boot→1st tok | VRAM min free |
