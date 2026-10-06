@@ -402,7 +402,7 @@ is a capacity question rather than a performance one — see below.
 
 | line | verdict | evidence |
 |---|---|---|
-| `EXL3_MOE_CPU_THREADS=8` → **16** | **CHANGE** | +35.4% tg live, 4 reps, non-overlapping ranges. Peak is 16; 24 regresses. |
+| `EXL3_MOE_CPU_THREADS=8` → **16** | **CHANGE** | +35.4% tg live, 4 reps, non-overlapping ranges. Peak is 16; 24 regresses. Costs no VRAM. |
 | `EXL3_MOE_CPU_PIN=1` | KEEP | −19.8% without. |
 | `EXL3_MOE_CPU_SWIZZLE=1` | KEEP | −11.2% without. |
 | `EXL3_MOE_MEMOPS=0` | KEEP | plan says 29% gap; `PERF_FINDINGS` says +10%. Not re-measured (SKIP per plan). |
@@ -411,6 +411,13 @@ is a capacity question rather than a performance one — see below.
 | `EXL3_MOE_STREAM_BATCH_EXPERTS=48` | KEEP | 24 → tg 25.6 vs 26.8 (−6.2%), pp4096 1867 vs 1826. |
 
 No line qualifies for removal. The one change is threads.
+
+**This is the safe half of the recommendation.** At 130k the threads change
+measures 1.026× (prefill unchanged, decode only) and it costs no VRAM at all,
+whereas `cpu_moe_split_experts: 380` is what carries the long-context prefill
+win but holds VRAM min-free down to 1065 MB (269–2089 MB across short-context
+boots). If VRAM ever becomes the binding constraint, **revert `mcs380` and keep
+this line** — it retains the full 11–16k decode win at zero VRAM cost.
 
 ## Full knob table
 
