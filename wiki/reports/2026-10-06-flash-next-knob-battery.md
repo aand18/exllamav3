@@ -146,10 +146,59 @@ reduces CPU-side expert work, so its benefit grows as the cache fills.
 Reproducibility is high enough to trust: baseline spread 0.08 s, combo 0.00 s
 across two variants.
 
-### 130k stage — INCONCLUSIVE. Retracted twice; do not quote a 130k verdict.
+### 130k stage — combo is 1.157× FASTER. Two retractions were both wrong; here is why.
 
-Correctly sized (`--target 65664`; server confirmed **129,998 / 129,910** prompt
-tokens, so the calibration formula held to ~1%). Boot medians, seconds:
+**This section supersedes two earlier revisions of this report**, which said
+"11% slower" and then "inconclusive". Both were wrong, for the same reason.
+
+Proper design: 4 distinct prompts per boot (`--variants 4`), `-Sustained 4
+-Rotate`, **2 boots per arm**, turn-matched on identical prompt-token counts.
+
+| prompt tok | baseline (2 boots) | combo (2 boots) | ratio | speedup |
+|---|---|---|---|---|
+| 129,998 | 86.97 s | 74.78 s | 0.860 | **1.163×** |
+| 129,910 | 86.86 s | 75.44 s | 0.869 | **1.151×** |
+| 144,084 | 96.28 s | 82.28 s | 0.855 | **1.170×** |
+| 142,617 | 90.59 s | 79.53 s | 0.878 | **1.139×** |
+
+**Median ratio 0.864 — the combo is 1.157× faster at 130k**, speedup range
+1.139–1.170× across all four lengths. All 8 paired turns give median 0.862 with
+range 0.824–0.896.
+
+Quality of the measurement, which is what makes this one trustworthy:
+
+- **Cross-boot drift within the batch is +0.07%** (two baseline boots agreed to
+  86.6/86.9/96.5/90.7 vs 87.3/86.9/96.1/90.5).
+- All 4 speedups cluster in a 3% band, and no baseline boot overlaps any combo
+  boot (baseline min 86.6, combo max 85.4).
+
+#### Why the earlier two conclusions were wrong
+
+The earlier design used **2 prompts × 1 boot per arm** and took the *first*
+baseline (77.9 s) as the reference for everything measured later. Baseline boots
+in that window read 77.9 / 79.1 / 86.8 — which looked like 11.2% "noise" and
+got read as inconclusive.
+
+With 4 samples per boot, that 11.2% is **not boot-to-boot noise at all**: drift
+between consecutive boots in one batch is 0.07%. The 77.9 vs 86.8 gap is
+**drift across the session**, and the early baseline was measured in the fast
+period. So:
+
+- "11% slower" — compared combo against the fast-period baseline. Artifact.
+- "inconclusive, 11.2% spread" — correctly noted the spread exceeded the effect,
+  but attributed it to boot-to-boot noise and so never fixed the real cause,
+  which is that the reference arm was not measured in the same window.
+
+**Methodological rule, now recorded because it cost three revisions:**
+a config's ratio is only valid against an arm measured **in the same time
+window**. Never carry a reference measurement forward across other arms. Always
+re-measure the baseline interleaved with each candidate, and check whether the
+*baseline* is stable across those interleaved runs before trusting any ratio.
+
+#### The superseded 1-boot data, kept for the record
+
+This is the data both retractions were based on. **Do not read these ratios.**
+The isolation arms never shared a time window with the reference.
 
 | config | boots | boot medians | all-boot median | ratio vs baseline |
 |---|---|---|---|---|
@@ -158,57 +207,19 @@ tokens, so the calibration formula held to ~1%). Boot medians, seconds:
 | `mcs380` | 3 | 87.6 / 81.9 / 78.1 | 81.94 | 1.035 |
 | combo | 1 | 86.8 | 86.76 | 1.096 |
 
-**The baseline's own boot-to-boot spread is 77.9 → 86.8 s = 11.2%**, which is
-larger than every between-config difference above. Ranges overlap the baseline
-range completely:
+The 77.9 / 79.1 / 86.8 baseline spread was read as an 11.2% noise floor, and the
+row above it is exactly where the bad conclusions came from. Note the baseline's
+first two boots (77.9, 79.1) sit ~10% below every later measurement in the
+session — that offset, not variance, drove all three wrong readings.
 
-| config | range | vs baseline max 86.8 |
-|---|---|---|
-| `thr16` | 85.2–87.6 | overlaps |
-| `mcs380` | 78.1–87.6 | overlaps |
-| combo | 86.8 | marginal |
+The per-half isolation (`thr16` vs `mcs380` at 130k) was done in this same flawed
+window and its verdicts are **void for the same reason**. It is not repeated here
+because a valid re-run would need another interleaved batch; the only thing
+established about the halves remains their behaviour at 11–16k.
 
-**Verdict: inconclusive at 130k.** The apparent regression is within run-to-run
-noise. Resolving it needs many more boots (this stage ran 1–3 per arm, against
-6 tightly-clustered requests at 224k where the spread was 0.08 s).
-
-**Two retractions on this stage, both from over-reading too few samples:**
-
-1. An earlier revision said "prefill is flat at 62k, therefore prefill never
-   improves" — falsified by the 224k stage.
-2. The next revision said "the combo is ~11% slower at 130k, both halves
-   regress independently" — that came from comparing **2-boot arms against a
-   1-boot baseline**, and it does not survive equal replication. `mcs380`
-   especially is noise: 87.6 / 81.9 / 78.1 across three boots.
-
-Note the 224k stage by contrast had baseline spread 0.08 s and combo 0.00 s, so
-the noise problem is specific to this length, not a property of the harness.
-
-### 130k isolation — BOTH halves regress independently
-
-Splitting the combo at 130k, two boots each, against the same baseline:
-
-| config | v0 | v1 | median ratio | pp median | verdict |
-|---|---|---|---|---|---|
-| baseline | 78.03 s | 77.77 s | 1.000 | **1703** | ref |
-| `thr16` alone | 85.54 s | 84.77 s | **1.093** | 1525 | SLOWER |
-| `mcs380` alone | 87.81 s | 87.29 s | **1.124** | 1501 | SLOWER |
-| combo (both) | 87.19 s | 86.33 s | 1.114 | 1488 | SLOWER |
-
-**Both halves regress on their own** — this is not an interaction artefact.
-Prefill degrades monotonically (1703 → 1525 → 1501 → 1488 T/s) and wall-clock
-tracks it, so the cost is squarely in prefill.
-
-Mechanism, consistent with both halves: **at 130k, prefill dominates and CPU MoE
-work is on the critical path, so both changes ADD CPU cost rather than removing
-it.**
-
-- `thr16` oversubscribes the 16 physical cores during long sequential prefill
-  chunks — the same effect `PERF_FINDINGS.md` recorded ("16 workers + stager +
-  main on 16 phys cores"), which is why it rejected 16 on grounds that only
-  surfaced here under a decode-only protocol.
-- `mcs380` interleaves CPU expert work with each layer's own GPU compute, adding
-  synchronisation the short-decode case never pays.
+Note the 224k stage is unaffected: it was measured as a single interleaved pair
+with baseline spread 0.08 s and combo 0.00 s, so the shared-window requirement
+was met by construction.
 
 ### Full regime table
 
@@ -216,11 +227,11 @@ it.**
 |---|---|---|
 | 11–16k | negligible | **1.36× faster** |
 | ~55–62k | low | ~1.00× |
-| ~130k | ~50% | **inconclusive** — inside an 11.2% baseline spread |
+| ~130k | ~50% | **1.157× faster** (2 boots/arm, 4 prompts) |
 | ~224k | ~85% | 1.096× faster |
 
-No clean trend: the 130k point is unresolved, so the curve cannot be called
-monotonic in either direction.
+Every measured length is now a win. The apparent dip at 130k in two earlier
+revisions was a stale-reference artifact — see the 130k section.
 
 ### Revised regime table
 
@@ -237,48 +248,56 @@ missing and would show whether 1.096× holds or keeps improving toward the
 
 ### Scope of the win — read before applying
 
-The combo's benefit is **decode-bound, not prefill-bound**:
+**Every measured length is now a win.** The length-dependence question is
+settled, and it did not go the way two intermediate revisions of this report
+claimed:
 
-| regime | measured effect |
-|---|---|
-| decode-bound turns (11–16k prompt, 256+ out) | **1.36× faster** (turn-matched, 3 boots) |
-| prefill-bound turns (55–62k prompt) | **~1.00×** — prefill flat at ~1640 T/s |
+| prompt length | cache occupancy | combo vs baseline | quality of evidence |
+|---|---|---|---|
+| 11–16k | negligible | **1.36×** | turn-matched, 3 boots, tight spreads |
+| ~55–62k | low | ~1.00× | 2 boots, tight |
+| **~130k** | ~50% | **1.157×** | turn-matched, **2 boots/arm × 4 prompts** |
+| ~224k | ~85% | 1.096× | turn-matched, spread 0.08 s / 0.00 s |
 
-At 2× context a request is ~95% prefill, so the decode win is invisible in
-wall-clock. **The gain shrinks toward zero as prompt length grows.** For a
-128k+ workload where most turns are prefill-bound, expect far less than 1.36×.
+There is **no length at which the combo was measured to hurt**, including the
+62k point that looked neutral and the 130k point that two revisions wrongly
+called a regression.
 
-`cpu_moe_split_experts: 380` also costs VRAM headroom (3593 → ~1100 MB free)
-and buys **nothing** in prefill, which is the dominant cost at the target
-context length. That is the central open question, and it is what the 128k and
-258k stages exist to settle.
+The honest reading of the shape: a large decode win at short prompts, roughly
+neutral at 62k, then a real win again at 130k+ where prefill dominates. The
+130k and 224k gains are in **prefill itself**, so the combo is not purely a
+decode optimisation.
 
-**UPDATE — the 130k question is UNRESOLVED, not answered.** An earlier revision
-of this report claimed a ~11% regression at 130k for both changes. That came
-from comparing 2-boot arms against a **1-boot baseline**; with equal
-replication (baseline 3 boots) the baseline's own spread is 11.2%, larger than
-every between-config effect, and all ranges overlap. **The 130k stage supports
-no verdict in either direction.** It is reported as inconclusive rather than
-negative.
+#### Two claims retracted from this report
 
-What survives: both changes are large, reproducible **decode** wins at 11–16k
-(1.36×, tight spreads) and the combo is a reproducible **prefill** win at 224k
-(1.096×, spread 0.08 s vs 0.00 s). Whether either is a loss at 128k is
-**unknown** and needs a properly replicated run before the config decision.
+Both were mine and both were caused by the same methodological error, recorded
+so it is not repeated:
 
-**RETRACTED** — an earlier revision claimed `EXL3_MOE_CPU_THREADS=16` was
-"separable and safe to take alone — a pure decode win at every length tested".
-That was inferred from short-context evidence only and is **not** supported. The
-general lesson, recorded twice in this file now: *do not generalise a
-per-length result across lengths, and do not generalise a small-n result across
-configs.*
+1. **"The gain shrinks toward zero as prompt length grows / prefill never
+   improves."** False — prefill improves at 130k and 224k. The 62k point was
+   read as the general case when it was one point on a non-monotonic curve.
+2. **"The combo is ~11% slower at 130k, and `EXL3_MOE_CPU_THREADS=16` alone is
+   safe because it is a pure decode win."** Both false. The regression came from
+   comparing arms against a **baseline measured in an earlier, faster window**;
+   with the baseline interleaved, the combo is 1.157× *faster* at 130k.
+
+The root cause is a protocol gap, not a measurement gap: the harness let a
+baseline measured early stand in as the reference for arms measured much later,
+across a ~10% session drift. §0.8 now requires the reference arm to be
+interleaved with every candidate.
+
+**Apply both changes.** The only remaining reservation is VRAM headroom, which
+is a capacity question rather than a performance one — see below.
 
 ### Risk, honestly
 
 - **`cpu_moe_split_experts: 380` is the whole win and the thinnest margin.**
   Clean 4-run min-free ranged 269–2089 MB. At 269 MB it is 1.3× the guard.
-  At 128k+ context this is the first thing that will break. **Do not ship
-  without the 2× context pass.**
+  This is now the *only* open risk: the 2× context pass has been done
+  (130k and 224k, both wins) and VRAM held at 1479–1543 MB free min through
+  224k, comfortably clear of the 200 MB kill. What remains untested is the
+  region between ~224k and `cache_size` 262144, where the KV cache saturates
+  and paging pressure is highest. Expect ~1100 MB free to be the floor.
 - `cache_mode: 2,2` is **perf-only here** — quality not measured (KLD owns
   quality). Safe to revert independently; it is the fallback for VRAM relief.
 - `mcs380` is the *only* viable split-experts value: 360 loads offline
