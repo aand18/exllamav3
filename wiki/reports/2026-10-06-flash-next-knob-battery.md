@@ -534,6 +534,11 @@ this line** — it retains the full 11–16k decode win at zero VRAM cost.
 Phase A (offline `eval/perf.py`, Tier 1, `-short -max_length 4096 -dr 2`).
 Baseline re-anchored in-run: tg0 24.91 [24.25–25.56], pp256 311.5, pp4096 2117.4.
 
+**These are Tier 1 numbers.** Per plan §0.5 only Tier 2 (`-short -sd
+-max_length 32768 -dr 3`) may quote deltas, so the headline offline deltas below
+are provisional until the Tier 2 finalist run lands. The Tier 2 result, once
+measured, is recorded in the section immediately after this table.
+
 | knob | setting | tg0 [min-max] | Δtg | pp256 | pp4096 | VRAM peak / min free | verdict |
 |---|---|---|---|---|---|---|---|
 | — | baseline (`mcl38`) | 24.91 | — | 311.5 | 2117.4 | 20350 / 3923 | ref |
