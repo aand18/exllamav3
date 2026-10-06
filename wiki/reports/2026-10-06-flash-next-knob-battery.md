@@ -88,14 +88,16 @@ quoting a tok/s figure.**
 
 ### Scope of the combo, stated precisely
 
+At this stage (55–62k) the combo was **conditional**: a decode-bound win that
+went to zero once prefill dominated. **Later stages revised that** — prefill is
+in fact improved at 130k and above, so the win returns. Read this as the
+stage-1 reading, and use the four-length table further down for the current
+one.
+
 - **Decode-bound turns** (short prompt, long generation — e.g. 11–16k prompt,
   256+ tokens out): **1.36× faster** measured turn-matched.
-- **Prefill-bound turns** (long prompt — 55–62k here): **~1.00×**, because
-  prefill is unchanged.
-
-Both regimes are real for agentic coding with long context, so the combo is a
-**conditional** win rather than a uniform one. It does not slow anything down;
-it simply stops helping once prefill dominates.
+- **Prefill-bound turns** (55–62k here): **~1.00×** — prefill flat at this
+  length. Later shown to be length-specific, not general.
 
 ## Headline (single-request, superseded by the above)
 
