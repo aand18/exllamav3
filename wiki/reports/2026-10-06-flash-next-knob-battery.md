@@ -245,11 +245,52 @@ is solid. And every one of the 8 fast-mode combo turns (139.6–155.7 s) is
 **1676 / 1678**, slow boots **1522 / 1525**, a 10% prefill throughput step. The
 step is entirely in prefill; `tg median` moves only 63.0 → 60.8.
 
-**Cause not identified.** The server log is identical in both modes (16 threads,
-split experts `[132..512)`, same arena size, load 48.3 s vs baseline 52.5 s), so
-this is *not* the config failing to apply. It is runtime variance inside the
-`mcs380` prefill path and no theory is offered, because nothing in the logs
-points at one.
+**Cause not identified, after instrumenting it.** A 2 s-interval monitor
+(`_kb_monitor.ps1`) sampled pagefile I/O, available physical RAM, commit %,
+WDDM `SharedUsage` and CPU `% Processor Performance` across four more combo boots.
+Windows aligned to the actual sustained blocks:
+
+| boot | pp | mode | pageReads mean/max | CPU % nominal | avail MB | GPU shared MB |
+|---|---|---|---|---|---|---|
+| 1 | 1587 | slow | 62 / 4165 | 114.3 | 6498 | 1170 |
+| 2 | 1531 | slow | **2** / 177 | 114.4 | 6808 | 1154 |
+| 3 | 1525 | slow | **5** / 441 | 114.4 | 7922 | 1154 |
+| 4 | **1673** | **fast** | 30 / 2545 | 113.9 | 8099 | 1156 |
+
+**Ruled out by measurement:**
+
+- **Paging / pagefile pressure** (the leading hypothesis, and the one an earlier
+  draft of this note appeared to confirm): two of the three slow boots had
+  essentially **zero** pagefile reads while the fast boot had the third-highest
+  rate. Page reads do not track the mode. *An earlier revision claimed a strong
+  correlation here; it was an artifact of a misaligned time window that
+  captured post-run teardown rather than prefill.*
+- **CPU clock / boost / thermal**: 113.9–114.4% of nominal across all four, ranges
+  fully overlapping. The plan's "no thermal variance" note holds for this effect.
+- **WDDM VRAM spill** (`SharedUsage`): 1154–1170 MB, no discrimination. Also
+  consistent with the earlier negative: the slow boot's peak VRAM sits *between*
+  the fast boots, and `cache_size` is preallocated so nothing grows during a
+  259k prefill.
+- **Free physical RAM**: 6498–8099 MB with no clean ordering (slow boots at 6808
+  and 7922 bracket the fast boot's 8099).
+
+**Also ruled out earlier:** run order (`combo,combo,combo` gave F,F,S, not
+alternating) and config application (server log identical in both modes).
+
+**The one per-boot property still uncorrelated**, from the server log:
+`CPU MoE arena: 7.25 GB of 34.09 GB` (slow) vs `6.71 GB of 34.63 GB` (fast) —
+the *reservation* differs by ~540 MB, and the arena is large-page locked. A
+different hugepage layout on the CPU-MoE host path would plausibly move prefill,
+but this was **not** tested, because the per-arm server log is overwritten each
+run and the arena line was not captured for all boots.
+
+**Consequence: the 250k verdict is not established.** An earlier baseline boot in
+this session ran 140.94 s — faster than every earlier baseline (162–168 s) — so
+the effect can reverse sign. Since the operator runs 200k+ prompts, the
+defensible statement is: **at 250k the combo is never slower than a
+same-boot baseline, but the achievable margin varies ~±10% for reasons not yet
+identified, and an operator should measure their own box rather than trust a
+single quoted number.**
 
 **How to read it.** The pooled all-16 median is 1.061×, but that is a mixture of
 two regimes and is not a good summary. The defensible statement: **at 250k the
