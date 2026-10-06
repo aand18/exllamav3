@@ -459,6 +459,15 @@ uninformative regardless of how the medians look. The fix is more samples
 *within* each boot (`-Sustained 4` over 4 distinct variants, taking the
 within-boot median) rather than more boots, since the drift is between boots.
 
+**Correction, after the mechanism was actually identified.** The 11.2% was
+*not* boot-to-boot noise: with 4 prompts per boot, drift between consecutive
+boots in one batch measured **+0.07%**. The gap was **session drift**, and the
+early baseline boots sat ~10% below every later measurement in the same
+session. Adding samples within a boot fixed it for the same reason it would
+have fixed real noise — but the real fix is **interleaving the reference arm**,
+see §0.8.1. Do not add reps to a batch whose reference was measured in a
+different window.
+
 **Known trap, already paid once:** a config that loads under `eval/perf.py`
 can fail to boot the live server. The live server sits **+1.7 to +2.5 GB**
 above the raw-forward harness on the same config (`mcl38`: 18858 MB offline
@@ -533,6 +542,44 @@ the ">10% worse" stop rule has a ±8% noise floor — it can only reliably kill
 large losers (PIN −19.8% qualifies; the −6…−8% cluster does not). In-process
 spreads are far tighter (0.8–4.5% at `-dr 2`), which is the whole reason
 §0.5 replaced cross-process medians with in-process reps.
+
+### 0.8.1 The reference arm must be interleaved — never carried forward
+
+**This cost three wrong revisions of the report before it was found.** It is the
+single most important rule in the protocol, so it is stated as its own
+subsection rather than folded into the list above.
+
+A ratio is only meaningful against an arm measured **in the same time window**.
+Measuring the baseline once at the start of a batch and then reusing it as the
+reference for every later arm is invalid, because the machine drifts by ~10%
+over a session:
+
+| what was measured | value |
+|---|---|
+| first two baseline boots | 77.9 / 79.1 s |
+| every later 130k measurement | 86–96 s |
+| drift between *consecutive* boots in one batch | **+0.07%** |
+
+The drift is **between sessions, not between boots** — which is exactly why it
+is invisible to a same-boot or same-batch check and survives into a report that
+looks carefully replicated.
+
+Required for every arm:
+
+1. **Re-measure the baseline interleaved** with each candidate: run
+   `baseline, candidate, baseline, candidate` so drift is common to both.
+2. **Check the baseline is stable across those interleaved runs before quoting
+   any ratio.** If the two baseline runs disagree, the window is bad — repeat
+   the batch, do not average through it.
+3. **Compare on turn-matched prompts**, not medians over different prompts.
+4. At long context, take **≥4 distinct prompts per boot** (`--variants 4`,
+   `-Sustained 4 -Rotate`) rather than more boots. Boot count does not help
+   against session drift; within-boot samples do.
+
+Diagnostic rule of thumb: **if the within-config spread exceeds the
+between-config spread, the stage is uninformative regardless of the medians** —
+but check *why* it is large before concluding. Large within-config spread is
+usually a stale reference, not noise.
 
 ## 1. Knob sweep — one at a time, in this order
 
