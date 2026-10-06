@@ -231,7 +231,30 @@ measured. All are confirmed real config keys (`common/config_models.py`) with
 working implementations — behaviour below is read from the code, not assumed.
 Ordered by how much they should matter for 128k/260k serving.
 
-#### 1. `sysmem_kv_cache` — currently `0`, i.e. OFF. Highest expected value.
+#### 1. `sysmem_kv_cache` — currently `0`. **MEASURED INFEASIBLE on this box.**
+
+**Do not enable.** Both test arms were killed by the plan's own RAM guard
+during load:
+
+| setting | outcome |
+|---|---|
+| `8192` (8 GB) | `SERVER NOT READY: RAM free 492 MB during load` |
+| `24576` (24 GB) | `SERVER NOT READY: RAM free 88 MB during load` |
+
+Monotonic and severe. The pinned second-tier cache is allocated **eagerly**, so
+it comes straight out of the ~37 GB the CPU-offloaded experts already require.
+64 GB total does not cover both.
+
+This also **corrects an assumption the rest of this plan rested on.** I had
+treated VRAM as the scarce resource and system RAM as having headroom
+(~34 GB used of 64 GB at rest). That is wrong once the model is loaded: free
+RAM looks comfortable while idle and is nearly exhausted during load, because
+the expert host arena, the offloaded vision tower and pinned buffers all land
+together. **RAM is the binding constraint on this box, not VRAM** — which also
+means the ~1 GB VRAM margin on `mcs380` is not the thing most likely to break
+first at long context.
+
+Its real doc (`generator/generator.py:122`), for the record:
 
 `memory:` section, MB, default `0`. I first misread this as a VRAM-relief
 lever; it is not. Its real doc (`generator/generator.py:122`):
@@ -306,9 +329,12 @@ is a *budget*, so it likely reserves nothing until populated. Low priority.
 - `max_seq_len` — already equals the model default (262,144); not a knob we
   need to set, and it is the same number as `cache_size`.
 
-**Suggested order:** `sysmem_kv_cache` first (currently 0, most likely to
-change the VRAM/recompute verdict for `mcs380`), then the #2/#3 pair for
-edit-replay cost at long context, then `recurrent_checkpoint_interval` at 4096.
+**Suggested order:** ~~`sysmem_kv_cache` first~~ — **ruled out, see #1.**
+Next: the #2/#3 checkpoint pair for edit-replay cost at long context, but note
+#1's lesson — #3 (`sysmem_recurrent_cache`) buys RAM, and RAM is what ran out,
+so raising the checkpoint grid is capped by the same constraint. Then
+`recurrent_checkpoint_interval` at 4096, which is a VRAM-side knob and so
+should still be affordable.
 
 ### 0.7 Long-context requirement (added 2026-10-05 — do this LAST, after everything else)
 
