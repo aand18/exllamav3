@@ -116,7 +116,7 @@ model:
   # CHANGED 38 -> (removed); split-experts replaces it. MUTUALLY EXCLUSIVE:
   # set exactly one. Never both.
   #cpu_moe_offload_layers: 38
-  cpu_moe_split_experts: 380      # +7.6% alone, +48.3% with thr16
+  cpu_moe_split_experts: 380      # +7.6% alone; +14% prefill T/s at long ctx
   cache_mode: 2,2                 # neutral tg, +2.8 GB VRAM free
   # UNCHANGED: cache_size 262144, chunk_size 4096, max_batch_size 2
 
@@ -130,8 +130,28 @@ memory:
   cuda_malloc_async: True         # KEEP — False costs ~760 MB VRAM, no gain
 ```
 
-Expected total: **~1.36× sustained throughput** (5-turn conversation
-28.87 s → 20.75 s), boot unchanged, VRAM free 3593 → ~1065 MB.
+Expected gain, **by prompt length** — not a single number, since it was measured
+at four lengths and is non-monotonic:
+
+| workload | expected |
+|---|---|
+| short/decode-bound (11–16k) | **1.36×** (5-turn conv 28.87 s → 20.75 s) |
+| ~62k | ~1.00× |
+| ~130k | **1.157×** |
+| ~224k | 1.096× |
+
+Boot unchanged (~50.6 s vs 53.7 s). VRAM free 3593 → ~1065 MB short-context,
+1479–1543 MB at 130k/224k. **No measured length regressed.**
+
+Which half does what, measured in one interleaved batch at 130k:
+
+| change | 130k | role |
+|---|---|---|
+| `cpu_moe_split_experts: 380` | 1.135× | long-context lever: prefill 1507 → 1725 T/s |
+| `EXL3_MOE_CPU_THREADS=16` (in `start_tuned.ps1`) | 1.026× | decode-only, **costs no VRAM** |
+
+**Fallback if VRAM ever binds: drop `cpu_moe_split_experts`, keep the threads
+change.** It keeps the entire 11–16k decode win at zero VRAM cost.
 
 ### 224k stage — prefill is NOT flat here, which revises the 62k reading
 
@@ -152,14 +172,16 @@ calibration note in plan §0.7 — text tokens undercount prompt tokens by
 | 62,189 | 53,997 | 33.2 s | 32.8 s (+1.2%, noise) |
 
 This **corrects** the "prefill never improves" conclusion from the 62k stage.
-The likely mechanism is **cache pressure**: at 62k the KV cache is lightly
-occupied, while at 224k against `cache_size 262144` it is ~85% full, so paging
-and eviction enter the prefill path — and that is CPU MoE work, which is
-precisely what `thr16` accelerates. `cpu_moe_split_experts:380` likewise
-reduces CPU-side expert work, so its benefit grows as the cache fills.
 
-Reproducibility is high enough to trust: baseline spread 0.08 s, combo 0.00 s
-across two variants.
+Mechanism: this is the same `mcs380` prefill effect measured directly at 130k
+(prefill T/s 1507 → 1725, +14%) — **no cache-pressure effect is involved**. The
+theory originally proposed here (that paging at 85% occupancy drags CPU MoE work
+into the prefill path) is **withdrawn**: `mcs380` improves prefill at 130k where
+the cache is only ~50% full, which fully accounts for the 224k gain on its own.
+
+Note this stage was measured as a single interleaved pair (baseline spread
+0.08 s, combo 0.00 s across two variants), so it satisfies the shared-window
+requirement of §0.8.1.
 
 ### 130k stage — combo is 1.157× FASTER. Two retractions were both wrong; here is why.
 
