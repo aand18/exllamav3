@@ -434,6 +434,30 @@ so the largest file could never have loaded. Targets that are correct:
 **Always name files for their MEASURED prompt length, never the target**, and
 confirm from the server log before quoting any length-dependent result.
 
+**The single-variable formula is not good enough at the top of the range.**
+Refitting against five measured points shows prompt length depends on
+**message count** as well as text tokens:
+
+```
+actual ≈ 0.2383 × text_tokens + 294.4 × n_messages + 9,110
+```
+
+(max error 0.35% across text 68k–119k, messages 354–635). The earlier
+`text × 1.797 + 10,000` is just this with message count folded in, so the two
+agree at short lengths and **diverge badly at long ones** — it underestimates
+per-message scaffolding growth.
+
+That matters when sizing a prompt near the `cache_size` ceiling, where being
+wrong means the request cannot load at all. Sizing `--target 136338` (intended
+~258k) predicted 257.5k / 256.7k / 265.9k / 277.7k across four variants: the
+last two **exceed 262144** and would have failed. `--target 130000` predicts
+249.7k / 248.8k / 251.9k / 258.1k — all fit with 3.8k–13k headroom.
+
+**Rule: before the first request at a new length, predict every variant with
+both terms and reject the batch if any exceeds `cache_size` minus generation.**
+A variant that overflows wastes a ~65 s boot and, worse, looks like a config
+regression when it is really a workload error.
+
 ### Noise floor grows with prompt length — budget reps accordingly
 
 Boot-to-boot variance is **not** constant across lengths, and this determines how
