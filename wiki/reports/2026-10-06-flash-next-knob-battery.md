@@ -568,8 +568,41 @@ Also conflated: acceptance rate is not speedup, and with `dynamic_draft: true`
 the draft length is already trimmed adaptively on low-confidence spans.
 
 The honest statement is therefore the weak one: **it is unknown whether the
-`draft_cache_mode` result holds outside code.** Cross-category numbers below
-report what was measured, without a predicted direction.
+`draft_cache_mode` result holds outside code.**
+
+### Cross-category check (`2,2` vs `Q4`), and what it does and doesn't settle
+
+Run after the reasoning above was withdrawn, so no direction was predicted.
+Baseline bracketed at both ends per arm; `2,2` is n=1 in both categories.
+
+| category | tools | prompt tok | ratio (`2,2`/`Q4`) | verdict | baseline spread |
+|---|---|---|---|---|---|
+| code (`agentic_code_10`) | 11 | 11–16k | ~1.30 | slower | — |
+| agentic, curl (`agentic_curl_10`) | 29 | ~11k | **1.143** | slower | 9.2% |
+| prose (`translate_02`) | **0** | 0.1–9k | **1.098** | slower | 9.3% |
+
+**The substantive result survives: quantizing the draft cache below Q8 costs
+throughput in every category tested, 1.10–1.30×.** That is now three categories
+rather than one, which is the part that matters for the `Q4 # KEEP` verdict.
+
+**But two things do not resolve, and I claimed they would:**
+
+1. **Content and tool count are confounded.** `translate_02` has **0** tools; the
+   other two have 11 and 29. The 1.098 vs 1.143 gap is equally consistent with
+   "untooled prompts degrade less" and with "prose degrades less". **No prompt
+   file gives prose-with-tools, so this cannot be separated with the available
+   fixtures.** The honest label is "the milder end of the ladder", not "prose".
+
+2. **I predicted prose would *undercut* the penalty.** It is the mildest of the
+   three, so the ordering wasn't backwards — but by 4%, against a 9.3% baseline
+   spread. That does not support the claim I made, and the withdrawn mechanism
+   remains withdrawn. The regression being real across all three is a *result*,
+   not a confirmation of the reason I originally gave for it.
+
+`2,2` is n=1 in both new categories, so treat 1.143 and 1.098 as "a clear
+regression, magnitude uncertain". The `Q4 # KEEP` verdict does not depend on the
+magnitude — it depends only on *some* regression existing, which is now
+three-for-three.
 
 **Verdict: keep `Q4`.** Unchanged, but now on an interleaved measurement instead
 of a single cross-window one. And the general framing the ladder establishes:
