@@ -254,6 +254,33 @@ a 128k prompt hits very different paths than a 17k one),
 `cache_mode` (quality and re-use at length), and anything with VRAM headroom
 to spare — the winner below has ~1 GB, which is the real risk.
 
+**How the long-context prompts are built** (`eval/_kb_mklongctx.py`).
+`eval/perf.py` and `eval/spec_decode.py` select workloads by CATEGORY, not
+length, and the longest real conversation is `agentic_code_29` (~30k prompt
+tokens) — there is nothing to point at for 35k/128k/260k, so prompts are
+synthesised by recycling the five `agentic_code_*` histories.
+
+Three measured facts that drive the design:
+
+- The five files hold only **36,326 text tokens combined**, so 260k means
+  cycling the histories ~7× (the synthesiser tags recycled turns `[pass N]`
+  so they are not verbatim duplicates).
+- **Tools dominate the prompt.** `agentic_code_10` is 7,808 text tokens but the
+  server logged **17,830** prompt tokens — the 11 tool schemas cost ~10k. Tools
+  are per-request, attached once, and must not be counted per message.
+- `cache_size: 262144` **is** 256Ki tokens, so a "260k" prompt is only ~2.1k
+  under the ceiling. Leave headroom for the 256 generated tokens.
+
+Prefill measurement needs **cold prefixes**: repeating one long prompt makes
+every rep after the first ~100% prefix-cached and measures nothing. So the
+synthesiser emits **distinct variants** (different start offsets into the cycle)
+and Phase C sends them via `-Rotate`, one request per variant. Ladder built:
+`synth_25k_*` (~35k prompt), `synth_118k_*` (~128k), `synth_248k_*` (~258k).
+
+**Calibrate against the server log, not the estimate.** The synthesiser reports
+text tokens; the server reports true prompt tokens. Read the latter and adjust
+the target before trusting a length.
+
 **Known trap, already paid once:** a config that loads under `eval/perf.py`
 can fail to boot the live server. The live server sits **+1.7 to +2.5 GB**
 above the raw-forward harness on the same config (`mcl38`: 18858 MB offline
