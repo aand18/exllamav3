@@ -757,6 +757,18 @@ Nothing measured regressed anywhere in 11k–259k.
 - Restarts between values; startup-log verification every time.
 - No cross-day/clock deltas (re-run baseline on state change);
   warmed, 3 reps, median; single-process discipline for A/B.
+- **Interleave the reference arm with every candidate** (§0.8.1). A ratio is
+  only valid against an arm measured in the same window; session drift is ~10%
+  while consecutive-boot drift is 0.07%, so a carried-forward baseline is
+  invisible to any same-batch check. Verify the baseline is stable across its
+  own interleaved runs before quoting a ratio.
+- **If a measurement contains two turns with different roles** (e.g. cold
+  prefill then edit replay), compare the **within-boot ratio**, not absolute
+  turn-2 wall-clock. Identical requests ran 20% apart across boots, which would
+  have handed a candidate a spurious 1.22×.
+- **Never quote a ratio before the last interleaved arm has finished.** A
+  250k figure was committed from boot 1 of 2 (1.144×) and settled at ~1.06×
+  once boot 2 landed.
 - Hands-off everything outside the knob list (no kernel,
   sampler, prefill, MoE-math, record-format, or dispatch work;
   no `master`/fork-overview/rebases; no force-push anywhere).
