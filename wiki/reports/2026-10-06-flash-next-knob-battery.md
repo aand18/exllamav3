@@ -502,9 +502,21 @@ is a capacity question rather than a performance one — see below.
   | 375 | ~2506 *(interp.)* | **−9 … 590** | the only candidate |
   | **380** | 3065 (measured) | **565 … 1365** | boots; observed 1479–1543 |
 
-  **Only `375` is worth testing, and the trade is poor**: ~+0.7 tok/s (~2.4%) of
-  decode for halving headroom you already hold at ~1.5 GB. `390`/`405` are the
-  wrong direction — both slower *and* smaller.
+  **`375` was then tested live, and it boots** — but buys nothing:
+
+  | arm | live min-free | tg median | pp median |
+  |---|---|---|---|
+  | `mcs375` | **967 MB** | 38.5 | 1416 |
+  | `mcs380` | **1479 MB** | 38.4 | 1362 |
+
+  38.5 vs 38.4 tok/s is a **0.3% difference — noise**, for a **35% cut in VRAM
+  margin** (1479 → 967 MB). The offline ladder had predicted ~+2.4% decode for
+  this step; live delivers none of it. So the offline per-step gain does not
+  survive contact with the live server at this granularity.
+
+  **Verdict: `380` stands.** It is the lowest value that boots with useful margin,
+  and the only value below it that boots at all buys no measurable speed.
+  `390`/`405` are the wrong direction — both slower *and* smaller.
 
 - `mcs380` is the lowest value confirmed to **boot the live server**. `360` loads
   offline (23308 MB) but will not boot; 400/500 are VRAM- or RAM-refused.
