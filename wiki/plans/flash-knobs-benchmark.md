@@ -794,3 +794,12 @@ Production `config.yml` is **unmodified** and was never committed.
   explicit per-file `git add`, atomic commits, push. Production
   `config.yml` is NEVER committed (proposed only). Spikes and
   all box logs stay untracked.
+- **Verify `config.yml` against the right reference, and only when no arm is
+  mid-run.** The invariant used all session was `md5sum config.yml
+  config.yml.bak-20261005-192925` agreeing — but that backup predates the
+  standing `warmup: true` / `vision_offload: true` lines, and the `0fe01cc8…`
+  value I kept asserting is actually the standing config **plus combo**
+  (`config.yml.kb-c18-combo`). So the check would have passed even with the
+  production file damaged, and it cannot distinguish "restored" from "an arm is
+  applied right now". Correct check: `md5sum config.yml config.yml.kb-c18-combo`
+  when idle, and confirm against the *expected arm* when a run is in flight.
