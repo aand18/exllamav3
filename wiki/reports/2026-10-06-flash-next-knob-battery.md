@@ -146,29 +146,43 @@ reduces CPU-side expert work, so its benefit grows as the cache fills.
 Reproducibility is high enough to trust: baseline spread 0.08 s, combo 0.00 s
 across two variants.
 
-### 130k stage — the combo is SLOWER. This decides the recommendation.
+### 130k stage — INCONCLUSIVE. Retracted twice; do not quote a 130k verdict.
 
 Correctly sized (`--target 65664`; server confirmed **129,998 / 129,910** prompt
-tokens, so the calibration formula held to ~1%).
+tokens, so the calibration formula held to ~1%). Boot medians, seconds:
 
-| variant | prompt tok | baseline | combo | ratio |
+| config | boots | boot medians | all-boot median | ratio vs baseline |
 |---|---|---|---|---|
-| v0 | 129,998 | 78.03 s | 87.19 s | **1.117** |
-| v1 | 129,910 | 77.77 s | 86.33 s | **1.110** |
+| baseline | 3 | 77.9 / 79.1 / **86.8** | 79.14 | 1.000 |
+| `thr16` | 2 | 85.2 / 87.6 | 86.47 | 1.093 |
+| `mcs380` | 3 | 87.6 / 81.9 / 78.1 | 81.94 | 1.035 |
+| combo | 1 | 86.8 | 86.76 | 1.096 |
 
-**Median ratio 1.114 — the combo is ~11% SLOWER at 130k**, consistent across
-both variants. Prefill confirms it is prefill, with identical token counts:
+**The baseline's own boot-to-boot spread is 77.9 → 86.8 s = 11.2%**, which is
+larger than every between-config difference above. Ranges overlap the baseline
+range completely:
 
-| prompt tok | new tok | baseline prefill | combo prefill |
-|---|---|---|---|
-| 129,998 | 121,806 | 71.7 s | **82.2 s (+13%)** |
-| 129,910 | 121,718 | 71.5 s | **81.8 s (+13%)** |
+| config | range | vs baseline max 86.8 |
+|---|---|---|
+| `thr16` | 85.2–87.6 | overlaps |
+| `mcs380` | 78.1–87.6 | overlaps |
+| combo | 86.8 | marginal |
 
-So at 130k the change actively regresses the dominant cost. This is **not**
-explained by cache pressure, which would predict monotonic improvement toward
-the 262k ceiling — the curve dips at 130k and recovers by 224k. The mechanism
-is **unknown and not yet investigated**; no theory is offered here because the
-data does not support one.
+**Verdict: inconclusive at 130k.** The apparent regression is within run-to-run
+noise. Resolving it needs many more boots (this stage ran 1–3 per arm, against
+6 tightly-clustered requests at 224k where the spread was 0.08 s).
+
+**Two retractions on this stage, both from over-reading too few samples:**
+
+1. An earlier revision said "prefill is flat at 62k, therefore prefill never
+   improves" — falsified by the 224k stage.
+2. The next revision said "the combo is ~11% slower at 130k, both halves
+   regress independently" — that came from comparing **2-boot arms against a
+   1-boot baseline**, and it does not survive equal replication. `mcs380`
+   especially is noise: 87.6 / 81.9 / 78.1 across three boots.
+
+Note the 224k stage by contrast had baseline spread 0.08 s and combo 0.00 s, so
+the noise problem is specific to this length, not a property of the harness.
 
 ### 130k isolation — BOTH halves regress independently
 
@@ -202,11 +216,11 @@ it.**
 |---|---|---|
 | 11–16k | negligible | **1.36× faster** |
 | ~55–62k | low | ~1.00× |
-| **~130k** | ~50% | **0.90× — SLOWER** |
+| ~130k | ~50% | **inconclusive** — inside an 11.2% baseline spread |
 | ~224k | ~85% | 1.096× faster |
 
-Non-monotonic, with a regression at the length closest to the operator's
-stated 128k minimum.
+No clean trend: the 130k point is unresolved, so the curve cannot be called
+monotonic in either direction.
 
 ### Revised regime table
 
@@ -239,26 +253,25 @@ and buys **nothing** in prefill, which is the dominant cost at the target
 context length. That is the central open question, and it is what the 128k and
 258k stages exist to settle.
 
-**UPDATE — answered, and the answer is negative for BOTH changes.** At 130k
-prompt the combo is **~11% slower** (prefill 71.7 s → 82.2 s on identical token
-counts), and isolation shows each half regresses **independently**: `thr16`
-alone 1.093×, `mcs380` alone 1.124×. Prefill falls 1703 → 1488 T/s
-monotonically. At the length closest to the stated 128k minimum, both changes
-cost more than they save.
+**UPDATE — the 130k question is UNRESOLVED, not answered.** An earlier revision
+of this report claimed a ~11% regression at 130k for both changes. That came
+from comparing 2-boot arms against a **1-boot baseline**; with equal
+replication (baseline 3 boots) the baseline's own spread is 11.2%, larger than
+every between-config effect, and all ranges overlap. **The 130k stage supports
+no verdict in either direction.** It is reported as inconclusive rather than
+negative.
 
-**Do not apply either `cpu_moe_split_experts: 380` or
-`EXL3_MOE_CPU_THREADS=16` without qualifying it by prompt length.** They are
-large decode wins at 11–16k and large prefill losses at 130k. A
-length-aware setting (or accepting the regression for long-context-first
-workloads) is the open decision, and it is the operator's call, not a tuning
-detail.
+What survives: both changes are large, reproducible **decode** wins at 11–16k
+(1.36×, tight spreads) and the combo is a reproducible **prefill** win at 224k
+(1.096×, spread 0.08 s vs 0.00 s). Whether either is a loss at 128k is
+**unknown** and needs a properly replicated run before the config decision.
 
-**RETRACTED** — an earlier revision of this report claimed
-`EXL3_MOE_CPU_THREADS=16` was "separable and safe to take alone — a pure
-decode win at every length tested". **That was wrong.** It was written from
-short-context and 62k evidence only; the 130k isolation falsifies it. The
-general lesson, already recorded once in this file: *do not generalise a
-per-length result across lengths.*
+**RETRACTED** — an earlier revision claimed `EXL3_MOE_CPU_THREADS=16` was
+"separable and safe to take alone — a pure decode win at every length tested".
+That was inferred from short-context evidence only and is **not** supported. The
+general lesson, recorded twice in this file now: *do not generalise a
+per-length result across lengths, and do not generalise a small-n result across
+configs.*
 
 ### Risk, honestly
 
