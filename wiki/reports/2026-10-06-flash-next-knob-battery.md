@@ -170,6 +170,32 @@ the 262k ceiling — the curve dips at 130k and recovers by 224k. The mechanism
 is **unknown and not yet investigated**; no theory is offered here because the
 data does not support one.
 
+### 130k isolation — BOTH halves regress independently
+
+Splitting the combo at 130k, two boots each, against the same baseline:
+
+| config | v0 | v1 | median ratio | pp median | verdict |
+|---|---|---|---|---|---|
+| baseline | 78.03 s | 77.77 s | 1.000 | **1703** | ref |
+| `thr16` alone | 85.54 s | 84.77 s | **1.093** | 1525 | SLOWER |
+| `mcs380` alone | 87.81 s | 87.29 s | **1.124** | 1501 | SLOWER |
+| combo (both) | 87.19 s | 86.33 s | 1.114 | 1488 | SLOWER |
+
+**Both halves regress on their own** — this is not an interaction artefact.
+Prefill degrades monotonically (1703 → 1525 → 1501 → 1488 T/s) and wall-clock
+tracks it, so the cost is squarely in prefill.
+
+Mechanism, consistent with both halves: **at 130k, prefill dominates and CPU MoE
+work is on the critical path, so both changes ADD CPU cost rather than removing
+it.**
+
+- `thr16` oversubscribes the 16 physical cores during long sequential prefill
+  chunks — the same effect `PERF_FINDINGS.md` recorded ("16 workers + stager +
+  main on 16 phys cores"), which is why it rejected 16 on grounds that only
+  surfaced here under a decode-only protocol.
+- `mcs380` interleaves CPU expert work with each layer's own GPU compute, adding
+  synchronisation the short-decode case never pays.
+
 ### Full regime table
 
 | prompt len | cache occupancy | combo vs baseline |
@@ -213,13 +239,26 @@ and buys **nothing** in prefill, which is the dominant cost at the target
 context length. That is the central open question, and it is what the 128k and
 258k stages exist to settle.
 
-**UPDATE — answered, and the answer is negative.** At 130k prompt the combo is
-**~11% slower** (prefill 71.7 s → 82.2 s on identical token counts), at the
-length closest to the stated 128k minimum. **Do not apply the
-`cpu_moe_split_experts` part of this proposal until that regression is
-explained and fixed.** `EXL3_MOE_CPU_THREADS=16` is separable and safe to take
-alone — it is a pure decode win at every length tested, with no prefill
-regression.
+**UPDATE — answered, and the answer is negative for BOTH changes.** At 130k
+prompt the combo is **~11% slower** (prefill 71.7 s → 82.2 s on identical token
+counts), and isolation shows each half regresses **independently**: `thr16`
+alone 1.093×, `mcs380` alone 1.124×. Prefill falls 1703 → 1488 T/s
+monotonically. At the length closest to the stated 128k minimum, both changes
+cost more than they save.
+
+**Do not apply either `cpu_moe_split_experts: 380` or
+`EXL3_MOE_CPU_THREADS=16` without qualifying it by prompt length.** They are
+large decode wins at 11–16k and large prefill losses at 130k. A
+length-aware setting (or accepting the regression for long-context-first
+workloads) is the open decision, and it is the operator's call, not a tuning
+detail.
+
+**RETRACTED** — an earlier revision of this report claimed
+`EXL3_MOE_CPU_THREADS=16` was "separable and safe to take alone — a pure
+decode win at every length tested". **That was wrong.** It was written from
+short-context and 62k evidence only; the 130k isolation falsifies it. The
+general lesson, already recorded once in this file: *do not generalise a
+per-length result across lengths.*
 
 ### Risk, honestly
 
