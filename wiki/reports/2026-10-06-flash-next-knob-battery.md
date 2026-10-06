@@ -300,12 +300,28 @@ There is **no length at which the combo was measured to hurt**, including the
 62k point that looked neutral and the 130k point that two revisions wrongly
 called a regression.
 
+**Which half does the work, measured in the same interleaved batch:**
+
+| change | at 130k | what it actually does |
+|---|---|---|
+| `cpu_moe_split_experts: 380` | **1.135×** | prefill T/s 1507 → 1725 (**+14%**) |
+| `EXL3_MOE_CPU_THREADS=16` | 1.026× | prefill unchanged; decode only |
+| combo | **1.161×** | both |
+
+`cpu_moe_split_experts: 380` is the long-context lever — it accelerates
+**prefill** directly. The threads knob is a decode-only lever worth ~2.6% at
+130k and nothing at all in prefill. Both are worth applying, but they are not
+the same kind of change: if VRAM ever forces a rollback, the threads knob is the
+one to keep, since it costs no VRAM.
+
 The honest reading of the shape: a large decode win at short prompts, roughly
 neutral at 62k, then a real win again at 130k+ where prefill dominates. The
 130k and 224k gains are in **prefill itself**, so the combo is not purely a
-decode optimisation.
+decode optimisation. This also **retires the "cache pressure" explanation** I
+proposed earlier in this file for the 224k prefill win — it is the same
+`mcs380` prefill effect, and no paging story is needed.
 
-#### Two claims retracted from this report
+#### Three claims retracted from this report
 
 Both were mine and both were caused by the same methodological error, recorded
 so it is not repeated:
@@ -317,6 +333,10 @@ so it is not repeated:
    safe because it is a pure decode win."** Both false. The regression came from
    comparing arms against a **baseline measured in an earlier, faster window**;
    with the baseline interleaved, the combo is 1.157× *faster* at 130k.
+3. **"At 224k the prefill win comes from KV-cache pressure pushing CPU MoE work
+   into the prefill path."** Unnecessary — `mcs380` speeds prefill by +14% at
+   130k with the cache only ~50% full, which fully accounts for the 224k gain
+   without any paging effect.
 
 The root cause is a protocol gap, not a measurement gap: the harness let a
 baseline measured early stand in as the reference for arms measured much later,
