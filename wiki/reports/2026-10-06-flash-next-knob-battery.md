@@ -172,6 +172,43 @@ Quality of the measurement, which is what makes this one trustworthy:
 - All 4 speedups cluster in a 3% band, and no baseline boot overlaps any combo
   boot (baseline min 86.6, combo max 85.4).
 
+#### Per-half attribution — `mcs380` carries the long-context win
+
+Splitting the combo in the **same interleaved batch** (2 boots each, same
+window, 4 prompts each, n=8 paired turns per arm):
+
+| arm | median ratio | speedup | range | verdict |
+|---|---|---|---|---|
+| combo (both) | 0.862 | **1.161×** | 0.824–0.896 | win |
+| `mcs380` alone | 0.881 | **1.135×** | 0.859–0.902 | win |
+| `thr16` alone | 0.975 | 1.026× | 0.943–0.992 | ~neutral |
+
+Baseline self-consistency across its own two interleaved boots: ratio 1.000,
+range 1.000–1.000. **The noise floor for this batch is zero**, so even `thr16`'s
+1.026× is real but tiny.
+
+**Prefill throughput on identical new-token counts** (server log, so prefill is
+isolated from decode):
+
+| config | 121,806 | 121,718 | 135,892 | 134,425 | gain |
+|---|---|---|---|---|---|
+| baseline | 1504 | 1508 | 1507 | 1531 | ref |
+| `mcs380` | 1738 | 1749 | 1692 | 1719 | **+14.0%** |
+| `thr16` | 1506 | 1521 | 1517 | 1538 | +0.5% |
+| combo | 1748 | 1739 | 1740 | 1771 | **+15.7%** |
+
+(T/s, prompt tokens ÷ prefill seconds.)
+
+So the mechanism is now **measured, not hypothesised**: `cpu_moe_split_experts:
+380` directly accelerates prefill at long context, and `EXL3_MOE_CPU_THREADS=16`
+has no effect there at all. The combo is worth slightly more than `mcs380` alone
+because the threads knob still helps the decode portion (tg median 61–62 vs
+44–45 for `mcs380` alone at 130k).
+
+This also explains the 224k result and retires the "cache pressure" theory I
+proposed for it: the 224k prefill win (+8.6%) is the same `mcs380` prefill
+effect, not a paging artefact. No cache-pressure story is needed.
+
 #### Why the earlier two conclusions were wrong
 
 The earlier design used **2 prompts × 1 boot per arm** and took the *first*
