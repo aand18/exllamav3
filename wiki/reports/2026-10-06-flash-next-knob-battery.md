@@ -3,9 +3,29 @@
 Measured impact of every tunable on 3.05bpw Flash-Next serving
 (48 MoE layers, MTP head), RTX 4090 24 GB + 7950X3D, Win11 + WSL2.
 Implements `wiki/plans/flash-knobs-benchmark.md`. All numbers are medians of
-in-process reps unless stated. **Short-context screen (~17k prompt tokens) —
-see §0.7 of the plan: these are a screen, not a verdict. The long-context
-pass has since been run at 55–62k, 130k and 224k and confirms the win.**
+in-process reps unless stated.
+
+## Read this first — the headline depends on your prompt length
+
+| your typical prompt | the number that matters | confidence |
+|---|---|---|
+| short (~11–16k) | **1.36×** | high — 3 boots, tight spreads |
+| ~62k | ~1.00× | high |
+| ~130k | **1.157×** | high — 2 boots/arm × 4 prompts, interleaved |
+| ~224k | 1.096× | high — interleaved, spread 0.08 s |
+| **200k+ (your operating point)** | **1.13× or 1.02×** | **weakest evidence in this report** |
+
+**The operator runs 200k+ prompts, so the 250k row is the operative result and
+it is also the least solid thing here** (n=2 per arm, two modes ~11% apart,
+cause unidentified — see §250k). Quoting 1.36× would overstate what this
+battery can say for long-context work.
+
+The whole measured range is 11k–259k, i.e. up to **96–99% of `cache_size`
+262144**, so there is no untested band. Nothing regressed at any length.
+
+**Workload:** mostly code, tool-heavy — which is what every live-server
+measurement used, so the evidence base is representative rather than a
+narrow screen.
 
 ## Sustained, turn-matched (PRIMARY result)
 
