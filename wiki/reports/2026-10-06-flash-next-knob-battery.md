@@ -127,7 +127,10 @@ draft_model:
   dynamic_draft: true             # KEEP — +7.1%, static is slower despite
                                   # higher acceptance (2.92/5.00 vs 2.78/4.29)
   draft_cache_mode: Q4            # KEEP — see §draft_cache_mode ladder below
-  draft_num_tokens: 5             # KEEP (see §open: 6 ran clean, untested at 6)
+  draft_num_tokens: 3             # CHANGE 5 -> 3: +6.0% tg, and drafting does NOT
+                                  # affect output quality, so the acceptance drop
+                                  # (2.78 -> 2.20) costs speed-nothing. See
+                                  # §draft_num_tokens below; ndt6/7/8 still open.
 
 memory:
   cuda_malloc_async: True         # KEEP — False costs ~760 MB VRAM, no gain
@@ -508,6 +511,39 @@ of the RAM that #1 already proved to be the binding constraint on this box.
 **Adopt it if edit-heavy long-context work becomes the norm** — it is a
 one-line change with a known price.
 
+## `draft_num_tokens` — with quality settled, this is a pure speed knob
+
+Operator position: **speculative drafting does not affect output quality.** That
+matches the theory — lossless speculative decoding preserves the target
+distribution, so acceptance rate changes *speed*, not output. It is not something
+this battery measured; it is the operator's call plus a well-established result.
+
+**Consequence: `ndt3` stops being a trade.** It was parked as "+6.0% tg but
+acceptance 2.78→2.20, speed/quality trade". With quality off the table it becomes
+the best measured draft setting, and the diff proposal now takes it.
+
+But the same logic points the sweep the **other way**, and this is the important
+part:
+
+| setting | tg t/s | vs base | acc/draft |
+|---|---|---|---|
+| `off` | 27.21 | −15.3% | — |
+| `ndt3` + dyn | **34.05** | **+6.0%** | 2.20/2.95 |
+| `ndt5` + dyn (prod) | 32.11 | — | 2.78/4.29 |
+| `ndt6` + dyn | 32.40 | +0.9% | **2.98/4.66** |
+
+**`ndt6` beats `ndt5` on both axes at once** — faster *and* higher acceptance.
+That is the signature of a knob still on the rising side, and it means the
+previous "ceiling is above 6, ndt7/ndt8 untested" was flagged but never chased.
+With quality no longer a constraint, going up is the only direction with
+headroom, and it is now the highest-value draft measurement outstanding.
+
+**Caveat on losslessness, stated once and not repeated.** Lossless speculative
+decoding holds when the implementation does proper rejection sampling. Phase C
+here ran **temperature 0 only**, and the Phase B Tier 2 `-temp` arm (the one that
+would exercise sampling) was never run. So at temp > 0 the claim is theoretical
+on this box, not measured. One Tier 2 run closes it.
+
 ## `draft_cache_mode` ladder — measured, and it is a pure VRAM knob
 
 The arms for `Q8`, `3,3` and `FP16` were **defined but never run** until now;
@@ -831,7 +867,12 @@ speed, because CPU MoE is the bottleneck. Sweep **down** from it.
 
 ## Open / not established
 
-- **`draft_num_tokens` 3 vs 5 is +6.0% tg but drops acceptance 2.78→2.20.**
+- **`draft_num_tokens` ceiling is genuinely open, and that now matters more.**
+  With quality established as unaffected by drafting, the only thing falling is
+  speed, so the sweep should go *up*, not down: `ndt6` already beats `ndt5` on
+  **both** axes (+0.9% tg AND acceptance 2.98 vs 2.78), which means the optimum
+  may be above 6. `ndt7`/`ndt8` untested. This is now the highest-value
+  remaining draft measurement — see §draft_num_tokens.
   Quality not measured (KLD owns it).
 - **`ZERO_COPY` remains unmeasured at any tier** — Tier 1 put it at −2.5%
   without, inside noise, and prior work at +3.3%. It is neither a finalist nor
