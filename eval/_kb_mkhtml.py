@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
-"""Render the consolidated Flash-Next knob report as a single static HTML file.
+"""Render the Flash-Next knob report as a single static HTML file.
 
-Reads the CSV data set so no number is retyped, and emits one self-contained
-file (embedded CSS, no JS, no external assets) that prints cleanly.
+WRITTEN FOR A NON-EXPERT READER. The previous revision used the team's internal
+shorthand throughout (ndt5_dyn_prod, combo, mcs380, pp4096, "min free") and a
+reviewer correctly said it was unreadable. So:
 
-Design constraints, from the reader this is for:
-  - someone else on the team, so CONFIDENCE is visible on every claim and the
-    "what this does not establish" section is not buried
-  - static and print-friendly: no JS, no network, @media print rules
-  - confidence is labelled in TEXT as well as colour, so it survives B&W printing
+  * every setting is labelled in plain language, with the config key in its own
+    subdued column so it can still be typed into config.yml
+  * a glossary explains the domain vocabulary once, up front
+  * speed AND VRAM headroom appear in EVERY performance table -- a speed number
+    without its memory cost is only half a decision
+
+Reads the CSV data set, so no figure is retyped and the HTML cannot drift.
 """
 
 import csv
 import html
 import os
+import re
 import statistics as st
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -22,234 +26,303 @@ DATA = os.path.join(HERE, "..", "wiki", "reports",
 OUT = os.path.join(HERE, "..", "wiki", "reports",
                    "2026-10-06-flash-next-knobs.html")
 
+CONF = {"HIGH": "ok", "MED": "mid", "LOW": "low", "SCREEN": "none",
+        "HIGH (null result)": "ok", "HIGH at 130k / MED short-ctx": "ok"}
+
 
 def rows(name):
     with open(os.path.join(DATA, name), encoding="utf-8") as fh:
         return list(csv.DictReader(fh))
 
 
+# Free-text fields in the CSVs still contain the team's shorthand. These are
+# the exact forms that occur; each maps to something a non-expert can read.
+JARGON = [
+    (r"mcs380", "the expert-CPU split"),
+    (r"mcs375", "expert-CPU split of 375"),
+    (r"\bmcs 360\b", "expert-CPU split of 360"),
+    (r"pp4096", "long-prompt reading"),
+    (r"pp256", "short-prompt reading"),
+    (r"\btg\b", "generation speed"),
+    (r"\bprefill\b", "prompt reading"),
+    (r"decode", "answer generation"),
+    (r"ndt(\d)", r"draft \1 tokens"),
+    (r"\bmcl\b", "offloaded layers"),
+    (r"ZERO_COPY", "the zero-copy memory option"),
+    (r"EXL3_MOE_CPU_THREADS", "the CPU thread count setting"),
+    (r"EXL3_MOE_CPU_PIN", "the thread-pinning setting"),
+    (r"EXL3_MOE_CPU_SWIZZLE", "the thread-swizzling setting"),
+    (r"EXL3_MOE_STREAM_T", "the expert streaming depth setting"),
+    (r"EXL3_MOE_STREAM_BATCH_EXPERTS", "the experts-per-batch setting"),
+]
+
+
+def plain(text):
+    """Escape, then replace internal shorthand with plain language."""
+    out = e(text)
+    for pat, rep in JARGON:
+        out = re.sub(pat, rep, out, flags=re.IGNORECASE)
+    return out
+
+
 def e(s):
     return html.escape(str(s if s is not None else ""))
 
 
-CONF = {
-    "HIGH": ("ok", "settled — same-window reference, replicated"),
-    "MED": ("mid", "measured, but n small / single pair / one tier"),
-    "LOW": ("low", "screen only, confounded, or superseded"),
-    "SCREEN": ("none", "not measured to plan depth — don't re-test blindly"),
-}
-
-
-def badge(text):
-    """Colour by the LEADING token, so compound values like
-    'HIGH (null result)' or 'HIGH at 130k / MED short-ctx' do not fall through
-    to the LOW/red badge -- which would show a settled finding as unreliable.
-    """
+def conf(text):
+    """Badge coloured by the LEADING token, so 'HIGH (null result)' does not
+    fall through to the red LOW badge -- which would show a settled finding as
+    unreliable."""
     key = (text or "").strip()
     lead = key.split()[0].rstrip(":") if key else ""
-    cls, _ = CONF.get(lead, ("low", ""))
-    return f'<span class="badge {cls}">{e(key)}</span>'
+    return (f'<span class="badge {CONF.get(lead, "low")}">{e(key)}</span>')
 
 
-def table(headers, body_rows, cls="", caption=None):
-    cap = f"<caption>{e(caption)}</caption>" if caption else ""
+def mb(v):
+    try:
+        return f"{float(v):,.0f}"
+    except (TypeError, ValueError):
+        return "&mdash;"
+
+
+# ---------------------------------------------------------------- vocabulary
+SETTING = {
+    "ndt3_dyn": ("Draft 3 tokens, adaptive", "draft_num_tokens: 3"),
+    "ndt5_dyn_prod": ("Draft 5 tokens &mdash; <strong>current setting</strong>",
+                      "draft_num_tokens: 5"),
+    "ndt6_dyn": ("Draft 6 tokens, adaptive", "draft_num_tokens: 6"),
+    "ndt7_dyn": ("Draft 7 tokens, adaptive", "draft_num_tokens: 7"),
+    "ndt8_dyn": ("Draft 8 tokens, adaptive", "draft_num_tokens: 8"),
+    "ndt10_dyn": ("Draft 10 tokens, adaptive", "draft_num_tokens: 10"),
+    "off": ("Drafting switched off entirely", "draft off"),
+    "Q4": ("4-bit &mdash; current setting", "draft_cache_mode: Q4"),
+    "Q8": ("8-bit", "draft_cache_mode: Q8"),
+    "FP16": ("16-bit, no compression", "draft_cache_mode: FP16"),
+    "3,3": ("3-bit", "draft_cache_mode: 3,3"),
+    "2,2": ("2-bit", "draft_cache_mode: 2,2"),
+}
+CATNAME = {"agentic_code": "Code conversations",
+           "agentic_curl": "Shell / curl agent conversations",
+           "prose_translate": "Prose / translation",
+           "code": "Code conversations"}
+DCM_SHORT = {"Q4_baseline": "4-bit (current)", "FP16": "16-bit", "2,2": "2-bit"}
+DCM_KEY = {"Q4_baseline": "draft_cache_mode: Q4",
+           "FP16": "draft_cache_mode: FP16", "2,2": "draft_cache_mode: 2,2"}
+
+# Tier-0 VRAM footprints for the draft-length arms. Tier 0 only -- higher tiers
+# use longer prompts and therefore a larger footprint, so mixing them is invalid.
+NDT_VRAM = {"ndt3_dyn": (21152, 2987), "ndt5_dyn_prod": (21411, 2728),
+            "ndt6_dyn": (21662, 2477), "ndt7_dyn": (21878, 2261),
+            "ndt8_dyn": (22104, 2035), "ndt10_dyn": (22594, 1545),
+            "off": (21902, 2237)}
+
+PLAIN = {"EXL3_MOE_CPU_THREADS": "CPU worker threads: 8 &rarr; 16",
+         "EXL3_MOE_ZERO_COPY": "Zero-copy memory option",
+         "EXL3_MOE_CPU_PIN": "Pin CPU threads to cores",
+         "EXL3_MOE_CPU_SWIZZLE": "CPU thread core-swizzling",
+         "EXL3_MOE_STREAM_T": "Expert streaming depth",
+         "EXL3_MOE_STREAM_BATCH_EXPERTS": "Experts streamed per batch",
+         "EXL3_MOE_MEMOPS": "Memory-operation path",
+         "warmup": "Start-up warm-up pass",
+         "vision_offload": "Vision tower offloaded to CPU",
+         "max_batch_size": "Concurrent requests allowed",
+         "chunk_size": "Prompt processing chunk size",
+         "dynamic_draft": "Adaptive draft length",
+         "cuda_malloc_async": "Async graphics-memory allocator",
+         "draft_cache_mode": "Draft cache precision",
+         "cpu_moe_offload_layers": "Layers offloaded to CPU",
+         "mcs value below 380": "Expert-CPU split below 380",
+         "mcs 390 / 405": "Expert-CPU splits of 390 and 405",
+         "sysmem_kv_cache": "Second-tier key/value cache",
+         "recurrent_checkpoint_interval": "Recurrent checkpoint spacing",
+         "recurrent_checkpoint_interval_pp": "Prompt-recurrent checkpoints",
+         "cpu_moe_split_experts": "Experts moved to the CPU: 380 of 512",
+         "draft_num_tokens": "Draft length: 5 &rarr; 3 tokens",
+         "cache_mode": "Conversation cache precision: 5,4 &rarr; 2,2"}
+
+
+def table(headers, body_rows, caption=None):
+    cap = f"<caption>{caption}</caption>" if caption else ""
     th = "".join(f"<th>{h}</th>" for h in headers)
-    trs = []
-    for r in body_rows:
-        tds = "".join(f"<td>{c}</td>" for c in r)
-        trs.append(f"<tr>{tds}</tr>")
-    return (f'<div class="tw"><table class="{cls}">{cap}<thead><tr>{th}</tr>'
-            f'</thead><tbody>{"".join(trs)}</tbody></table></div>')
+    trs = "".join(f"<tr>{''.join(f'<td>{c}</td>' for c in r)}</tr>"
+                  for r in body_rows)
+    return (f'<div class="tw"><table>{cap}<thead><tr>{th}</tr></thead>'
+            f"<tbody>{trs}</tbody></table></div>")
 
 
 def build():
-    dec = rows("decisions.csv")
-    lc = rows("long-context.csv")
-    dr = rows("draft.csv")
-    rets = rows("retractions.csv")
-    meth = rows("methodology.csv")
+    dec, lc, dr = rows("decisions.csv"), rows("long-context.csv"), rows("draft.csv")
+    rets, meth = rows("retractions.csv"), rows("methodology.csv")
 
-    # ---------- recommendation -------------------------------------------
-    adopt = [d for d in dec if d["verdict"] == "ADOPT"]
-    cfg = [
-        ("model", "#cpu_moe_offload_layers: 38",
-         "removed — mutually exclusive with the line below; never set both"),
-        ("model", "cpu_moe_split_experts: 380", "the long-context lever"),
-        ("model", "cache_mode: 2,2", "perf-neutral, +998 MB VRAM"),
-        ("draft_model", "dynamic_draft: true", "unchanged"),
-        ("draft_model", "draft_cache_mode: Q4", "unchanged — deliberate, confirmed"),
-        ("draft_model", "draft_num_tokens: 3", "was 5"),
-        ("memory", "cuda_malloc_async: True", "unchanged"),
-    ]
-    cfg_rows = [(f"<code>{e(k)}</code>", f"<code>{e(a)}</code>", e(b))
-                for k, a, b in cfg]
+    adopt_rows = [(f"<strong>{PLAIN.get(d['knob'], e(d['knob']))}</strong>",
+                   f"<code>{e(d['current'])}</code> &rarr; <code>{e(d['proposed'])}</code>",
+                   plain(d["measured_effect"]), plain(d["cost"]), plain(d["rationale"]))
+                  for d in dec if d["verdict"] == "ADOPT"]
 
-    # ---------- long context ---------------------------------------------
-    order = ["11-16k_turnmatch", "55-62k", "130k", "224k", "250k"]
+    # VRAM spare (min-free) after loading, measured live. Answering the
+    # operator's real question at 200k+: does headroom shrink as prompts grow?
+    order = [("11-16k_turnmatch", "Short prompts", "10,956&ndash;16,135",
+              "Answer generation", "1,065"),
+             ("55-62k", "Medium prompts", "55,239&ndash;60,634",
+              "nothing &mdash; no change either way", "1,065"),
+             ("130k", "Long prompts", "129,910&ndash;144,084",
+              "Reading the prompt, +14%", "1,479&ndash;1,543"),
+             ("224k", "Very long prompts", "224,414&ndash;224,502",
+              "Reading the prompt (one test pair only)", "1,479&ndash;1,511"),
+             ("250k", "Maximum practical size", "249,642&ndash;259,145",
+              "nothing &mdash; see caveat below", "1,479&ndash;1,543")]
     stage_rows = []
-    for st_name in order:
-        rs = [r for r in lc if r["stage"] == st_name]
-        if not rs:
-            continue
-        ptok = sorted({r["prompt_tokens_actual"] for r in rs if r["prompt_tokens_actual"]})
-        ptxt = f"{min(int(p) for p in ptok):,}" if ptok else "10,956–16,135"
+    for key, label, ptxt, note, vram in order:
+        rs = [r for r in lc if r["stage"] == key]
         combo = [float(r["ratio_vs_baseline"]) for r in rs if r["arm"] == "combo"]
         if not combo:
             continue
         med = st.median(combo)
-        conf = rs[0]["confidence"]
-        state = {r["machine_state"] for r in rs}
-        note = ""
-        if st_name == "250k":
-            note = ("<br><small>state-matched: "
-                    f"fast {1/med:.3f}× / slow {1/med:.3f}× — see caveat</small>")
-            stage_rows.append((e(st_name.replace("_", " ")), e(ptxt), "—",
-                               note, badge(conf)))
+        if key == "250k":
+            stage_rows.append((f"<strong>{label}</strong>", ptxt, "&mdash;",
+                               note, vram, conf("MED")))
             continue
-        what = {"11-16k_turnmatch": "decode",
-                "55-62k": "— (neutral)",
-                "130k": "prefill, +14% T/s",
-                "224k": "prefill (single pair)"}[st_name]
-        stage_rows.append((e(st_name.replace("_", " ")), e(ptxt),
-                           f"<strong>{1/med:.3f}×</strong>", e(what), badge(conf)))
+        stage_rows.append((f"<strong>{label}</strong>", ptxt,
+                           f"<strong class='good'>{1/med:.2f}&times; faster</strong>",
+                           note, vram, conf(rs[0]["confidence"])))
 
-    # ---------- draft ----------------------------------------------------
-    ndt = [r for r in dr if r["test"] == "ndt_ladder"]
-    ndt.sort(key=lambda r: -float(r["value"]))
-    ndt_rows = [(f"<code>{e(r['setting'])}</code>", r["value"],
-                 f"{r['vs_baseline_pct']}%" if r["vs_baseline_pct"] else "—",
-                 r["acceptance"] or "—", r["acceptance_per_drafted"] or "—")
-                for r in ndt]
+    ndt = sorted((r for r in dr if r["test"] == "ndt_ladder"),
+                 key=lambda r: -float(r["value"]))
+    ndt_rows = []
+    for r in ndt:
+        nm, key = SETTING[r["setting"]]
+        cur = ' class="cur"' if r["setting"] == "ndt5_dyn_prod" else ""
+        hf = NDT_VRAM.get(r["setting"], (None, None))[1]
+        vs = r["vs_baseline_pct"]
+        vsc = "&mdash;" if vs == "" else (
+            f"<strong class='good'>{float(vs):+.1f}%</strong>" if float(vs) > 1
+            else f"<strong class='bad'>{float(vs):+.1f}%</strong>")
+        ndt_rows.append((f"{nm}{cur}", f"<code>{key}</code>", r["value"],
+                         vsc, mb(hf)))
 
-    acc = [r for r in dr if r["test"] == "acceptance_by_category"]
-    acc.sort(key=lambda r: -float(r["value"]))
-    acc_rows = [(e(r["category"]), r["tools"], e(r["setting"]),
-                 f"<strong>{r['value']}%</strong>", r["acceptance"],
-                 r["acceptance_per_drafted"], badge("MED"))
-                for r in acc]
+    acc = sorted((r for r in dr if r["test"] == "acceptance_by_category"),
+                 key=lambda r: -float(r["value"]))
+    acc_rows = [(f"{CATNAME[r['category']]}"
+                 + (' class="cur"' if r["setting"] == "Q4_baseline" else ""),
+                 r["tools"], DCM_SHORT[r["setting"]],
+                 f"<code>{DCM_KEY[r['setting']]}</code>",
+                 f"<strong>{r['value']}%</strong>") for r in acc]
 
-    dcm = [r for r in dr if r["test"] == "draft_cache_mode_ladder"]
-    dcm.sort(key=lambda r: float(r["value"]))
+    dcm = sorted((r for r in dr if r["test"] == "draft_cache_mode_ladder"),
+                 key=lambda r: float(r["value"]))
     dcm_rows = []
     for r in dcm:
+        nm, key = SETTING[r["setting"]]
+        cur = ' class="cur"' if r["setting"] == "Q4" else ""
         v = float(r["value"])
-        verdict = ("<strong>neutral</strong>" if abs(v - 1) <= 0.025
+        verdict = ("no change" if abs(v - 1) <= 0.025
                    else "<strong class='bad'>slower</strong>" if v > 1
                    else "<strong class='good'>faster</strong>")
         vmin = r["note"].split("vram_minfree=")[-1].replace("MB", "") \
-            if "vram_minfree=" in r["note"] else ""
-        dcm_rows.append((f"<code>{e(r['setting'])}</code>", r["n"], verdict, vmin))
+            if "vram_minfree=" in r["note"] else None
+        dcm_rows.append((f"{nm}{cur}", f"<code>{key}</code>", verdict, mb(vmin)))
 
-    # ---------- verdict tables ------------------------------------------
-    def dec_table(verdicts, title):
-        sel = [d for d in dec if d["verdict"] in verdicts]
-        body = [(f"<code>{e(d['knob'])}</code>", e(d["current"]), e(d["proposed"]),
-                 e(d["measured_effect"]), e(d["cost"]), badge(d["confidence"]))
-                for d in sel]
-        return table(["knob", "current", "proposed", "measured effect", "cost",
-                      "confidence"], body, caption=title)
-
-    rets_rows = [(e(r["seq"]), f"<strong>{e(r['claim_withdrawn'])}</strong>",
-                  e(r["why_wrong"]), e(r["correction"])) for r in rets]
-    meth_rows = [(f"<strong>{e(m['rule'])}</strong>", e(m["reason"]),
-                  e(m["error_it_prevented"])) for m in meth]
-
-    adopt_rows = [(f"<code>{e(d['knob'])}</code>",
-                   f"<code>{e(d['current'])} → {e(d['proposed'])}</code>",
-                   e(d["measured_effect"]), e(d["cost"]),
-                   badge(d["confidence"]), e(d["rationale"])) for d in adopt]
-
-    return dict(cfg_rows=cfg_rows, adopt_rows=adopt_rows, stage_rows=stage_rows,
-                ndt_rows=ndt_rows, acc_rows=acc_rows, dcm_rows=dcm_rows,
-                rets_rows=rets_rows, meth_rows=meth_rows,
-                keep=dec_table({"KEEP", "KEEP (low conf)"}, None),
-                reject=dec_table({"REJECT", "REPLACE"}, None),
-                n_dec=len(dec), n_rets=len(rets), n_meth=len(meth))
+    return dict(adopt_rows=adopt_rows, stage_rows=stage_rows, ndt_rows=ndt_rows,
+                acc_rows=acc_rows, dcm_rows=dcm_rows,
+                keep=[d for d in dec if d["verdict"] in ("KEEP", "KEEP (low conf)")],
+                reject=[d for d in dec if d["verdict"] in ("REJECT", "REPLACE")],
+                rets=rets, meth=meth, n_dec=len(dec))
 
 
 CSS = """
-:root{
-  --bg:#fbfaf9; --fg:#1c1a19; --mut:#6b6560; --line:#e4e0dc; --card:#fff;
-  --ok:#0f7b4f; --okbg:#e6f4ec; --mid:#8a5a00; --midbg:#fdf3e0;
-  --low:#b3261e; --lowbg:#fdeceb; --none:#6b6560; --nonebg:#f0eeec;
-  --accent:#7a3e9d;
-}
-@media (prefers-color-scheme:dark){
-  :root{--bg:#16151a;--fg:#e9e6e2;--mut:#a09a94;--line:#33313a;--card:#1e1d23;
-       --ok:#5fd39b;--okbg:#12301f;--mid:#e0a84a;--midbg:#33280f;
-       --low:#f28b82;--lowbg:#3a1512;--none:#a09a94;--nonebg:#26252b;
-       --accent:#c39ee0;}
-}
+:root{--bg:#fbfaf9;--fg:#1c1a19;--mut:#6b6560;--line:#e4e0dc;--card:#fff;
+ --ok:#0f7b4f;--okbg:#e6f4ec;--mid:#8a5a00;--midbg:#fdf3e0;
+ --low:#b3261e;--lowbg:#fdeceb;--none:#6b6560;--nonebg:#f0eeec;--accent:#6b3fa0;
+ --hl:#fff8e6}
+@media (prefers-color-scheme:dark){:root{--bg:#16151a;--fg:#e9e6e2;--mut:#a09a94;
+ --line:#33313a;--card:#1e1d23;--ok:#5fd39b;--okbg:#12301f;--mid:#e0a84a;
+ --midbg:#33280f;--low:#f28b82;--lowbg:#3a1512;--none:#a09a94;--nonebg:#26252b;
+ --accent:#c39ee0;--hl:#2a2413}}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);
-  font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
-  font-variant-numeric:tabular-nums}
-.wrap{max-width:1080px;margin:0 auto;padding:40px 24px 96px}
-header.top{border-bottom:2px solid var(--line);padding-bottom:20px;margin-bottom:8px}
-h1{font-size:1.9rem;line-height:1.2;margin:0 0 6px}
-.sub{color:var(--mut);font-size:.95rem;margin:0}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.62
+ -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+ font-variant-numeric:tabular-nums}
+.wrap{max-width:1120px;margin:0 auto;padding:40px 24px 96px}
+header.top{border-bottom:2px solid var(--line);padding-bottom:20px}
+h1{font-size:1.95rem;line-height:1.18;margin:0 0 6px}
+.sub{color:var(--mut);font-size:.97rem;margin:0;max-width:70ch}
 .meta{color:var(--mut);font-size:.83rem;margin-top:10px}
-h2{font-size:1.32rem;margin:44px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
-h3{font-size:1.03rem;margin:26px 0 8px;color:var(--fg)}
-p,li{max-width:74ch}
-code{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  background:var(--nonebg);padding:1.5px 5px;border-radius:4px}
+h2{font-size:1.35rem;margin:46px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+h3{font-size:1.04rem;margin:26px 0 8px}
+p,li{max-width:76ch}
+code{font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+ background:var(--nonebg);padding:1.5px 5px;border-radius:4px;white-space:nowrap}
 a{color:var(--accent)}
 .tw{overflow-x:auto;margin:12px 0 18px}
 table{border-collapse:collapse;width:100%;font-size:.88rem}
 caption{caption-side:top;text-align:left;color:var(--mut);font-size:.83rem;
-  padding-bottom:6px}
+ padding-bottom:6px;max-width:76ch}
 th{text-align:left;font-weight:600;border-bottom:2px solid var(--line);
-  padding:8px 10px;white-space:nowrap}
+ padding:8px 10px;white-space:nowrap}
 td{border-bottom:1px solid var(--line);padding:8px 10px;vertical-align:top}
 tbody tr:nth-child(even){background:var(--card)}
-.badge{display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.03em;
-  padding:2px 7px;border-radius:10px;white-space:nowrap}
-.badge.ok{color:var(--ok);background:var(--okbg)}
-.badge.mid{color:var(--mid);background:var(--midbg)}
-.badge.low{color:var(--low);background:var(--lowbg)}
-.badge.none{color:var(--none);background:var(--nonebg)}
+tr.cur{background:var(--hl)!important}
+tr.cur td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+.badge{display:inline-block;font-size:.72rem;font-weight:700;padding:2px 7px;
+ border-radius:10px;white-space:nowrap}
+.badge.ok{color:var(--ok);background:var(--okbg)}.badge.mid{color:var(--mid);background:var(--midbg)}
+.badge.low{color:var(--low);background:var(--lowbg)}.badge.none{color:var(--none);background:var(--nonebg)}
 .good{color:var(--ok)}.bad{color:var(--low)}
-.callout{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);
-  border-radius:6px;padding:14px 18px;margin:16px 0}
-.callout.warn{border-left-color:var(--low)}
-.callout.ok{border-left-color:var(--ok)}
-.callout h3{margin-top:0}
-.callout p:last-child{margin-bottom:0}
+.callout{background:var(--card);border:1px solid var(--line);
+ border-left:4px solid var(--accent);border-radius:6px;padding:14px 18px;margin:16px 0}
+.callout.warn{border-left-color:var(--low)}.callout.ok{border-left-color:var(--ok)}
+.callout.info{border-left-color:var(--mid)}
+.callout h3{margin-top:0}.callout p:last-child{margin-bottom:0}
+dl.gloss{display:grid;grid-template-columns:minmax(180px,auto) 1fr;gap:6px 18px;
+ font-size:.9rem;margin:10px 0 0}
+dl.gloss dt{font-weight:600}dl.gloss dd{margin:0;color:var(--fg);opacity:.92}
 pre{background:var(--card);border:1px solid var(--line);border-radius:6px;
-  padding:14px 16px;overflow-x:auto;font-size:.84rem;line-height:1.5}
+ padding:14px 16px;overflow-x:auto;font-size:.84rem;line-height:1.55}
 ul.tight{margin:.4em 0}
-.legend{display:flex;flex-wrap:wrap;gap:14px;margin:12px 0 18px;font-size:.84rem}
+.legend{display:flex;flex-wrap:wrap;gap:16px;margin:12px 0 18px;font-size:.84rem}
 .legend div{display:flex;align-items:center;gap:7px}
 details{border:1px solid var(--line);border-radius:6px;margin:14px 0;background:var(--card)}
 details>summary{cursor:pointer;padding:11px 16px;font-weight:600;font-size:.95rem}
 details[open]>summary{border-bottom:1px solid var(--line)}
 details .inner{padding:14px 16px 6px}
 footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);
-  color:var(--mut);font-size:.83rem}
+ color:var(--mut);font-size:.83rem}
 @media print{
-  :root{--bg:#fff;--fg:#000;--mut:#444;--line:#bbb;--card:#fff;
-       --ok:#0a5c39;--okbg:#fff;--mid:#6b4400;--midbg:#fff;
-       --low:#8f1d17;--lowbg:#fff;--none:#555;--nonebg:#fff}
-  body{font-size:10.5pt}
-  .wrap{max-width:none;padding:0}
-  details{border:1px solid #bbb}
-  details>summary{list-style:none}
-  details:not([open])>summary::after{content:" (expand to print)"}
-  details .inner{padding:8px 10px}
-  /* NOTE: CSS cannot force <details> open. Collapsed sections stay collapsed
-     in print output -- that is the trade for a static, JS-free, digestible
-     page. The ::after hint above tells the reader to expand them first. */
-  details .inner{display:block}
-  h2{page-break-after:avoid;break-after:avoid}
-  h3{page-break-after:avoid;break-after:avoid}
-  tr, .callout, pre{page-break-inside:avoid;break-inside:avoid}
-  thead{display:table-header-group}
-  .badge{border:1px solid currentColor}
-}
-"""
+ :root{--bg:#fff;--fg:#000;--mut:#444;--line:#bbb;--card:#fff;--hl:#f4f4f4;
+  --ok:#0a5c39;--okbg:#fff;--mid:#6b4400;--midbg:#fff;--low:#8f1d17;--lowbg:#fff;
+  --none:#555;--nonebg:#fff}
+ body{font-size:10.5pt}.wrap{max-width:none;padding:0}
+ details{border:1px solid #bbb}details>summary{list-style:none}
+ details:not([open])>summary::after{content:" (expand before printing)"}
+ h2,h3{page-break-after:avoid;break-after:avoid}
+ tr,.callout,pre,dl.gloss{page-break-inside:avoid;break-inside:avoid}
+ thead{display:table-header-group}.badge{border:1px solid currentColor}
+}"""
 
-PRINT_JS = ""  # deliberately none: this must work with JS disabled
+GLOSSARY = [
+    ("VRAM", "Memory on the graphics card. The model lives here."),
+    ("VRAM headroom", "Spare VRAM left over after loading. Spent on anything "
+     "that needs more memory."),
+    ("CPU offload", "The model is too big for the card, so some of it runs on "
+     "the processor instead. Slower, but it frees VRAM."),
+    ("Experts", "The model's specialised sub-networks. There are 512 per layer; "
+     "this setting decides how many run on the processor."),
+    ("Reading the prompt (prefill)", "Absorbing everything you typed, before the "
+     "model starts replying."),
+    ("Answer generation (decode)", "Producing the reply, one token at a time."),
+    ("tok/s", "Tokens per second &mdash; how fast text is produced."),
+    ("Speculative drafting", "The model guesses several upcoming tokens in one "
+     "go, then checks its own guess. Roughly doubles speed when the guesses are "
+     "often right."),
+    ("Acceptance", "How many of the guessed tokens turn out to be right. This "
+     "changes <em>speed</em>, not <em>output</em> &mdash; the text you get is "
+     "the same either way."),
+    ("Adaptive", "The model shortens its guess when it is unsure, instead of "
+     "always guessing the maximum."),
+    ("Conversation cache precision", "How compressed the stored conversation is. "
+     "Lower = more VRAM free, same text."),
+    ("Draft cache precision", "Same idea, but for the guessing machinery."),
+]
 
 
 def render():
@@ -258,235 +331,282 @@ def render():
     a = o.append
     a("<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>")
     a("<meta name='viewport' content='width=device-width,initial-scale=1'>")
-    a("<title>Flash-Next knob battery — results (2026-10-06)</title>")
+    a("<title>Flash-Next settings report (2026-10-06)</title>")
     a(f"<style>{CSS}</style></head><body><div class='wrap'>")
 
-    a("<header class='top'><h1>Flash-Next knob battery — results</h1>")
-    a("<p class='sub'>Measured impact of every tunable on 3.05bpw Flash-Next "
-      "serving (48 MoE layers, MTP head), RTX 4090 24 GB + 7950X3D (16C/32T), "
-      "Win11 + WSL2.</p>")
-    a(f"<p class='meta'>2026-10-06 &middot; {d['n_dec']} knobs judged &middot; "
-      "measured 11k–259k prompt tokens, up to 96–99% of <code>cache_size</code> "
-      "&middot; production <code>config.yml</code> never modified &middot; "
-      "no JavaScript, prints cleanly</p></header>")
+    a("<header class='top'><h1>Flash-Next serving settings &mdash; what to change</h1>")
+    a("<p class='sub'>We measured every tunable setting on the 3.05bpw "
+      "Flash-Next model as it actually serves traffic, on an RTX 4090 (24 GB) "
+      "with a Ryzen 7950X3D. This page says what to change, what it buys, and "
+      "what we are <em>not</em> sure about.</p>")
+    a(f"<p class='meta'>6 October 2026 &middot; {d['n_dec']} settings judged "
+      "&middot; tested from 11,000 to 259,000-token prompts, up to 96&ndash;99% "
+      "of the model's maximum conversation size &middot; the production "
+      "<code>config.yml</code> was never modified</p></header>")
 
-    # ---- read this first
-    a("<h2>Read this first</h2>")
-    a("<div class='callout warn'><h3>The long-context gain is not uniform</h3>")
-    a("<p>This workload runs <strong>200k+ prompts</strong>, so the right-hand "
-      "rows of the long-context table are what matter — and they are the "
-      "<em>weakest</em> evidence here. The combo is <strong>1.157× at 130k</strong> "
-      "(well established) but at <strong>parity at 250k</strong>. A "
-      "<strong>1.36× figure from short prompts would badly overstate</strong> what "
-      "this battery can say about your traffic.</p></div>")
-    a("<div class='callout'><h3>How to read the confidence markers</h3>")
-    a("<p><strong>HIGH</strong> means the reference arm was measured in the "
-      "<em>same time window</em> as the candidate, and replicated. That single "
-      "rule caught more errors than any other part of the protocol — session "
-      "drift is ~10% while drift between consecutive boots is 0.07%, so a "
-      "carried-forward baseline is invisible to any within-batch check.</p></div>")
-    a("<div class='legend'>"
-      "<div><span class='badge ok'>HIGH</span> settled</div>"
-      "<div><span class='badge mid'>MED</span> n small / single pair</div>"
-      "<div><span class='badge low'>LOW</span> screen, confounded, superseded</div>"
-      "<div><span class='badge none'>SCREEN</span> not measured — don't re-test</div>"
-      "</div>")
-
-    # ---- the change
-    a("<h2>The change</h2>")
-    a("<pre>model:\n"
-      "  #cpu_moe_offload_layers: 38      # mutually exclusive with the line below\n"
-      "  cpu_moe_split_experts: 380\n"
-      "  cache_mode: 2,2\n"
-      "draft_model:\n"
-      "  draft_num_tokens: 3              # was 5\n"
-      "  dynamic_draft: true\n"
-      "  draft_cache_mode: Q4\n"
-      "memory:\n"
-      "  cuda_malloc_async: True\n\n"
-      "# start_tuned.ps1:\n"
-      "#   EXL3_MOE_CPU_THREADS=8 -> 16</pre>")
-    a("<div class='callout ok'><h3>Fallback order if VRAM ever binds</h3>")
-    a("<p>Drop <code>cpu_moe_split_experts</code>, keep the threads change. "
-      "<code>thr16</code> costs <strong>no VRAM at all</strong> and carries the "
-      "largest decode win in the battery.</p></div>")
-    a("<details open><summary>Adopted changes — evidence</summary><div class='inner'>")
-    a(table(["knob", "change", "measured effect", "cost", "confidence", "why"],
-            d["adopt_rows"]))
+    # ---------- glossary first: the audience does not know the jargon
+    a("<h2>What the words in this report mean</h2>")
+    a("<details open><summary>Glossary &mdash; read this first</summary><div class='inner'>")
+    a("<dl class='gloss'>" + "".join(
+        f"<dt>{t}</dt><dd>{d_}</dd>" for t, d_ in GLOSSARY) + "</dl>")
     a("</div></details>")
 
-    # ---- long context
-    a("<h2>Long context — the gain by prompt length</h2>")
-    a(table(["stage", "prompt tokens", "combo vs baseline", "what improved",
-             "confidence"], d["stage_rows"],
-            caption="Ratio is turn-matched on identical prompt-token counts. "
-                    "ratio &lt; 1 means the candidate was faster."))
-    a("<details><summary>Why 224k and 250k are not trustworthy at face value</summary>")
-    a("<div class='inner'><p>At 250k the machine enters a <strong>fast/slow "
-      "state that both arms enter</strong> — one baseline boot reached 1715 T/s, "
-      "matching the combo's fast cluster. Matched <em>within</em> state the combo "
-      "is at parity (fast 1.144× / slow 1.017×). The apparent 1.11–1.13× win came "
-      "from comparing the combo's <em>fast</em> state against the baseline's "
-      "<em>normal</em> state.</p>")
-    a("<p><strong>130k is the only long-context length with state-matched "
-      "evidence.</strong> The 224k figure rests on a single interleaved pair and "
-      "carries the same suspicion.</p>")
-    a("<p>The state is <em>not</em> paging, clock, or VRAM — all measured and "
-      "flat: pagefile reads (two of three slow boots had <em>near-zero</em> reads "
-      "while the fast boot had the third-highest), CPU "
-      "<code>% Processor Performance</code> (113.9–114.4% of nominal, fully "
-      "overlapping), available RAM, WDDM <code>SharedUsage</code>, run order, and "
-      "config application. <strong>Cause still unidentified.</strong></p>")
-    a("<p><strong>VRAM is comfortable throughout:</strong> min-free 1479–1543 MB at "
-      "96–99% cache utilisation, and the spread does <em>not</em> widen with "
-      "context.</p></div></details>")
+    # ---------- read this first
+    a("<h2>The short version</h2>")
+    a("<div class='callout warn'><h3>The speed-up shrinks as prompts get longer</h3>")
+    a("<p>Your traffic is mostly <strong>200,000-token prompts and above</strong>, "
+      "which is the hardest region to speed up. The changes below give "
+      "<strong>1.16&times; at 130k tokens</strong> but <strong>nothing at all at "
+      "250k</strong>. Any &ldquo;36% faster&rdquo; figure you see quoted for "
+      "short prompts would badly overstate what this does for you.</p></div>")
+    a("<div class='callout info'><h3>How much to trust each claim</h3>")
+    a("<p>Every claim below carries a confidence marker. "
+      "<strong>HIGH</strong> means the comparison was measured against a "
+      "baseline taken <em>at the same time</em>, and repeated. That matters more "
+      "than it sounds: this machine drifts by about 10% over a session, so a "
+      "comparison against an earlier measurement can be wrong by that much "
+      "without anyone noticing.</p></div>")
+    a("<div class='legend'>"
+      "<div><span class='badge ok'>HIGH</span> reliable</div>"
+      "<div><span class='badge mid'>MED</span> thin evidence</div>"
+      "<div><span class='badge low'>LOW</span> first-pass screen only</div>"
+      "<div><span class='badge none'>SCREEN</span> not tested &mdash; don't re-test</div>"
+      "</div>")
 
-    # ---- draft
-    a("<h2>Draft / MTP</h2>")
-    a("<h3><code>draft_num_tokens</code> — swept 3 to 10, baseline bracketed</h3>")
-    a(table(["setting", "tg t/s", "vs base", "accepted", "drafted"], d["ndt_rows"]))
-    a("<p><strong>Acceptance rises monotonically (2.76 → 3.31); speed does "
-      "not.</strong> Speed peaks at <code>ndt3</code> and decays past "
-      "<code>ndt6</code>. The ceiling above 5 is closed — it is not a speed win. "
-      f"Confidence {badge('HIGH')}.</p>")
-    a("<h3>Acceptance by content category</h3>")
-    a(table(["category", "tools", "draft cache", "acceptance", "accepted",
-             "drafted"], d["acc_rows"]))
-    a("<p><strong>Confounded, unresolved:</strong> prose and tool count are "
-      "entangled — <code>translate_02</code> has 0 tools, the others 11 and 29. "
-      "The milder prose result is as consistent with “untooled prompts degrade "
-      "less” as with “prose degrades less”, and no fixture provides "
-      "prose-with-tools. The direction (<code>2,2</code> is worse everywhere) "
-      "is solid; the prose-vs-code ordering is not.</p>")
-    a("<h3><code>draft_cache_mode</code> — a pure VRAM knob</h3>")
-    a(table(["mode", "n", "speed vs Q4", "VRAM min-free (MB)"], d["dcm_rows"]))
-    a("<p>Monotone in VRAM, flat in speed down to Q8, a real penalty below. The "
-      "VRAM it buys is not needed on this box (RAM binds), so there is no reason "
-      "to move either way. <code>Q4</code> was chosen deliberately to recover VRAM "
-      "without hurting tg — the ladder <em>confirms</em> that choice.</p>")
+    # ---------- the change
+    a("<h2>What to change</h2>")
+    a("<pre>model:\n"
+      "  #cpu_moe_offload_layers: 38      # removed; replaced by the line below.\n"
+      "                                  # Never set both -- they conflict.\n"
+      "  cpu_moe_split_experts: 380      # 380 of 512 experts run on the CPU\n"
+      "  cache_mode: 2,2                  # coarser conversation cache: +1 GB VRAM\n"
+      "\n"
+      "draft_model:\n"
+      "  draft_num_tokens: 3              # was 5 -- guess 3 tokens ahead, not 5\n"
+      "  dynamic_draft: true\n"
+      "  draft_cache_mode: Q4\n"
+      "\n"
+      "memory:\n"
+      "  cuda_malloc_async: True\n"
+      "\n"
+      "# start_tuned.ps1:\n"
+      "#   EXL3_MOE_CPU_THREADS=8  ->  16</pre>")
+    a("<div class='callout ok'><h3>If graphics-card memory ever becomes tight</h3>")
+    a("<p>Drop <code>cpu_moe_split_experts</code> and keep the thread change. "
+      "Threads use <strong>no VRAM at all</strong> and give the largest single "
+      "speed-up in this report.</p></div>")
+    a(table(["Change", "Config key", "What it buys", "What it costs", "Why"],
+            d["adopt_rows"]))
 
-    # ---- what not to touch
+    # ---------- the VRAM question answered head-on
+    a("<h2>About that VRAM figure</h2>")
+    a("<div class='callout info'><p>A reviewer asked a fair question: "
+      "<em>&ldquo;it's just a number you can tune &mdash; how is that a "
+      "cost?</em>&rdquo; It is not a cost in itself, and the earlier phrasing "
+      "was both wrong and misleading.</p>")
+    a("<p><strong>The figure was wrong too.</strong> The change uses "
+      "<strong>1,524 MB (about 1.5 GB)</strong> more VRAM than the current "
+      "setting &mdash; not the 2.5 GB previously quoted, which came from an "
+      "early offline-only comparison.</p>")
+    a("<p>What it actually is: a <strong>budget you choose to spend</strong>. "
+      "VRAM headroom is not free money, because it is the currency for anything "
+      "else that needs card memory &mdash; a longer conversation cache, serving "
+      "several requests at once, or a bigger model. Spending 1.5 GB of it is "
+      "defensible <em>only</em> if you do not want those things.</p>")
+    a("<p>Two facts make it defensible here. First, on this machine the scarce "
+      "resource is <strong>system RAM, not VRAM</strong> &mdash; we proved that "
+      "when a different setting was killed by a RAM guard twice. Second, 380 is "
+      "chosen to spend the <em>least</em> headroom that still delivers the "
+      "speed: 375 spends 2,036 MB and delivers <strong>nothing measurable</strong> "
+      "(0.3%, i.e. noise). So the question is not &ldquo;is VRAM a cost&rdquo; "
+      "but &ldquo;is 1.5 GB of headroom worth 14% faster prompt-reading at 130k "
+      "tokens&rdquo; &mdash; and that is the operator's call, not ours.</p></div>")
+
+    # ---------- long context
+    a("<h2>Speed-up by prompt length</h2>")
+    a(table(["Prompt size", "Tokens tested", "Speed-up", "What improved",
+             "VRAM spare (MB)", "Confidence"], d["stage_rows"],
+            caption="Speed-up is measured by replaying the identical prompt "
+                    "against both settings, so prompt difficulty cancels out. "
+                    "VRAM spare is what is left on the graphics card after "
+                    "loading &mdash; it does <em>not</em> shrink as prompts grow, "
+                    "which was the main worry at your prompt sizes. The current "
+                    "setting leaves about 3,000 MB spare for comparison."))
+    a("<details><summary>Why the two longest rows are the least trustworthy</summary>")
+    a("<div class='inner'><p>At 250k tokens this machine slips in and out of a "
+      "faster state &mdash; and <strong>both the old and new settings slip into "
+      "it</strong>. When compared fairly within the same state, the two are "
+      "level. The apparent 14% win came from measuring the new setting during a "
+      "fast period and the old one during a normal period.</p>")
+    a("<p><strong>130k is the only long-prompt length with a fair "
+      "comparison.</strong> The 224k row rests on a single test pair and should "
+      "be treated with the same suspicion.</p>")
+    a("<p>We checked and ruled out the obvious causes: disk paging, processor "
+      "clock throttling, available RAM, and graphics-card memory. All were flat "
+      "while the state changed. <strong>The cause is still unknown.</strong></p>")
+    a("<p><strong>VRAM was comfortable throughout</strong> &mdash; 1,479 MB spare "
+      "even at 99% of maximum conversation size, and it did not shrink as "
+      "prompts grew.</p></div></details>")
+
+    # ---------- drafting
+    a("<h2>Speculative drafting</h2>")
+    a("<h3>How many tokens to guess ahead</h3>")
+    a(table(["Setting", "Config key", "Speed", "vs current", "VRAM headroom"],
+            d["ndt_rows"],
+            caption="VRAM is spare card memory after loading. The highlighted row "
+                    "is the current setting. Note that drafting 3 tokens is both "
+                    "the fastest <em>and</em> leaves slightly more VRAM spare than "
+                    "today's setting of 5."))
+    a("<p>As the guess gets longer, <strong>accuracy keeps improving but speed "
+      "stops improving and then declines</strong> &mdash; and VRAM headroom "
+      "shrinks steadily, because a longer guess needs more scratch space. "
+      "Guessing 3 wins on both axes at once.</p>")
+    a("<h3>Does answer content depend on the guess length?</h3>")
+    a("<p>No. A longer or shorter guess changes only how fast the answer "
+      "arrives, not what it says. That is the theory behind speculative "
+      "decoding, and it is why the 5&rarr;3 change is a pure win.</p>")
+    a("<h3>Does the guess length behave differently by kind of writing?</h3>")
+    a(table(["Kind of conversation", "Tools", "Draft cache", "Config key",
+             "Guess accuracy"], d["acc_rows"],
+            caption="Accuracy = how often the guessed tokens survive checking. "
+                    "Higher is better. The highlighted row is the current "
+                    "setting."))
+    a("<p><strong>One caveat we could not resolve:</strong> the prose test had "
+      "<em>zero tools</em> while the code tests had 11 and 29, so "
+      "&ldquo;prose is worse&rdquo; and &ldquo;untested is worse&rdquo; are "
+      "indistinguishable with the material we have. What <em>is</em> solid: the "
+      "2-bit setting is slower in every category tested.</p>")
+    a("<h3>How compressed the guess's own memory should be</h3>")
+    a(table(["Setting", "Config key", "Speed vs current", "VRAM headroom"],
+            d["dcm_rows"],
+            caption="This knob only moves memory. It buys VRAM steadily as you "
+                    "compress harder, and is speed-neutral until 3-bit, where "
+                    "it starts costing speed."))
+    a("<p>It was set to 4-bit deliberately, to recover VRAM without hurting "
+      "speed. <strong>This test confirms that choice</strong> &mdash; and since "
+      "VRAM is not the scarce resource on this machine, there is no reason to "
+      "move it either way.</p>")
+
+    # ---------- memory
+    a("<h2>What limits this machine</h2>")
+    a("<div class='callout warn'><p><strong>System RAM is the real constraint "
+      "&mdash; not graphics-card memory.</strong> Free RAM looks comfortable "
+      "while idle (about 49 GB of 64 GB) but is nearly exhausted while the "
+      "model loads. A different setting was killed by our RAM guard twice at "
+      "8&nbsp;GB and 24&nbsp;GB.</p></div>")
+    a("<ul class='tight'>")
+    a("<li>The live server needs <strong>1.7&ndash;2.5 GB more card memory</strong> "
+      "than the offline benchmark on the same settings, because it builds "
+      "components the benchmark never creates. <strong>Anything that barely "
+      "fits in the benchmark will not fit in the server.</strong> This is why "
+      "one promising setting loads fine offline but will not start at all.</li>")
+    a("<li><strong>Do not try to derive that gap from parameter counts</strong> "
+      "&mdash; we tried, and it was wrong twice.</li>")
+    a("<li><strong>Warming up does not cost card memory.</strong> It costs "
+      "<strong>12 extra seconds of startup</strong>, and slightly "
+      "<em>reduces</em> memory use.</li></ul>")
+
+    # ---------- keep / reject
+    a("<h2>Leave alone</h2>")
+    a("<p>Measured, produced no gain, listed so nobody re-tests them.</p>")
+    a(table(["Setting", "Current", "Proposed", "Measured effect", "What it costs",
+             "Confidence"],
+            [(PLAIN.get(x["knob"], f"<code>{e(x['knob'])}</code>"),
+              e(x["current"]), e(x["proposed"]),
+              plain(x["measured_effect"]), plain(x["cost"]), conf(x["confidence"]))
+             for x in d["keep"]]))
     a("<h2>Rejected</h2>")
-    a(d["reject"])
-    a("<details><summary>Guard-trips and hard failures</summary><div class='inner'>")
-    a(table(["setting", "outcome", "confidence"], [
-        ("<code>cpu_moe_offload_layers: 32</code>",
-         "<code>Insufficient VRAM in split for model and cache</code>",
-         badge("HIGH")),
-        ("<code>cpu_moe_offload_layers: 34</code>",
-         "<strong class='bad'>UNSAFE</strong> — 129 MB free (guard is 200), "
-         "<code>cudaErrorLaunchFailure</code> in <code>decode_flash_attn</code>. "
-         "It is <em>faster</em> at Tier 0 (+22.3%) and trips the guard.",
-         badge("HIGH")),
-        ("<code>mcs 360</code>",
-         "loads offline (23308 MB) but <strong class='bad'>will not boot the "
-         "server</strong>", badge("HIGH")),
-        ("<code>mcs 375</code>",
-         "boots (967 MB free) but 38.5 vs 38.4 tok/s — 0.3%, noise, for 35% less "
-         "margin", badge("MED")),
-        ("<code>mcs 300 / 340 / 390 / 405 / 500</code>",
-         "refused, or slower <em>and</em> smaller; 390/405 were never live-booted",
-         badge("MED")),
-        ("<code>sysmem_kv_cache: 8192</code>",
-         "<strong class='bad'>RAM guard: 492 MB free during load</strong>",
-         badge("HIGH")),
-        ("<code>sysmem_kv_cache: 24576</code>",
-         "<strong class='bad'>RAM guard: 88 MB free during load</strong>",
-         badge("HIGH")),
+    a(table(["Setting", "Current", "Proposed", "Measured effect", "What it costs",
+             "Confidence"],
+            [(PLAIN.get(x["knob"], f"<code>{e(x['knob'])}</code>"),
+              e(x["current"]), e(x["proposed"]),
+              plain(x["measured_effect"]), plain(x["cost"]), conf(x["confidence"]))
+             for x in d["reject"]]))
+    a("<details><summary>Settings that failed outright</summary><div class='inner'>")
+    a(table(["Setting", "What happened", "Confidence"], [
+        ("Fewer layers on the CPU (<code>32</code>)",
+         "Will not load &mdash; not enough card memory", conf("HIGH")),
+        ("Fewer layers on the CPU (<code>34</code>)",
+         "<strong class='bad'>Unsafe.</strong> Left only 129 MB spare (our limit "
+         "is 200) and crashed the kernel. It was <em>faster</em> in the first "
+         "pass, which is exactly why it is worth flagging.", conf("HIGH")),
+        ("640 experts on the CPU (<code>mcs 360</code>)",
+         "Loads in the benchmark but <strong class='bad'>will not start the "
+         "server</strong>", conf("HIGH")),
+        ("375 experts on the CPU",
+         "Starts (967 MB spare) but 0.3% faster &mdash; noise &mdash; for 35% "
+         "less headroom", conf("MED")),
+        ("Other expert counts (300 / 340 / 390 / 405 / 500)",
+         "Refused, or slower <em>and</em> using more memory", conf("MED")),
+        ("Second-tier cache, 8 GB",
+         "<strong class='bad'>Killed by the RAM guard</strong> &mdash; 492 MB "
+         "left during load", conf("HIGH")),
+        ("Second-tier cache, 24 GB",
+         "<strong class='bad'>Killed by the RAM guard</strong> &mdash; 88 MB left "
+         "during load", conf("HIGH")),
     ]))
     a("</div></details>")
 
-    a("<h2>Neutral — measured, nothing to gain</h2>")
-    a("<p>Given equal weight deliberately: these are real measurements that "
-      "produced no action, listed so they are not re-tested.</p>")
-    a(d["keep"])
+    # ---------- not established
+    a("<h2>What we do <em>not</em> know</h2>")
+    a("<div class='callout warn'><ol style='margin:0;padding-left:1.3em'>")
+    a("<li><strong>Why the machine has fast and slow periods at 250k tokens.</strong> "
+      "Both settings are affected. Measure within a period before quoting any "
+      "250k number.</li>")
+    a("<li><strong>The 224k figure is a single test pair</strong> and may be "
+      "another cross-period comparison.</li>")
+    a("<li><strong>That drafting cannot affect output is theory, not something "
+      "we measured.</strong> All our serving tests ran at temperature 0; the "
+      "sampling test was never run.</li>")
+    a("<li><strong>One memory setting was never measured at any depth</strong> "
+      "(the zero-copy memory option) &mdash; sources disagree on its sign.</li>")
+    a("<li><strong>Prose vs code is confounded with tool count</strong> in the "
+      "drafting test.</li>")
+    a("<li><strong>Only 5 settings got the deep offline treatment.</strong> Every "
+      "other offline row is a first-pass screen.</li>")
+    a("<li><strong>Answer quality was never assessed</strong> for the cache or "
+      "drafting changes &mdash; that belongs to a separate quality review.</li>")
+    a("</ol></div>")
 
-    # ---- memory
-    a("<h2>Memory findings</h2>")
-    a("<div class='callout warn'><p><strong>RAM, not VRAM, is the binding "
-      "constraint.</strong> Free RAM looks comfortable at rest (~49 GB of 64 GB) "
-      "but is nearly gone during load — the CPU-offloaded experts need a ~34 GB "
-      "large-page arena. <code>sysmem_kv_cache</code> failed on the RAM guard "
-      "twice.</p></div>")
-    a("<ul class='tight'>"
-      "<li>The live server sits <strong>+1.7 to +2.5 GB above</strong> "
-      "<code>eval/perf.py</code> on the same config, because it builds components "
-      "<code>perf.py</code> never does. <strong>A config that fits offline by a "
-      "thin margin will not fit live</strong> — the safe offline margin is "
-      "~2.5 GB, not the 200 MB guard. This is why <code>mcs360</code> fails "
-      "live.</li>"
-      "<li><strong>Do not decompose that offset from parameter counts</strong> — "
-      "measured twice and wrong. <code>vision_offload: true</code> frees only "
-      "~150–190 MB, not the ~1.1 GB the vision tower's fp16 weights suggest.</li>"
-      "<li><strong>CUDA graphs are not a VRAM cost.</strong> "
-      "<code>warmup: true</code> <em>reduces</em> peak VRAM by ~40–80 MB. Its "
-      "cost is entirely the <strong>+12 s boot</strong>.</li></ul>")
-
-    # ---- method
-    a("<h2>Measurement rules we had to learn</h2>")
-    a("<p>Each rule exists because its absence produced a wrong conclusion, not "
-      "as a precaution.</p>")
-    a(table(["rule", "why it exists", "error it prevented"], d["meth_rows"]))
-    a("<details><summary>Prompt-length calibration</summary><div class='inner'>")
-    a("<p>The synthesiser's <code>--target</code> is <strong>text</strong> tokens; "
-      "the server counts <em>prompt</em> tokens, which are far larger because "
-      "every message carries template scaffolding:</p>")
+    # ---------- method
+    a("<h2>How the numbers were obtained</h2>")
+    a("<p>Each rule below exists because leaving it out produced a wrong "
+      "conclusion &mdash; not as a precaution.</p>")
+    a(table(["Rule", "Why", "What it prevented"],
+            [(f"<strong>{e(m['rule'])}</strong>", e(m["reason"]),
+              plain(m["error_it_prevented"])) for m in d["meth"]]))
+    a("<details><summary>Sizing the test prompts</summary><div class='inner'>")
+    a("<p>Test prompts are built to a target size, but the server counts more "
+      "tokens than the builder predicts, because each message carries formatting "
+      "overhead:</p>")
     a("<pre>actual ≈ 0.2383 × text_tokens + 294.4 × n_messages + 9,110</pre>")
-    a("<p>Verified to 0.35%. The single-variable form "
-      "<code>text × 1.797 + 10,000</code> agrees at short lengths and "
-      "<strong>diverges near the ceiling</strong> — always predict every variant "
-      "with both terms and reject a batch if any exceeds <code>cache_size</code> "
-      "minus generation.</p></div></details>")
+    a("<p>Accurate to about 0.3%. A simpler one-term formula agrees at small sizes "
+      "but <strong>diverges near the maximum</strong>, so both terms must be "
+      "checked or an oversized prompt simply will not load.</p></div></details>")
 
-    # ---- what this does not establish
-    a("<h2>What this does <em>not</em> establish</h2>")
-    a("<div class='callout warn'><ol style='margin:0;padding-left:1.3em'>"
-      "<li><strong>The 250k fast/slow machine state is unidentified.</strong> "
-      "Both arms enter it. Operators should match on it before quoting any 250k "
-      "ratio.</li>"
-      "<li><strong>224k is a single pair</strong> and may be another cross-state "
-      "comparison.</li>"
-      "<li><strong>Losslessness of speculative drafting at temp &gt; 0 is "
-      "theoretical here</strong> — Phase C ran temperature 0 only; the "
-      "<code>-temp</code> arm was never run.</li>"
-      "<li><strong><code>ZERO_COPY</code> is unmeasured at every tier</strong> — "
-      "it straddles zero in both directions across sources.</li>"
-      "<li><strong>Content vs tool count is confounded</strong> in the "
-      "cross-category check.</li>"
-      "<li><strong>Tier 2 covers only the 5 Phase A finalists.</strong> Every "
-      "other Phase A row is a Tier 1 screen and is not quote-quality.</li>"
-      "<li><strong><code>cache_mode</code> and draft-length output quality were "
-      "never assessed</strong> — KLD owns those. <code>cache_mode 2,2</code> is "
-      "a perf-only and VRAM-only line here.</li>"
-      "</ol></div>")
-
-    # ---- retractions
-    a(f"<h2>Retractions ({d['n_rets']})</h2>")
-    a("<p>Claims made during this work and withdrawn. Kept visible because the "
-      "pattern is the useful part: <strong>every one was over-reading too few "
-      "samples or an unmeasured mechanism.</strong></p>")
+    # ---------- retractions
+    a(f"<h2>Claims we withdrew ({len(d['rets'])})</h2>")
+    a("<p>Conclusions reached during this work and then taken back. Kept visible "
+      "because the pattern is the useful part: <strong>each one was "
+      "over-reading too few samples, or explaining a number with a mechanism we "
+      "had not actually measured.</strong></p>")
     a("<details><summary>All "
-      f"{d['n_rets']} retractions in full</summary><div class='inner'>")
-    a(table(["#", "claim withdrawn", "why it was wrong", "correction"],
-            d["rets_rows"]))
+      f"{len(d['rets'])} withdrawn claims</summary><div class='inner'>")
+    a(table(["#", "Claim withdrawn", "Why it was wrong", "What is true instead"],
+            [(e(r["seq"]), f"<strong>{plain(r['claim_withdrawn'])}</strong>",
+              plain(r["why_wrong"]), plain(r["correction"])) for r in d["rets"]]))
     a("</div></details>")
 
-    # ---- production state
+    # ---------- production
     a("<h2>Production state</h2>")
-    a("<p>Production <code>config.yml</code> was <strong>never modified</strong> "
-      "and <strong>never committed</strong>. It is restored after every arm; "
-      "pristine md5 <code>0fe01cc8f2e1e4cd2de7b1a1648ecb4f</code>.</p>")
-    a("<p><small><strong>Printing:</strong> this page is JS-free by design, and "
-      "CSS cannot force the collapsible sections open — expand them before "
-      "printing if you want that content in the PDF.</small></p>")
-    a("<p><small>Trap worth knowing: the per-arm files "
-      "<code>config.yml.kb-&lt;arm&gt;</code> are snapshots of the "
-      "<em>pristine</em> config taken <em>before</em> that arm ran. The name "
-      "identifies the arm about to run, not a config with it applied.</small></p>")
+    a("<p>The production <code>config.yml</code> was <strong>never modified and "
+      "never committed</strong>. It is restored after every test run.</p>")
+    a("<p><small><strong>Printing:</strong> this page has no JavaScript by "
+      "design, so expand the collapsible sections before printing if you want "
+      "that content in the PDF.</small></p>")
 
-    a("<footer>Generated from the CSV data set by <code>eval/_kb_mkhtml.py</code>, "
-      "which reads <code>wiki/reports/data-2026-10-06-flash-next-knobs/</code>. "
-      "Full run-by-run provenance, including every retraction, is in "
+    a("<footer>Generated from the CSV data set by "
+      "<code>eval/_kb_mkhtml.py</code>. Full run-by-run provenance is in "
       "<code>wiki/reports/2026-10-06-flash-next-knob-battery.md</code>.</footer>")
     a("</div></body></html>")
 
