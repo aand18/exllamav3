@@ -3,9 +3,12 @@
 Every tunable on 3.05bpw Flash-Next serving (48 MoE layers, MTP head),
 RTX 4090 24 GB + 7950X3D (16C/32T, 128 MB L3), Win11 + WSL2.
 
-This is the **readable summary**. The full run-by-run record, including seven
+This is the **readable summary**. The full run-by-run record, including eleven
 retractions of my own earlier claims, is the audit trail in
-`2026-10-06-flash-next-knob-battery.md`. Where the two disagree, the audit trail
+`2026-10-06-flash-next-knob-battery.md`. A machine-readable data set sits in
+[`data-2026-10-06-flash-next-knobs/`](data-2026-10-06-flash-next-knobs/) —
+`measurements`, `long-context`, `draft`, `decisions`, `retractions`,
+`methodology` — regenerable with `eval/_kb_mkcsv.py`. Where the two disagree, the audit trail
 shows how the number was reached; this document shows what is currently believed.
 
 **Scope tested:** 33 offline arms (Phase A), 10 draft arms (Phase B), 19 live-server

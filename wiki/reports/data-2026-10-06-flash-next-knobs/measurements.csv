@@ -1,0 +1,256 @@
+phase,tier,arm,n_runs,tg_tps_median,tg_tps_min,tg_tps_max,pp256,pp4096,pp_tps_median,pp_tps_min,pp_tps_max,boot_s,boot_s_min,boot_s_max,vram_peak_mb,vram_minfree_mb,ram_free_after_mb,status,source,note
+A_offline_perf.py,,a00-baseline,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a01-mcl36,1,,,,,,,,,,,,20622,3517,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a02-mcl40,1,,,,,,,,,,,,17036,7103,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a03-mcl42,1,,,,,,,,,,,,15258,8881,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a04-cq22,1,,,,,,,,,,,,17876,6263,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a05-cq44,1,,,,,,,,,,,,18644,5495,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a06-cq88,1,,,,,,,,,,,,20268,3871,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a07-chunk2048,1,,,,,,,,,,,,18348,5791,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a08-chunk8192,1,,,,,,,,,,,,19778,4361,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a09-ambs1,1,,,,,,,,,,,,18720,5419,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a10-thr1,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a11-thr2,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a12-thr4,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a13-thr12,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a14-st3,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a15-st12,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a16-be24,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a17-pin0,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a18-swz0,1,,,,,,,,,,,,18794,5345,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a19-zc0,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a20-mcs405,1,,,,,,,,,,,,0,,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a21-mcs300,1,,,,,,,,,,,,0,,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a22-mcs500,1,,,,,,,,,,,,0,,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a23-mcs405-thr2,1,,,,,,,,,,,,0,,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a00-baseline,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a00-baseline,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a24-mcl34,1,,,,,,,,,,,,22554,1585,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a24-mcl34,1,,,,,,,,,,,,22554,1585,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a25-mcl32,1,,,,,,,,,,,,21968,2171,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a25-mcl32,1,,,,,,,,,,,,21968,2171,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a26-thr16,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a26-thr16,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a27-thr24,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a27-thr24,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a20-mcs405,1,,,,,,,,,,,,18540,5599,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a20-mcs405,1,,,,,,,,,,,,18540,5599,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a21-mcs300,1,,,,,,,,,,,,22488,1651,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a21-mcs300,1,,,,,,,,,,,,22488,1651,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a22-mcs500,1,,,,,,,,,,,,11078,13061,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a22-mcs500,1,,,,,,,,,,,,11078,13061,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a23-mcs405-thr2,1,,,,,,,,,,,,18540,5599,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a23-mcs405-thr2,1,,,,,,,,,,,,18540,5599,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a00-baseline,1,,,,,,,,,,,,19822,4317,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a00-baseline,1,,,,,,,,,,,,19822,4317,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a24-mcl34,1,,,,,,,,,,,,23936,203,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a24-mcl34,1,,,,,,,,,,,,23936,203,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a04-cq22,1,,,,,,,,,,,,17876,6263,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a04-cq22,1,,,,,,,,,,,,17876,6263,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a07-chunk2048,1,,,,,,,,,,,,18998,5141,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a07-chunk2048,1,,,,,,,,,,,,18998,5141,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a08-chunk8192,1,,,,,,,,,,,,20008,4131,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a08-chunk8192,1,,,,,,,,,,,,20008,4131,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a09-ambs1,1,,,,,,,,,,,,19690,4449,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a09-ambs1,1,,,,,,,,,,,,19690,4449,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a13-thr12,1,,,,,,,,,,,,20350,3789,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a13-thr12,1,,,,,,,,,,,,20350,3789,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a26-thr16,1,,,,,,,,,,,,19824,4315,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a26-thr16,1,,,,,,,,,,,,19824,4315,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a14-st3,1,,,,,,,,,,,,19928,4211,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a14-st3,1,,,,,,,,,,,,19928,4211,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a15-st12,1,,,,,,,,,,,,19822,4317,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a15-st12,1,,,,,,,,,,,,19822,4317,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a16-be24,1,,,,,,,,,,,,20352,3787,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a16-be24,1,,,,,,,,,,,,20352,3787,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a00-baseline,1,,,,,,,,,,,,20350,3789,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a00-baseline,1,,,,,,,,,,,,20350,3789,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a24-mcl34,1,,,,,,,,,,,,24010,129,,GUARD_KILL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a24-mcl34,1,,,,,,,,,,,,24010,129,,GUARD_KILL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a04-cq22,1,,,,,,,,,,,,19354,4785,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a04-cq22,1,,,,,,,,,,,,19354,4785,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a09-ambs1,1,,,,,,,,,,,,20216,3923,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a09-ambs1,1,,,,,,,,,,,,20216,3923,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a26-thr16,1,,,,,,,,,,,,19926,4213,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a26-thr16,1,,,,,,,,,,,,19926,4213,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a15-st12,1,,,,,,,,,,,,20350,3789,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a15-st12,1,,,,,,,,,,,,20350,3789,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a28-mcs360,1,,,,,,,,,,,,22486,1653,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a28-mcs360,1,,,,,,,,,,,,22486,1653,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a29-mcs380,1,,,,,,,,,,,,21074,3065,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a29-mcs380,1,,,,,,,,,,,,21074,3065,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a30-mcs340,1,,,,,,,,,,,,22330,1809,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a30-mcs340,1,,,,,,,,,,,,22330,1809,,FAIL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a31-mcs390,1,,,,,,,,,,,,20064,4075,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a31-mcs390,1,,,,,,,,,,,,20064,4075,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a00-baseline,1,,,,,,,,,,,,23970,169,,GUARD_KILL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a00-baseline,1,,,,,,,,,,,,23970,169,,GUARD_KILL,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a01-mcl36,1,,,,,,,,,,,,22110,2029,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a01-mcl36,1,,,,,,,,,,,,22110,2029,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a04-cq22,1,,,,,,,,,,,,19356,4783,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a04-cq22,1,,,,,,,,,,,,19356,4783,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a28-mcs360,1,,,,,,,,,,,,23308,831,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a28-mcs360,1,,,,,,,,,,,,23308,831,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a29-mcs380,1,,,,,,,,,,,,21186,2953,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a29-mcs380,1,,,,,,,,,,,,21186,2953,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a32-mcs380-thr16,1,,,,,,,,,,,,21186,2953,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a32-mcs380-thr16,1,,,,,,,,,,,,21186,2953,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a00-baseline,1,,,,,,,,,,,,20354,3785,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,1,a00-baseline,1,,,,,,,,,,,,20354,3785,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a00-baseline,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a00-baseline,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a00-baseline,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a00-baseline,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a00-baseline,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,0,a00-baseline,1,,,,,,,,,,,,18858,5281,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a00-baseline,1,,,,,,,,,,,,20356,3783,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a00-baseline,1,,,,,,,,,,,,20356,3783,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a04-cq22,1,,,,,,,,,,,,19358,4781,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a04-cq22,1,,,,,,,,,,,,19358,4781,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a26-thr16,1,,,,,,,,,,,,20356,3783,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a26-thr16,1,,,,,,,,,,,,20356,3783,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a29-mcs380,1,,,,,,,,,,,,21074,3065,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a29-mcs380,1,,,,,,,,,,,,21074,3065,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a32-mcs380-thr16,1,,,,,,,,,,,,21062,3077,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a32-mcs380-thr16,1,,,,,,,,,,,,21062,3077,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a00-baseline,1,,,,,,,,,,,,20356,3783,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a00-baseline,1,,,,,,,,,,,,20356,3783,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a04-cq22,1,,,,,,,,,,,,19360,4779,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a04-cq22,1,,,,,,,,,,,,19360,4779,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a26-thr16,1,,,,,,,,,,,,20356,3783,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a26-thr16,1,,,,,,,,,,,,20356,3783,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a29-mcs380,1,,,,,,,,,,,,21074,3065,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a29-mcs380,1,,,,,,,,,,,,21074,3065,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a32-mcs380-thr16,1,,,,,,,,,,,,21074,3065,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a32-mcs380-thr16,1,,,,,,,,,,,,21074,3065,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a00-baseline,1,,,,,,,,,,,,20354,3785,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a00-baseline,1,,,,,,,,,,,,20354,3785,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a04-cq22,1,,,,,,,,,,,,19782,4357,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a04-cq22,1,,,,,,,,,,,,19782,4357,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a26-thr16,1,,,,,,,,,,,,19934,4205,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a26-thr16,1,,,,,,,,,,,,19934,4205,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a29-mcs380,1,,,,,,,,,,,,21022,3117,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a29-mcs380,1,,,,,,,,,,,,21022,3117,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a32-mcs380-thr16,1,,,,,,,,,,,,21022,3117,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a32-mcs380-thr16,1,,,,,,,,,,,,21022,3117,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a00-baseline,1,,,,,,,,,,,,20356,3783,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a00-baseline,1,,,,,,,,,,,,20356,3783,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,,a04-cq22,1,,,,,,,,,,,,19784,4355,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+A_offline_perf.py,2,a04-cq22,1,,,,,,,,,,,,19784,4355,,OK,phaseA.jsonl,Phase A throughput NOT recoverable from disk: the per-arm .out files were overwritten by later runs. vram/status are from jsonl and are authoritative.
+B_offline_spec_decode.py,,b00-baseline,1,,,,,,,,,,,,24050,89,,GUARD_KILL,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b00-baseline,1,,,,,,,,,,,,24050,89,,GUARD_KILL,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b01-ndt4-dyn,1,,,,,,,,,,,,24054,85,,GUARD_KILL,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b01-ndt4-dyn,1,,,,,,,,,,,,24054,85,,GUARD_KILL,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b02-ndt3-dyn,1,,,,,,,,,,,,24046,93,,GUARD_KILL,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b02-ndt3-dyn,1,,,,,,,,,,,,24046,93,,GUARD_KILL,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b03-ndt6-probe,1,,,,,,,,,,,,24040,99,,GUARD_KILL,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b03-ndt6-probe,1,,,,,,,,,,,,24040,99,,GUARD_KILL,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b04-ndt5-static,1,,,,,,,,,,,,24026,113,,GUARD_KILL,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b04-ndt5-static,1,,,,,,,,,,,,24026,113,,GUARD_KILL,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b05-ndt3-static,1,,,,,,,,,,,,24020,119,,GUARD_KILL,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b05-ndt3-static,1,,,,,,,,,,,,24020,119,,GUARD_KILL,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b06-draft-off,1,,,,,,,,,,,,24046,93,,GUARD_KILL,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b06-draft-off,1,,,,,,,,,,,,24046,93,,GUARD_KILL,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b00-baseline,1,,,,,,,,,,,,21408,2731,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b00-baseline,1,,,,,,,,,,,,21408,2731,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b01-ndt4-dyn,1,,,,,,,,,,,,21170,2969,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b01-ndt4-dyn,1,,,,,,,,,,,,21170,2969,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b02-ndt3-dyn,1,,,,,,,,,,,,21152,2987,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b02-ndt3-dyn,1,,,,,,,,,,,,21152,2987,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b03-ndt6-probe,1,,,,,,,,,,,,21662,2477,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b03-ndt6-probe,1,,,,,,,,,,,,21662,2477,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b04-ndt5-static,1,,,,,,,,,,,,21364,2775,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b04-ndt5-static,1,,,,,,,,,,,,21364,2775,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b05-ndt3-static,1,,,,,,,,,,,,21142,2997,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b05-ndt3-static,1,,,,,,,,,,,,21142,2997,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b06-draft-off,1,,,,,,,,,,,,19758,4381,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b06-draft-off,1,,,,,,,,,,,,19758,4381,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b00-baseline,1,,,,,,,,,,,,21414,2725,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b00-baseline,1,,,,,,,,,,,,21414,2725,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b07-ndt7-dyn,1,,,,,,,,,,,,21878,2261,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b07-ndt7-dyn,1,,,,,,,,,,,,21878,2261,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b08-ndt8-dyn,1,,,,,,,,,,,,22104,2035,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b08-ndt8-dyn,1,,,,,,,,,,,,22104,2035,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b09-ndt10-dyn,1,,,,,,,,,,,,22594,1545,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b09-ndt10-dyn,1,,,,,,,,,,,,22594,1545,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b03-ndt6-probe,1,,,,,,,,,,,,21662,2477,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b03-ndt6-probe,1,,,,,,,,,,,,21662,2477,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b02-ndt3-dyn,1,,,,,,,,,,,,21152,2987,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b02-ndt3-dyn,1,,,,,,,,,,,,21152,2987,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,,b00-baseline,1,,,,,,,,,,,,21408,2731,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+B_offline_spec_decode.py,0,b00-baseline,1,,,,,,,,,,,,21408,2731,,OK,phaseB.jsonl,"tg/acc per arm are in draft.csv (sweep run, baseline-bracketed)."
+C_live_server,,c00-baseline,1,36.1,,,,,,,,65.7,,,21168,2971,11910,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,54.3,,,,,,,,63.4,,,22882,1257,11929,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,36,,,,,102,,,65.6,,,21186,2953,10047,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,46.4,,,,,239,,,63.4,,,22628,1511,10172,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,36.3,,,,,219,,,65.5,,,21218,2921,10000,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,48.9,,,,,248,,,63.6,,,22850,1289,10145,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,36.3,,,,,221,,,65.6,,,21104,3035,8432,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,47.8,,,,,248,,,65.4,,,22660,1479,8804,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,36,,,,,1285,,,67.6,,,21104,3035,8747,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,51.7,,,,,1421,,,63.5,,,22596,1543,8886,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,35.7,,,,,1438,,,65.5,,,21104,3035,8783,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,52.2,,,,,1405,,,63.3,,,22660,1479,9075,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c25-rci-4096,1,34.8,,,,,1347,,,67.6,,,21104,3035,10228,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c24-rci-pp-8192,1,34.1,,,,,1263,,,65.5,,,21168,2971,10389,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,41.2,,,,,1626,,,67.7,,,21136,3003,7779,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,61,,,,,1648,,,63.4,,,22596,1543,8065,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,35.4,,,,,1273,,,67.6,,,21168,2971,7203,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,52.5,,,,,1350,,,63.4,,,22628,1511,7591,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,33.6,,,,,1703,,,65.4,,,21186,2953,7985,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,53.8,,,,,1488,,,63.6,,,22660,1479,8207,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c13-thr16,1,48.1,,,,,1525,,,63.2,,,21104,3035,8413,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c16-mcs380,1,38.9,,,,,1501,,,67.7,,,22660,1479,8199,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c13-thr16,1,50.7,,,,,1470,,,63.4,,,21104,3035,8146,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c16-mcs380,1,37.9,,,,,1607,,,65.7,,,22628,1511,8467,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,36.9,,,,,1659,,,65.5,,,21136,3003,7116,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c16-mcs380,1,36,,,,,1705,,,65.7,,,22596,1543,7451,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,34.9,,,,,1519,,,65.6,,,21136,3003,7650,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,42,,,,,1512,,,65.6,,,21136,3003,8945,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,62,,,,,1695,,,63.5,,,22628,1511,8654,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,40.6,,,,,1509,,,65.5,,,21136,3003,8802,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,61,,,,,1741,,,63.5,,,22628,1511,9300,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c13-thr16,1,56.3,,,,,1520,,,63.3,,,21168,2971,8657,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c16-mcs380,1,44.8,,,,,1717,,,65.6,,,22660,1479,9105,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c13-thr16,1,57.2,,,,,1521,,,63.4,,,21104,3035,7990,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c16-mcs380,1,44.6,,,,,1720,,,65.5,,,22660,1479,8407,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,42.5,,,,,1509,,,69.8,,,21136,3003,7662,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,63,,,,,1676,,,63.4,,,22660,1479,8097,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,42.2,,,,,1513,,,65.5,,,21136,3003,8174,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,60.8,,,,,1525,,,63.5,,,22660,1479,8265,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,34.2,,,,,1381,,,67.6,,,21168,2971,7376,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c24-rci-pp-8192,1,28.1,,,,,1340,,,65.6,,,21136,3003,4946,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,31.5,,,,,1205,,,67.7,,,21136,3003,7483,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c24-rci-pp-8192,1,17.6,,,,,1324,,,65.5,,,21104,3035,5251,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,42.4,,,,,1511,,,65.4,,,21136,3003,8520,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,62.5,,,,,1678,,,63.3,,,22628,1511,8353,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,42.4,,,,,1513,,,65.5,,,21186,2953,7616,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,61.2,,,,,1522,,,63.2,,,22628,1511,7932,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,36.5,,,,,1318,,,67.7,,,21136,3003,8630,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c09-dcmFP16,1,36.2,,,,,1184,,,70.6,,,21520,2619,8670,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c08-dcmQ8,1,33.6,,,,,1304,,,68.8,,,21314,2825,8719,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c07-dcm33,1,30.3,,,,,1258,,,71.7,,,21072,3067,8825,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,35.5,,,,,1290,,,65.6,,,21136,3003,8854,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c09-dcmFP16,1,35.6,,,,,1438,,,65.4,,,21488,2651,8881,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,33.3,,,,,1025,,,69.7,,,21136,3003,8324,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c06-dcm22,1,24.8,,,,,1103,,,65.5,,,21072,3067,8474,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,26.5,,,,,1116,,,65.4,,,21104,3035,8479,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,36.5,,,,,,,,65.6,,,21168,2971,8435,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c06-dcm22,1,27.9,,,,,,,,65.6,,,21072,3067,8524,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,38.1,,,,,,,,65.6,,,21136,3003,8537,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,60.4,,,,,1670,,,67.6,,,22882,1257,6891,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,61.2,,,,,1717,,,63.5,,,22596,1543,7299,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,59.2,,,,,1520,,,63.4,,,22660,1479,7445,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,42.2,,,,,1715,,,65.5,,,21168,2971,7751,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,60.8,,,,,1587,,,63.5,,,22628,1511,6754,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,61.2,,,,,1531,,,63.6,,,22660,1479,7818,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,59.8,,,,,1525,,,65.6,,,22660,1479,8211,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,60.3,,,,,1673,,,63.4,,,22660,1479,8219,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,61.1,,,,,1536,,,63.6,,,22628,1511,8138,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,61,,,,,1527,,,63.4,,,22660,1479,7746,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,60.6,,,,,1525,,,63.5,,,22882,1257,7998,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c18-combo,1,61.3,,,,,1527,,,63.5,,,22596,1543,8218,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,42.3,,,,,1512,,,65.4,,,21186,2953,8329,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c00-baseline,1,42,,,,,1516,,,65.6,,,21104,3035,8637,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c26-mcs375,1,38.5,,,,,1416,,,69.7,,,23172,967,9447,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"
+C_live_server,,c16-mcs380,1,38.4,,,,,1362,,,67.7,,,22660,1479,8224,OK,phaseC.jsonl,"arms are runs, not arm aggregates -- aggregate by arm"

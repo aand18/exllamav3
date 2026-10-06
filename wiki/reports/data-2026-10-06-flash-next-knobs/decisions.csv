@@ -1,0 +1,25 @@
+knob,where,current,proposed,verdict,measured_effect,cost,confidence,rationale
+EXL3_MOE_CPU_THREADS,start_tuned.ps1,8,16,ADOPT,+26.1% offline decode; +35.4% live tg; 1.026x at 130k (prefill-neutral),none (no VRAM),HIGH,Largest single win. KEEP if VRAM binds; costs nothing.
+cpu_moe_split_experts,config.yml,"(absent, mcl38)",380,ADOPT,"1.135x alone at 130k (prefill 1507->1725 T/s, +14%); 1.157x combined",~2.5 GB VRAM (min-free 1479-1543MB at 96-99% cache use),HIGH at 130k / MED short-ctx,Floor is measured: 375 boots but is 0.3% (noise) for 35% less margin; 360 will not boot.
+draft_num_tokens,config.yml,5,3,ADOPT,"+7.2% tg, baseline-bracketed sweep 3-10",none,HIGH,"Quality is unaffected by drafting, so acceptance is a speed-only constraint. Ceiling above 5 closed: speed decays past ndt6."
+cache_mode,config.yml,"5,4","2,2",ADOPT,"-2.1% decode (noise), +5.2% pp4096, +998 MB VRAM",none,HIGH (null result),"Kept as VRAM relief, not as a speed change."
+draft_cache_mode,config.yml,Q4,Q4,KEEP,"Q8 1.001 and FP16 1.021 both neutral but cost 178/384 MB; 2,2 and 3,3 slower in all 3 categories",none,MED,Operator chose Q4 deliberately to recover VRAM without hurting tg. Ladder confirms the choice.
+dynamic_draft,config.yml,true,true,KEEP,static is -7.1% tg despite HIGHER acceptance (2.92/5.00 vs 2.78/4.29),none,MED,
+cuda_malloc_async,config.yml,True,True,KEEP,"False costs ~760 MB VRAM, no gain",none,MED,Differs from upstream default; do not 'fix'.
+cpu_moe_offload_layers,config.yml,38,(removed),REPLACE,"mcl34 is faster (Tier 0 +22.3%) but UNSAFE: 129 MB free, cudaErrorLaunchFailure. mcl32 will not load.",n/a,HIGH,Mutually exclusive with cpu_moe_split_experts. Never set both.
+cpu_moe_offload_layers,config.yml,36,(keep 38),REJECT,"-1.5% live tg, +1.7 GB VRAM",+1.7 GB,MED,Direction is down; 36/38/40/42 all tried.
+mcs value below 380,config.yml,-,375,REJECT,boots (967 MB free) but 38.5 vs 38.4 tok/s = 0.3% noise,35% less VRAM margin,MED,Offline predicted +2.4% decode; live delivered none.
+mcs 390 / 405,config.yml,-,"390, 405",REJECT,SLOWER (26.68 / 23.60 tg0) AND smaller footprint (4075 / 5599 MB free),"gains VRAM, loses speed",MED,Never live-booted; offline only.
+sysmem_kv_cache,config.yml,0,0,KEEP,8192 -> RAM guard 492 MB free; 24576 -> RAM guard 88 MB free,n/a,HIGH,INFEASIBLE. Allocated eagerly from the ~34 GB expert arena. RAM is the binding constraint.
+recurrent_checkpoint_interval,config.yml,(unset),(unset),KEEP,"4096 -> ratio 1.013, VRAM unchanged; 512 -> +1.7% pp for +800 MB",none if unset,MED,Neither end earns its place.
+recurrent_checkpoint_interval_pp,config.yml,32768,(keep),KEEP,8192 gives 6.7% cheaper early edits vs 0.7% on default (confirmed: 11% vs 6% cached),2.3 GiB RAM,MED,WORKS but not adopted: RAM is the binding constraint. One-line change if edit-heavy work becomes the norm.
+EXL3_MOE_CPU_PIN,start_tuned.ps1,1,1,KEEP,-13.0% to -19.8% without,none,MED,
+EXL3_MOE_CPU_SWIZZLE,start_tuned.ps1,1,1,KEEP,-3.6% to -11.2% without,none,MED,
+EXL3_MOE_ZERO_COPY,start_tuned.ps1,1,1,KEEP (low conf),-2.5% to +3.5% -- straddles zero across sources,none,LOW,Never measured at any tier.
+EXL3_MOE_STREAM_T,start_tuned.ps1,6,6,KEEP,STREAM_T=12 costs pp256 -40%; STREAM_T=3 is +1.5% tg (noise),none,MED,
+EXL3_MOE_STREAM_BATCH_EXPERTS,start_tuned.ps1,48,48,KEEP,24 -> +2.9% tg (noise),none,LOW,
+EXL3_MOE_MEMOPS,start_tuned.ps1,0,0,SKIP,"not re-measured; plan says 29%, PERF_FINDINGS says +10%",none,SCREEN,Sources disagree; deliberately not measured.
+warmup,config.yml,true,true,KEEP,"+12 s boot, no sustained gain, REDUCES VRAM ~40-80 MB",+12 s boot,HIGH,CUDA graphs are not a VRAM cost.
+vision_offload,config.yml,true,true,KEEP,"false costs ~1.1 GB VRAM, no speed change",none,HIGH,"Frees only ~150-190 MB, not the ~1.1 GB its fp16 weights suggest."
+max_batch_size,config.yml,2,2,KEEP,1 -> +1.9% tg but HALVES serving capacity,halves capacity,LOW,Do not take on speed alone.
+chunk_size,config.yml,4096,4096,KEEP,"8192 -> +4.7 GB VRAM, no gain",none,LOW,

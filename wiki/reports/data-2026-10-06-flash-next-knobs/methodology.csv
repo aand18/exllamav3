@@ -1,0 +1,11 @@
+rule,reason,error_it_prevented
+Interleave the reference arm with every candidate,Session drift is ~10%; consecutive-boot drift is 0.07%. A carried-forward baseline is invisible to any same-batch check.,"Two wrong 130k verdicts ('11% slower', then 'inconclusive')."
+Verify the baseline is stable across its own interleaved runs before quoting a ratio,The 250k batches looked conclusive until this was done.,Revealed the 250k cross-state artifact.
+"Compare turn-matched prompts, not medians over different prompts",Prompt difficulty otherwise dominates the ratio.,Used for every long-context stage.
+For two-role workloads (cold prefill then replay) use the within-boot ratio t2/t1,Identical requests ran 20% apart across boots.,Would have handed rci_pp=8192 a spurious 1.22x.
+Never quote a ratio before the last interleaved arm has finished,"Cheapest rule, most recently learned.","250k was committed as 1.144x from boot 1 of 2; settled at ~1.06x, then parity."
+Verify time alignment before believing any time-correlated claim,Two false correlations came from windows that did not map to the phase discussed.,Killed both the 'cache pressure' theory and the pagefile correlation.
+Sweep any knob whose benefit depends on a learned predictor across content categories,"Content changes the mechanism, not just the constants.",Would have caught that code is NOT MTP's best case.
+Any candidate must live-boot before being proposed,"The live server sits +1.7 to +2.5 GB above eval/perf.py on the same config; safe offline margin is ~2.5 GB, not the 200 MB guard.",mcs360 loads offline and will not boot the server.
+Predict every prompt variant before the first request at a new length,"actual = 0.2383*text + 294.4*msgs + 9,110. A variant over cache_size wastes a 65 s boot and looks like a config regression.",A 258k file would have been ~474k tokens and could never load.
+Capture anything suspected of being boot-level per boot,"The server log used to be <arm>.server.log, so every boot overwrote the last.",The only surviving 250k lead (CPU MoE arena reservation) was unreadable for exactly this reason.

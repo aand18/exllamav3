@@ -1,0 +1,27 @@
+stage,prompt_tokens_actual,arm,boot,n_turns,turn_wall_s,turn_median_s,tg_tps_median,pp_tps_median,ratio_vs_baseline,machine_state,confidence,note
+11-16k_turnmatch,,baseline,1,5,3.89 2.44 2.27 10.88 9.06,3.89,,,1.000,,HIGH,
+11-16k_turnmatch,,combo,1,5,3.64 1.94 1.67 7.09 6.61,3.64,,,1.360,,HIGH,
+55-62k,55239,baseline,1,1,30.71,30.71,,,1.000,,LOW,single interleaved pair
+55-62k,55239,combo,1,1,30.63,30.63,,,1.000,,LOW,single interleaved pair
+55-62k,60634,baseline,1,1,32.85,32.85,,,1.000,,LOW,single interleaved pair
+55-62k,60634,combo,1,1,33.37,33.37,,,0.980,,LOW,single interleaved pair
+130k,129998,baseline,1,4,86.61 86.85 96.48 90.65,88.75,,,1.000,,HIGH,
+130k,129998,combo,1,4,74.78 75.44 82.28 79.53,77.48,61.0,1741,0.860,normal,HIGH,
+130k,129910,baseline,1,4,86.86 86.85 96.09 90.54,88.70,,,1.000,,HIGH,
+130k,129910,combo,2,4,74.78 75.44 82.28 79.53,77.48,,,0.869,normal,HIGH,
+130k,144084,baseline,1,4,96.28 96.09 96.09 90.54,96.09,,,1.000,,HIGH,
+130k,144084,combo,1,2,82.28 79.53,80.91,,,0.855,normal,HIGH,
+130k,142617,baseline,1,2,90.59 90.54,90.56,,,1.000,,HIGH,
+130k,142617,combo,1,2,79.53 82.28,80.91,,,0.878,normal,HIGH,
+250k,249730,baseline,1,4,163.21 162.08 162.47 161.74,162.28,,,1.000,normal,MED,state-matched; both arms enter fast/slow machine state
+250k,249730,combo,1,2,139.97 142.96,141.47,,,0.858,fast,MED,state-matched; both arms enter fast/slow machine state
+250k,249642,baseline,1,4,162.77 162.28 162.25 162.19,162.26,,,1.000,normal,MED,state-matched; both arms enter fast/slow machine state
+250k,249642,combo,1,2,139.63 143.45,141.54,,,0.858,fast,MED,state-matched; both arms enter fast/slow machine state
+250k,251197,baseline,1,4,168.17 167.66 167.11 167.14,167.40,,,1.000,normal,MED,state-matched; both arms enter fast/slow machine state
+250k,251197,combo,1,2,149.77 150.45,150.11,,,0.890,fast,MED,state-matched; both arms enter fast/slow machine state
+250k,259145,baseline,1,4,172.68 172.55 172.28 172.71,172.62,,,1.000,normal,MED,state-matched; both arms enter fast/slow machine state
+250k,259145,combo,1,2,155.27 156.49,155.88,,,0.899,fast,MED,state-matched; both arms enter fast/slow machine state
+250k,249730,combo,2,2,159.31 159.74,159.53,,,0.982,slow,MED,state-matched; both arms enter fast/slow machine state
+250k,249642,combo,2,2,159.12 159.89,159.50,,,0.987,slow,MED,state-matched; both arms enter fast/slow machine state
+250k,251197,combo,2,2,164.24 164.88,164.56,,,0.983,slow,MED,state-matched; both arms enter fast/slow machine state
+250k,259145,combo,2,2,169.77 170.01,169.89,,,0.983,slow,MED,state-matched; both arms enter fast/slow machine state
