@@ -297,12 +297,32 @@ Caps the total recurrent checkpoint RAM for #2. Also holds recurrent cache in
 sysmem generally (`model.py:1022`). More budget ⇒ denser checkpoint grid
 possible ⇒ cheaper edits, at the cost of system RAM. Pairs with #2.
 
-#### 4. `recurrent_checkpoint_interval` — decode-side grid
+#### 4. `recurrent_checkpoint_interval` — decode-side grid. **NEUTRAL, keep default.**
 
-Default is architecture-determined (`None` → engine default). I tested **512**
-only (+1.7% pp, +800 MB VRAM) and never the other direction. Note `512` made
-prefill *better* and VRAM *worse*, which is the opposite of the usual
-"denser grid costs more" intuition and is worth confirming.
+Both directions now measured against baseline (median of per-turn ratios):
+
+| setting | ratio vs base | VRAM peak | verdict |
+|---|---|---|---|
+| `512` | +1.7% pp | **+800 MB** | costs VRAM for a marginal prefill gain |
+| default (`None` → arch) | 1.000 | 21104 MB | keep |
+| `4096` | **1.013** (noise) | **21168 MB** (unchanged) | does nothing |
+
+So neither end of the range earns its place: `512` buys ~nothing for real VRAM,
+and `4096` is indistinguishable from default on both throughput and memory.
+**Leave unset.** The earlier counter-intuitive result (a *denser* grid improving
+prefill while costing VRAM) does not generalise — at `4096` there is no VRAM cost
+at all, so the `512` VRAM penalty was a threshold effect, not a density effect.
+
+#### 2b. `recurrent_checkpoint_interval_pp` — UNEVALUABLE at 17k, by construction
+
+Measured at `8192`: boot 65.5 s, VRAM 21168 MB (≈ baseline), per-turn ratio
+~1.07 (single boot, inside noise). But that number means little: **with the
+32768 default, an 11–16k prompt produces essentially zero checkpoints**, so
+setting 8192 adds one or two and the knob's actual behaviour never engages.
+
+This is a **long-context knob** and can only be judged in the §0.7 pass. Do not
+draw a conclusion from short-context numbers, and do not treat the ~1.07 as a
+regression.
 
 #### 5. `output_chunking` — currently `true`
 
