@@ -586,18 +586,35 @@ the best measured draft setting, and the diff proposal now takes it.
 But the same logic points the sweep the **other way**, and this is the important
 part:
 
-| setting | tg t/s | vs base | acc/draft |
-|---|---|---|---|
-| `off` | 27.21 | −15.3% | — |
-| `ndt3` + dyn | **34.05** | **+6.0%** | 2.20/2.95 |
-| `ndt5` + dyn (prod) | 32.11 | — | 2.78/4.29 |
-| `ndt6` + dyn | 32.40 | +0.9% | **2.98/4.66** |
+### The ceiling sweep above 5 — tested, and it rejects "go up"
 
-**`ndt6` beats `ndt5` on both axes at once** — faster *and* higher acceptance.
-That is the signature of a knob still on the rising side, and it means the
-previous "ceiling is above 6, ndt7/ndt8 untested" was flagged but never chased.
-With quality no longer a constraint, going up is the only direction with
-headroom, and it is now the highest-value draft measurement outstanding.
+`ndt6` beat `ndt5` on both axes, which I took as a sign the knob was still rising.
+**That inference was wrong.** Swept 3 → 10 with the baseline interleaved and
+bracketed at both ends (32.08 / 33.85 t/s, 5.5% spread; baseline mean 32.97):
+
+| setting | tg t/s | vs base | acc | draft |
+|---|---|---|---|---|
+| **`ndt3`** + dyn | **35.34** | **+7.2%** | 2.30 | 2.96 |
+| `ndt5` + dyn (prod) | 32.08 / 33.85 | ref | 2.76 / 3.00 | 4.23 / 4.38 |
+| `ndt6` + dyn | 33.13 | +0.5% | 3.11 | 4.77 |
+| `ndt7` + dyn | 32.68 | −0.9% | 3.13 | 4.89 |
+| `ndt8` + dyn | 30.81 | −6.5% | 3.17 | 5.29 |
+| `ndt10` + dyn | 31.06 | −5.8% | **3.31** | **5.57** |
+
+**Acceptance rises monotonically — 2.76 → 3.11 → 3.13 → 3.17 → 3.31 — and speed
+does not.** Speed peaks at `ndt3` and decays past `ndt6`. So the acceptance gain
+past 5 does **not** convert into throughput: with `dynamic_draft` the extra
+tokens are trimmed on low-confidence spans anyway, while longer drafts cost more
+verification per accepted token.
+
+**Verdict: `draft_num_tokens: 3` (+7.2%), confirmed by a proper interleaved
+sweep, and the ceiling above 5 is closed** — it is not a speed win. The earlier
+"ceiling is above 6, ndt7/ndt8 untested" note is now resolved rather than left
+hanging, and in the direction opposite to what I predicted.
+
+I had written that "beating a setting on two independent axes is the signature of
+a knob still on its rising side." Two axes moving together is **not** evidence of
+a rising knob when one of them (acceptance) is not the objective. Speed is.
 
 **Caveat on losslessness, stated once and not repeated.** Lossless speculative
 decoding holds when the implementation does proper rejection sampling. Phase C
