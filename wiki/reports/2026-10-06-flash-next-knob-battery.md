@@ -7,7 +7,39 @@ in-process reps unless stated. **Short-context screen (~17k prompt tokens) —
 see §0.7 of the plan: these are a screen, not a verdict, and the long-context
 pass is still outstanding.**
 
-## Headline
+## Sustained, turn-matched (PRIMARY result)
+
+Production-shaped measurement per plan §0.8: replay `agentic_code_10.json`
+progressively (turn *i* sends `messages[0..i]`), 3 boots per config
+alternating, 5 turns per boot, 15/15 turns successful. Compare the same turn
+index across configs so prompt difficulty cancels; estimator is the median of
+per-turn ratios.
+
+| turn | prompt tok | baseline | combo | speedup |
+|---|---|---|---|---|
+| 1 | 10,956 | 3.89 s | 3.64 s | 1.07× |
+| 2 | 11,021 | 2.44 s | 1.94 s | 1.26× |
+| 3 | 11,116 | 2.27 s | 1.67 s | 1.36× |
+| 4 | 15,912 | 10.88 s | 7.09 s | **1.53×** |
+| 5 | 16,135 | 9.06 s | 6.61 s | 1.37× |
+
+**Median 1.36× faster. Full 5-turn conversation: 28.87 s → 20.75 s.**
+
+Two things worth reading off this table:
+
+- **The gain grows with turn number** (1.07× → 1.53×) while the prompt barely
+  changes. That points at decode, not prefill: turn 1 is nearly all prefill
+  (short generation), and the longer generations later are where extra CPU
+  headroom becomes tokens.
+- **Turn 1 is only 1.07×.** On short conversations the combo buys far less than
+  the median suggests. This matters for choosing a config per workload.
+
+An earlier single-prompt block reported +50.4% (36.1 → 54.3 T/s). That
+workload repeated one prompt until the KV prefix cache was ~100% warm, so it
+measured decode on a saturated cache rather than a production turn mix.
+**1.36× supersedes it.** Quoting 1.50× would overstate the win.
+
+## Headline (single-request, superseded by the above)
 
 | config | live tg T/s | vs base | boot→1st tok | VRAM min free |
 |---|---|---|---|---|
@@ -40,8 +72,8 @@ memory:
   cuda_malloc_async: True         # KEEP — False costs ~760 MB VRAM, no gain
 ```
 
-Expected total: **tg +48%** (34.4 → 51.0 T/s), boot unchanged, VRAM free
-3593 → ~1065 MB.
+Expected total: **~1.36× sustained throughput** (5-turn conversation
+28.87 s → 20.75 s), boot unchanged, VRAM free 3593 → ~1065 MB.
 
 ### Risk, honestly
 
