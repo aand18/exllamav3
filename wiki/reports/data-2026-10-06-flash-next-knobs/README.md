@@ -32,16 +32,29 @@ than retyped at analysis time.
   turn-matched on identical prompt-token counts.
 - **`machine_state`** ∈ `normal | fast | slow`. Both arms enter this at 250k;
   ratios are only comparable **within** a state. See `retractions.csv` #8.
-- **`source`** marks provenance. `phaseA.jsonl` rows carry a note explaining why
-  their throughput columns are empty.
+- **`source`** marks provenance per row. **`throughput_tier_known`** is `no` for
+  Phase A/B and `yes` for Phase C — see gap 1.
+- **Silent-failure note:** the first version of the generator shipped with all
+  Phase A throughput empty and said so in the README, which read like data loss.
+  It was two bugs — an unstripped ANSI regex, and `os.path.exists()` on a Windows
+  path from WSL. The generator now prints a `WARNING` listing any `.out` it could
+  not open, so this class of failure cannot be silent again.
 
 ## Known gaps in the data itself
 
-1. **Phase A throughput columns are empty by necessity.** The per-arm `.out`
-   files were overwritten by later runs, so `tg0/pp256/pp4096` could not be
-   re-extracted. VRAM and status come from jsonl and are authoritative. Phase A
-   speed values live in `decisions.csv` and the consolidated report, recorded at
-   run time.
+1. **Phase A throughput is NOT tier-specific — read `throughput_tier_known=no`.**
+   The harness writes **one `.out` per arm** (`a29-mcs380.out`), so every tier
+   re-run overwrote the previous tier's output. What survives is the *last* run
+   for that arm, and `perf.py` does not record its own tier inside the file.
+   Consequences:
+   - `tg0/pp256/pp4096` are populated (122 of 138 Phase A rows), but the value is
+     the arm's last surviving run, **not** the tier named in the `tier` column.
+   - The Tier 2 table in the consolidated report (baseline 25.68 / 26.16 / 25.29)
+     was transcribed from console output **at run time** and is *not* in the `.out`
+     files. It will not match the `tg0` column here, and that is expected — they
+     are different measurements of the same arm.
+   - **The Tier 2 numbers are therefore the authoritative Phase A throughput**, and
+     they exist only in the report, not in this data set.
 2. **`measurements.csv` Phase C rows are individual runs, not arm aggregates.**
    Per §0.5, cross-process medians are not valid — aggregate by arm only within a
    single interleaved batch.

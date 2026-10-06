@@ -19,6 +19,7 @@ Outputs (see OUTDIR):
 import csv
 import json
 import os
+import re
 import statistics as st
 
 LOGS = "/mnt/c/Users/yoho/Downloads/tabbyAPI/logs/kb"
@@ -43,28 +44,80 @@ def num(x):
 
 
 # ------------------------------------------------------------- measurements
+def winpath(p):
+    """jsonl stores WINDOWS paths ("C:\\Users\\...") but this script runs in
+    WSL, so os.path.exists() on them is always False -- which silently produced
+    empty throughput columns instead of an error. Translate explicitly."""
+    if p and re.match(r"^[A-Za-z]:\\", p):
+        return "/mnt/" + p[0].lower() + p[2:].replace("\\", "/")
+    return p
+
+
+MISSING = set()
+
+
+def parse_perf_out(path):
+    """Phase A perf.py stdout, which uses THREE formats depending on tier:
+       Tier 0  "Context 0: S=1  26.28 tokens/s"
+       Tier 1/2 "Context 0: S=1  26.28 it/s [24.30 - 27.71]"
+       plus a "tg0=.. [..] pp256=.. pp4096=.." summary line when present.
+       An earlier version of this script only matched the first two of those,
+       so the Tier 1/2 finalists read as empty. That was a parser bug, not data
+       loss -- see recover note in the README.
+    """
+    path = winpath(path)
+    if not path or not os.path.exists(path):
+        MISSING.add(path)
+        return {}
+    txt = open(path, encoding="utf-8", errors="replace").read()
+    # NB: non-raw string. r"\x1b..." would match a literal backslash-x1b and
+    # silently strip nothing, which is what made every Phase A row parse empty.
+    txt = re.sub("\x1b\\[[0-9;]*m", "", txt)
+    out = {}
+    m = re.search(r"tg0=([\d.]+)\s*\[([\d.]+)-([\d.]+)\]", txt)
+    if m:
+        out["tg"] = (m.group(1), m.group(2), m.group(3))
+    else:
+        m = re.search(
+            r"Context\s+0:\s*S=1\s+([\d.]+)\s+"
+            r"(?:tokens/s|it/s)(?:\s*\[([\d.]+)\s*-\s*([\d.]+)\])?", txt)
+        if m:
+            out["tg"] = (m.group(1), m.group(2) or "", m.group(3) or "")
+    m = re.search(r"pp256=([\d.,]+)", txt)
+    if m:
+        out["pp256"] = m.group(1).replace(",", "")
+    m = re.search(r"pp4096=([\d.,]+)", txt)
+    if m:
+        out["pp4096"] = m.group(1).replace(",", "")
+    return out
+
+
 def measurements():
     rows = []
     for r in load("phaseA.jsonl"):
         n = r["name"]
         tier = r.get("tier")
+        d = parse_perf_out(r.get("out"))
+        tg = d.get("tg", ("", "", ""))
         rows.append({
             "phase": "A_offline_perf.py",
             "tier": num(tier),
             "arm": n,
             "n_runs": 1,
-            "tg_tps_median": "", "tg_tps_min": "", "tg_tps_max": "",
-            "pp256": "", "pp4096": "",
+            "tg_tps_median": tg[0], "tg_tps_min": tg[1], "tg_tps_max": tg[2],
+            "pp256": d.get("pp256", ""), "pp4096": d.get("pp4096", ""),
             "pp_tps_median": "", "pp_tps_min": "", "pp_tps_max": "",
             "boot_s": "", "boot_s_min": "", "boot_s_max": "",
             "vram_peak_mb": num(r.get("vramPeak")),
             "vram_minfree_mb": num(r.get("vramMinFree")),
             "ram_free_after_mb": "",
             "status": r.get("status"),
-            "source": "phaseA.jsonl",
-            "note": "Phase A throughput NOT recoverable from disk: the per-arm "
-                    ".out files were overwritten by later runs. vram/status are "
-                    "from jsonl and are authoritative.",
+            "source": "vram/status: phaseA.jsonl | throughput: perf.py .out",
+            "note": "tg0/pp* come from the ONE surviving .out for this arm "
+                    "(the harness writes <arm>.out, so each tier re-run "
+                    "overwrote the previous). The tier column describes the "
+                    "JSONL ROW, not the run that produced the .out -- do not "
+                    "read tg0 as tier-specific.",
         })
     for r in load("phaseB.jsonl"):
         rows.append({
@@ -80,6 +133,7 @@ def measurements():
             "vram_minfree_mb": num(r.get("vramMinFree")),
             "ram_free_after_mb": "",
             "status": r.get("status"),
+            "throughput_tier_known": "no",
             "source": "phaseB.jsonl",
             "note": "tg/acc per arm are in draft.csv (sweep run, "
                     "baseline-bracketed).",
@@ -103,6 +157,7 @@ def measurements():
             "ram_free_after_mb": num(r.get("ramFreeAfter")),
             "status": r.get("exit") or "OK",
             "source": "phaseC.jsonl",
+            "throughput_tier_known": "yes",
             "note": "arms are runs, not arm aggregates -- aggregate by arm",
         })
     return rows
@@ -114,7 +169,7 @@ MEAS_FIELDS = ["phase", "tier", "arm", "n_runs",
                "pp_tps_median", "pp_tps_min", "pp_tps_max",
                "boot_s", "boot_s_min", "boot_s_max",
                "vram_peak_mb", "vram_minfree_mb", "ram_free_after_mb",
-               "status", "source", "note"]
+               "status", "source", "throughput_tier_known", "note"]
 
 
 # ------------------------------------------------------------ long context
@@ -424,6 +479,12 @@ def main():
     write("decisions.csv", DEC_FIELDS, decisions())
     write("retractions.csv", RET_FIELDS, retractions())
     write("methodology.csv", METH_FIELDS, methodology())
+    if MISSING:
+        print(f"\n  WARNING: {len(MISSING)} referenced .out file(s) not found -- "
+              f"those rows ship with empty throughput:")
+        for m in sorted(MISSING)[:5]:
+            print(f"    {m}")
+        print("    (this is a bug, not expected; check winpath())")
 
 
 if __name__ == "__main__":
