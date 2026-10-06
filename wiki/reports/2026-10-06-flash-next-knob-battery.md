@@ -5,6 +5,13 @@ Measured impact of every tunable on 3.05bpw Flash-Next serving
 Implements `wiki/plans/flash-knobs-benchmark.md`. All numbers are medians of
 in-process reps unless stated.
 
+> **This file is the AUDIT TRAIL, not the summary.** For the consolidated
+> results — every knob tested, adopted / rejected / neutral, with a confidence
+> marker per finding — read
+> `2026-10-06-flash-next-knobs-consolidated.md`. This file is kept because it
+> shows how each number was reached, including seven retractions of my own claims
+> that the summary does not repeat.
+
 ## Read this first — the headline depends on your prompt length
 
 | your typical prompt | the number that matters | confidence |
