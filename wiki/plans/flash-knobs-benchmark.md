@@ -684,7 +684,7 @@ was skipped per §1 STOP rule, it still gets a row (with why).
 |---|---|
 | §0 baseline + instrumentation | done |
 | §0.5 tiering, §0.6 premise corrections, §0.8 protocol, §0.8.1 interleaving | done |
-| §0.7 long context (§0.9 knobs investigated) | done at 11–16k / 55–62k / 130k / 224k |
+| §0.7 long context (§0.9 knobs investigated) | done at 11–16k / 55–62k / 130k / 224k / **250k** |
 | §1 sweep, §2 interaction | done |
 | §3 report + diff proposal + `start_tuned.ps1` verdict | done |
 
@@ -692,18 +692,19 @@ Result lives in `wiki/reports/2026-10-06-flash-next-knob-battery.md`.
 Production `config.yml` is **unmodified** and was never committed.
 
 **Accepted as finished.** The recommendation is `cpu_moe_split_experts: 380` +
-`EXL3_MOE_CPU_THREADS=16`, measured at every length tested (1.36× at 11–16k,
-~1.00× at 62k, 1.157× at 130k, 1.096× at 224k).
+`EXL3_MOE_CPU_THREADS=16`, measured at every length tested — **1.36× at 11–16k,
+~1.00× at 62k, 1.157× at 130k, 1.096× at 224k, 1.144× at 250k**. Nothing
+measured regressed anywhere in 11k–259k.
 
 **Known gaps, stated rather than hidden:**
 
-- **Nothing measured above 224k.** The planned 258k prompt file would be ~474k
-  tokens after per-message scaffolding and exceeds `cache_size 262144` outright,
-  so it could never load. The 224k–262k region is extrapolated, not measured —
-  and it is the region where KV pressure is highest, so it is the one most
-  likely to differ.
-- **Per-half isolation at 224k was not re-run** with an interleaved reference,
-  only at 130k.
+- **Nothing above 259k, and nothing can be** — `cache_size` is 262144 tokens, so
+  259,145 prompt + 256 generated is the ceiling. The measured range now reaches
+  96–99% of it, so no untested band remains. (Earlier drafts of this plan
+  called 260k impossible; that was a miscalibrated prompt file, not a real
+  limit.)
+- **Per-half isolation was only re-run at 130k** with an interleaved reference;
+  224k and 250k are combo-vs-baseline only.
 - **Tier 2 (`-dr 3`) was not run** for most finalists; Tier 0/1 deltas stand.
 - **`cache_mode` and draft-length quality were never assessed** (KLD owns
   quality). Those two lines are perf-only here.

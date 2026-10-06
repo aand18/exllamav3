@@ -553,15 +553,15 @@ speed, because CPU MoE is the bottleneck. Sweep **down** from it.
 - Vision tower is ~1.1 GB of VRAM (`Loading vision modules 30/30`, unquantized
   fp16) for a capability this workload never uses. Outside the knob list —
   worth a look if VRAM ever binds at 260k.
-- **Nothing measured above 224k prompt tokens.** The planned 258k stage is
-  impossible as specified: after per-message scaffolding it is ~474k tokens and
-  exceeds `cache_size 262144`, so the server can never load it. The untested
-  224k–262k band is precisely where KV pressure is highest, so it is the region
-  most likely to behave differently from the 224k result. This is the one
-  genuine gap left in the recommendation.
-- **`mcs380` per-half isolation was only re-run at 130k**, with an interleaved
-  reference. The 224k figure is a combo-vs-baseline comparison only.
+- **Nothing above 259k, and nothing can be.** `cache_size` is 262144 tokens
+  allocated at load, so 259,145 prompt + 256 generated = 259,401 is the practical
+  ceiling. The measured range now spans that ceiling (96–99% utilisation), so
+  there is no untested band left. Earlier drafts of this report called 260k
+  "impossible"; that was an artefact of a miscalibrated prompt file, not a
+  real limit.
+- **Per-half isolation was only re-run at 130k**, with an interleaved
+  reference. The 224k and 250k figures are combo-vs-baseline comparisons only.
 - **`mcs380`'s VRAM min-free spread remains the thinnest margin**: 269–2089 MB
-  across the four short-context boots, though 1479–1543 MB through the 130k and
-  224k stages. If VRAM ever binds, drop `mcs380` and keep `thr16`, which costs
+  across the four short-context boots, though a tight 1479–1543 MB at 130k, 224k
+  **and 250k** — the spread does not widen as context grows. If VRAM ever binds, drop `mcs380` and keep `thr16`, which costs
   no VRAM and still gives ~2.6% at 130k plus the full 11–16k decode win.
