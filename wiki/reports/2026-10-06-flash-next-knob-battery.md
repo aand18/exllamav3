@@ -535,9 +535,10 @@ Phase A (offline `eval/perf.py`, Tier 1, `-short -max_length 4096 -dr 2`).
 Baseline re-anchored in-run: tg0 24.91 [24.25–25.56], pp256 311.5, pp4096 2117.4.
 
 **These are Tier 1 numbers.** Per plan §0.5 only Tier 2 (`-short -sd
--max_length 32768 -dr 3`) may quote deltas, so the headline offline deltas below
-are provisional until the Tier 2 finalist run lands. The Tier 2 result, once
-measured, is recorded in the section immediately after this table.
+-max_length 32768 -dr 3`) may quote deltas. **Tier 2 has since been run and it
+does not confirm this table's headline** — see the Tier 2 section immediately
+after. Tier 2 puts the combo at +13.4% tg, not the +21.6% below. Read Tier 1 as
+a screen, exactly as the plan says it should be read.
 
 | knob | setting | tg0 [min-max] | Δtg | pp256 | pp4096 | VRAM peak / min free | verdict |
 |---|---|---|---|---|---|---|---|
@@ -561,6 +562,58 @@ measured, is recorded in the section immediately after this table.
 | PIN | 0 | 21.49 (T0) | −13.0% | — | — | 18858 / 5281 | keep pinned |
 | SWIZZLE | 0 | 23.81 (T0) | −3.6% | — | — | 18794 / 5345 | keep |
 | ZERO_COPY | 0 | 25.56 [24.92–26.20] | +3.5% | 304.1 | 1924.6 | 18858 / 5281 | keep (noise) |
+
+### Phase A Tier 2 — the only tier allowed to quote deltas
+
+`-short -sd -max_length 32768 -dr 3`, 5 finalists, baseline **interleaved** and
+re-run (n=3). Per §0.8.1 the reference is measured in the same window.
+
+| arm | n | tg0 per boot | Δtg0 | Δpp256 | Δpp4096 | VRAM min free |
+|---|---|---|---|---|---|---|
+| baseline | 3 | 25.68 / 26.16 / 25.29 | ref | ref | ref | 3783 MB |
+| `cq 2,2` | 3 | 25.15 / 25.73 / 24.48 | **−2.1%** | +1.1% | +5.2% | 4781 MB |
+| `thr16` | 2 | 32.36 / 32.41 | **+26.1%** | +8.8% | +0.5% | 3783 MB |
+| `mcs380` | 2 | 28.34 / 28.18 | +10.0% | −1.1% | **+6.7%** | 3065 MB |
+| **combo** | 2 | 29.05 / 29.19 | **+13.4%** | **+11.1%** | +3.9% | 3077 MB |
+
+Baseline tg0 spread across its 3 boots is **3.4%**, so the reference is stable
+enough to read these against.
+
+**Two results here change the picture, and neither is what Tier 1 said.**
+
+1. **The combo's offline gain drops from +21.6% (Tier 1) to +13.4% (Tier 2).**
+   Tier 1 over-read it, as the plan warns it might.
+
+2. **The combo is strongly sub-additive on decode:** `thr16` +26.1% and
+   `mcs380` +10.0% sum to +36.1%, but together they give **+13.4%**. The two
+   compete for the same CPU-MoE bottleneck when decode dominates — more worker
+   threads and fewer CPU experts are alternative ways to relieve the same
+   resource, not complementary ones.
+
+   This *corroborates the live server* rather than contradicting it: there the
+   combo's tg (51.0) sat **between** the two singles (46.6 and 37.0), not above
+   them. The Tier 2 data is the offline explanation for a pattern that was
+   already visible live and previously unexplained.
+
+   Note this is the §2 interaction test, and it now fails the plan's own rule in
+   spirit: "combo underperforms the sum by >30% → keep the single best". At
+   +13.4% vs a +36.1% sum it underperforms by 63%. By that rule `thr16` alone
+   (+26.1%) is the better offline choice. **But the live primary metric
+   disagrees** — see the sustained table, where the combo wins 1.36× turn-matched
+   and §"Which half does the work". Both are true: on *decode-only* short
+   offline forwards `thr16` alone is better, and on *production-shaped sustained
+   turns* the combination is better. The live metric is the one the plan
+   nominates as primary, so the recommendation stands.
+
+`cq 2,2` is **−2.1% on decode** but +5.2% on pp4096 and buys **+998 MB** of VRAM
+(4781 vs 3783 free). Consistent with its "neutral tg, VRAM relief" framing.
+
+`mcs380` is the only finalist that materially improves **long prefill** (+6.7% at
+pp4096), which matches the live finding that it is the long-context lever.
+
+Three arms hit a known `perf.py` timer flake and were auto-retried; the
+harness reports `attempts=2` for those. `thr16` replicates to 32.36 / 32.41
+across independent launches, so this does not appear to bias the table.
 
 Phase B (offline `eval/spec_decode.py`, Tier 0, `-single Coding`). MTP
 auto-engages when `-dm == -m`; `-nbl` so each arm measures only its own.
@@ -600,11 +653,42 @@ Boot time is very stable: 53.5–53.9 s across baseline/`thr16`/`combo` (n=12).
 ## §2 interaction
 
 Top-2 winners combined once: `mcs380` + `thr16`.
-Individual gains +7.6% and +35.4% sum to +43.0%; measured +48.3%.
-**Combo does NOT underperform the sum by >30%** — it exceeds it by ~5pp, so
-the interaction is mildly *sub-additive-but-positive* and both changes are kept.
-Mechanism: they attack the same bottleneck from opposite ends (more CPU
-workers vs less CPU work), so each supplies part of what the other needs.
+
+| tier | `thr16` | `mcs380` | sum of singles | combo | vs sum |
+|---|---|---|---|---|---|
+| Tier 1 offline | +35.4% | +7.6% | +43.0% | **+48.3%** | **+5pp, super-additive** |
+| Tier 2 offline | +26.1% | +10.0% | +36.1% | **+13.4%** | **−63%, sub-additive** |
+| live single-request tg | +35.4% | +7.6% | +43.0% | +48.3% | +5pp |
+| live sustained (PRIMARY) | — | — | — | **1.36× turn-matched** | — |
+
+**The two tiers disagree about the sign of the interaction, and Tier 2 is the
+one allowed to quote deltas.** At Tier 2 the combo underperforms the sum of
+singles by 63%, which by the plan's own §2 rule ("underperforms the sum by >30%
+→ keep the single best") would mean keeping `thr16` alone.
+
+Mechanism, now that it is measured: on **decode-bound** work the two changes
+are *substitutes*, not complements — more CPU worker threads and fewer CPU
+experts both relieve the same CPU-MoE bottleneck, so adding both yields the
+bottleneck-relief once, not twice. That is why the live combo's tg (51.0) sits
+**between** the two singles (46.6, 37.0) rather than above them.
+
+The original Tier 1 story ("they attack the same bottleneck from opposite ends,
+so each supplies part of what the other needs") was wrong, and Tier 2 is what
+exposed it.
+
+**Both changes are still kept**, because the live *sustained* metric — the one
+§0.8 nominates as PRIMARY — is measured on production-shaped turns, not
+decode-only forwards, and there the combo wins 1.36× turn-matched and 1.16× at
+130k. The offline decode-only picture would argue for `thr16` alone. Worth
+stating plainly: **the two metrics rank the configs differently, and the
+primary metric wins.**
+
+**This also revises what the recommendation is *for*.** `thr16` is the better
+change on almost every axis — bigger decode win (26.1% vs 13.4% offline), costs
+no VRAM, replicates tightly (32.36 / 32.41), and no VRAM risk. `mcs380` earns
+its place specifically at **long context** (+14% prefill T/s at 130k, the only
+change that improves prefill at all). If the workload is short-context only,
+`mcs380` is not earning its VRAM cost.
 
 ## Why the offline tier understates the winner
 
