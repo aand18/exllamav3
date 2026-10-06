@@ -409,9 +409,30 @@ synthesiser emits **distinct variants** (different start offsets into the cycle)
 and Phase C sends them via `-Rotate`, one request per variant. Ladder built:
 `synth_25k_*` (~35k prompt), `synth_118k_*` (~128k), `synth_248k_*` (~258k).
 
-**Calibrate against the server log, not the estimate.** The synthesiser reports
-text tokens; the server reports true prompt tokens. Read the latter and adjust
-the target before trusting a length.
+**Calibrate against the server log — and DO IT BEFORE THE FIRST LONG RUN.**
+The synthesiser's `--target` is **text** tokens, and the server's prompt count is
+much larger, because every message carries template scaffolding. Measured on
+`synth_118k_v0`: text 119,458 → **server reported 224,502**. Fitting gives
+
+```
+actual_prompt_tokens ≈ text_tokens × 1.797 + 10_000
+```
+
+(≈150 tokens of scaffolding per message, ~5.3 messages per 1000 text tokens,
+plus ~10k for tools). Verified to 0.07%.
+
+This was calibrated too late once already: files labelled `118k` and `248k` were
+actually **~224k** and **~474k**, and 474k exceeds `cache_size 262144` outright,
+so the largest file could never have loaded. Targets that are correct:
+
+| want actual | pass `--target` |
+|---|---|
+| ~35k | ~14k |
+| ~128k | **65,664** |
+| ~258k | **138,007** |
+
+**Always name files for their MEASURED prompt length, never the target**, and
+confirm from the server log before quoting any length-dependent result.
 
 **Known trap, already paid once:** a config that loads under `eval/perf.py`
 can fail to boot the live server. The live server sits **+1.7 to +2.5 GB**
