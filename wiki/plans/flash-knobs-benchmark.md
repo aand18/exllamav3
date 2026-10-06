@@ -224,6 +224,92 @@ deterministic; residual spread is numerical (kernel/reduction-order, tied to
 the ~830 MB VRAM swing on identical configs). Consequence: **draft-acceptance
 differences under ~3pp are noise**, not quality signal.
 
+### 0.9 Second-tier cache and checkpoint knobs (investigated 2026-10-06, ALL UNTESTED)
+
+Found while auditing the config schema. None are in §1 and none have been
+measured. All are confirmed real config keys (`common/config_models.py`) with
+working implementations — behaviour below is read from the code, not assumed.
+Ordered by how much they should matter for 128k/260k serving.
+
+#### 1. `sysmem_kv_cache` — currently `0`, i.e. OFF. Highest expected value.
+
+`memory:` section, MB, default `0`. I first misread this as a VRAM-relief
+lever; it is not. Its real doc (`generator/generator.py:122`):
+
+> Complete K/V pages **evicted from the GPU cache** are stored there and
+> restored **on prompt-cache hits instead of being recomputed by prefill**.
+
+Mechanism: `CPUPageCache` attaches to the page table as `pagetable.cpu_tier`
+(`generator.py:227-231`). Pinned system memory. **Not supported in
+tensor-parallel mode** (fine — single GPU).
+
+Why it matters here: the server log shows real prompt-cache reuse
+(`prompt 17,830 tokens, 62% cached, 6,822 new in 5.56 s`). At 260k prompt
+against `cache_size 262144`, pages **will** evict. Today an evicted page that is
+needed again must be **re-prefilled**; with this set it is **restored**. So it
+is a recompute-cost lever, and the cost it removes grows with context length —
+exactly the regime we are heading into. Currently it does nothing at all.
+
+#### 2. `recurrent_checkpoint_interval_pp` — prompt-ingestion checkpoint grid
+
+Default `32768`. Only for models with recurrent states (this one: 48 GDN
+layers). Its doc states the trade explicitly:
+
+> With the default, a long prompt is only checkpointed near its end and an
+> early edit costs a full re-prefill; with a denser grid the replay cost
+> becomes proportional to the distance from the edit to the end of the prompt.
+
+**Each checkpoint costs one recurrent state of system RAM — 148 MiB for this
+class of model — bounded by `sysmem_recurrent_cache`.**
+
+Note the character of this knob: it does **not** move tok/s. It sets what a
+mid-conversation *edit* costs. That is exactly the agentic-coding-with-long-
+context workload, so the number is worth knowing even though it cannot be
+tuned for speed. Must be a multiple of 256, rounded up to a multiple of
+`chunk_size`. Interacts directly with #3.
+
+#### 3. `sysmem_recurrent_cache` — currently `8192` (8 GB)
+
+Caps the total recurrent checkpoint RAM for #2. Also holds recurrent cache in
+sysmem generally (`model.py:1022`). More budget ⇒ denser checkpoint grid
+possible ⇒ cheaper edits, at the cost of system RAM. Pairs with #2.
+
+#### 4. `recurrent_checkpoint_interval` — decode-side grid
+
+Default is architecture-determined (`None` → engine default). I tested **512**
+only (+1.7% pp, +800 MB VRAM) and never the other direction. Note `512` made
+prefill *better* and VRAM *worse*, which is the opposite of the usual
+"denser grid costs more" intuition and is worth confirming.
+
+#### 5. `output_chunking` — currently `true`
+
+`max_rq_tokens = chunk_size if output_chunking else None` (`model.py:450`).
+Doc: "Maximum number of tokens before job is requeued… limits how many new
+pages are allocated in the cache for the job in any one round and allows a
+single job to use the full cache size **without limiting concurrency for other
+jobs**." So turning it **off** allocates the whole completion at once. Never
+toggled. Relevant only under concurrency — and `max_batch_size` is 2.
+
+#### 6. `sysmem_multimodal_cache` — default `1024`, absent from `config.yml`
+
+Now coupled to the standing `vision_offload: true` decision. `ImageEmbeddingCache`
+is an LRU **bounded by embedding storage, not entry count** (`vision.py:34`),
+evicting oldest-first and never dropping entries the current request already
+resolved. If this workload never sends images, it is dead weight — but note it
+is a *budget*, so it likely reserves nothing until populated. Low priority.
+
+#### Explicitly not pursuing
+
+- `draft_confidence` — **not in the config schema** (CLI-only), out of scope.
+- `cpu_moe_threads` — the config-side twin of `EXL3_MOE_CPU_THREADS`. The env
+  var is already proven and lives in `start_tuned.ps1`; no reason to move it.
+- `max_seq_len` — already equals the model default (262,144); not a knob we
+  need to set, and it is the same number as `cache_size`.
+
+**Suggested order:** `sysmem_kv_cache` first (currently 0, most likely to
+change the VRAM/recompute verdict for `mcs380`), then the #2/#3 pair for
+edit-replay cost at long context, then `recurrent_checkpoint_interval` at 4096.
+
 ### 0.7 Long-context requirement (added 2026-10-05 — do this LAST, after everything else)
 
 The operator needs **128k minimum, 260k desirable** context. Everything in
