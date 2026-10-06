@@ -4,8 +4,8 @@ Measured impact of every tunable on 3.05bpw Flash-Next serving
 (48 MoE layers, MTP head), RTX 4090 24 GB + 7950X3D, Win11 + WSL2.
 Implements `wiki/plans/flash-knobs-benchmark.md`. All numbers are medians of
 in-process reps unless stated. **Short-context screen (~17k prompt tokens) —
-see §0.7 of the plan: these are a screen, not a verdict, and the long-context
-pass is still outstanding.**
+see §0.7 of the plan: these are a screen, not a verdict. The long-context
+pass has since been run at 55–62k, 130k and 224k and confirms the win.**
 
 ## Sustained, turn-matched (PRIMARY result)
 
@@ -39,7 +39,22 @@ workload repeated one prompt until the KV prefix cache was ~100% warm, so it
 measured decode on a saturated cache rather than a production turn mix.
 **1.36× supersedes it.** Quoting 1.50× would overstate the win.
 
-## Long context (plan §0.7) — the gain is decode-bound, not prefill-bound
+## Long context (plan §0.7) — win at every length measured
+
+Four stages, 11–16k / 55–62k / 130k / 224k. The 130k and 224k stages carry a
+reference arm interleaved in the same time window (see plan §0.8.1); earlier
+revisions of this report got 130k wrong twice before that was fixed, and the
+correction is documented rather than quietly overwritten.
+
+| prompt length | combo vs baseline | what improved |
+|---|---|---|
+| 11–16k | **1.36×** | decode |
+| 55–62k | ~1.00× | — (neutral) |
+| 130k | **1.157×** | prefill, +14% T/s from `mcs380` |
+| 224k | 1.096× | prefill, +8.6% |
+
+No length showed a regression. §"Scope of the combo" has the mechanism and the
+per-half attribution (`mcs380` does the prefill work, `thr16` is decode-only).
 
 Stage 1 at **~55–62k prompt tokens**, 3 distinct cold-prefix variants per
 config (`-Rotate`), so each request pays a real prefill.
