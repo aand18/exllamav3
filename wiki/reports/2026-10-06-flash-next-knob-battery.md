@@ -9,8 +9,10 @@ in-process reps unless stated.
 > results — every knob tested, adopted / rejected / neutral, with a confidence
 > marker per finding — read
 > `2026-10-06-flash-next-knobs-consolidated.md`. This file is kept because it
-> shows how each number was reached, including seven retractions of my own claims
-> that the summary does not repeat.
+> shows how each number was reached, including eleven retractions of my own
+> claims that the summary does not repeat. They are also enumerated
+> machine-readably in
+> [`data-2026-10-06-flash-next-knobs/retractions.csv`](data-2026-10-06-flash-next-knobs/retractions.csv).
 
 ## Read this first — the headline depends on your prompt length
 

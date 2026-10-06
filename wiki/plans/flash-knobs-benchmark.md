@@ -299,7 +299,8 @@ possible ⇒ cheaper edits, at the cost of system RAM. Pairs with #2.
 
 **MEASURED (130k edit workload, 2 boots/arm interleaved).** The knob works;
 it is not adopted for now. Result in
-`wiki/reports/2026-10-06-flash-next-knob-battery.md`:
+`wiki/reports/2026-10-06-flash-next-knob-battery.md` (full audit trail; the
+readable summary is `2026-10-06-flash-next-knobs-consolidated.md`):
 on the default 32768 grid an early edit costs **99.3%** of a cold prefill
 (0.7% saved), at 8192 it costs **6.7% less** — server log confirms 11% cached
 vs 6%, an 8,192-token saving (exactly one interval). Costs 2.3 GiB RAM, no VRAM.
@@ -732,7 +733,13 @@ was skipped per §1 STOP rule, it still gets a row (with why).
 | §1 sweep, §2 interaction | done — **Tier 2 run for finalists; it overturned the Tier 1 interaction sign** |
 | §3 report + diff proposal + `start_tuned.ps1` verdict | done |
 
-Result lives in `wiki/reports/2026-10-06-flash-next-knob-battery.md`.
+Results live in three places, in reading order:
+
+| document | role |
+|---|---|
+| `wiki/reports/2026-10-06-flash-next-knobs-consolidated.md` | **the summary** — every knob, adopt/reject/neutral, confidence per finding |
+| `wiki/reports/data-2026-10-06-flash-next-knobs/` | machine-readable CSVs, regenerable with `eval/_kb_mkcsv.py` |
+| `wiki/reports/2026-10-06-flash-next-knob-battery.md` | audit trail — run-by-run record and all eleven retractions |
 Production `config.yml` is **unmodified** and was never committed.
 
 **Accepted as finished.** The recommendation is `cpu_moe_split_experts: 380` +
