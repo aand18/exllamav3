@@ -541,14 +541,35 @@ widely (Q8: 0.804 to 1.217). Only FP16 has n=2 with a tight range. Read those tw
 as "no gain, possibly worse", not as point estimates. All these effects are 2–5%,
 inside the short-context noise floor — unlike the 130k+ stages, which replicate.
 
-**Caveat on scope — this ladder is for CODE, and code is MTP's best case.**
-Every Phase C measurement in this battery used `agentic_code_10.json`. Draft
-acceptance is exactly the quantity that varies with content: speculation pays
-when the next token is predictable, and code is the most predictable case. So
-code is the **worst case for draft-cache quantization** — there is the most
-acceptance to lose. The measured penalty at `2,2`/`3,3` is therefore an upper
-bound; prose should undercut it. **Do not read "penalty below Q8" as
-content-independent.** Cross-category numbers are in the section that follows.
+**Caveat on scope — this ladder is for CODE, and that is all it is.**
+Every Phase C measurement in this battery used `agentic_code_10.json`, and all 28
+Phase B rows used `-single Coding`. **Draft acceptance has never been measured by
+content category in this battery at all**, so "penalty below Q8" is a code-only
+result and must not be read as content-independent.
+
+An earlier revision of this note asserted *why*: that acceptance tracks intrinsic
+token predictability, that code is therefore the most predictable case, and that
+the measured penalty is an upper bound that prose would undercut. **That
+reasoning is withdrawn — it was asserted, not measured, and the premise is
+contested.** Two specific problems:
+
+- MTP here is the model's **own** multi-token-prediction head, trained jointly
+  with the main model (server log: `Using main model MTP component for
+  drafting`; the MTP block has its own CPU-split MoE). Acceptance therefore
+  measures **agreement between the MTP head and the main head** — a property of
+  the trained weights, not of how predictable the text "is". I collapsed low
+  entropy onto high acceptance, which are different quantities.
+- "Code is the most predictable" is a folk claim, not a measured one, and it is
+  contestable in both directions: code identifier/naming choices are high-entropy,
+  while translation is largely determined by its source and may be the *best*
+  case — the opposite of what I predicted.
+
+Also conflated: acceptance rate is not speedup, and with `dynamic_draft: true`
+the draft length is already trimmed adaptively on low-confidence spans.
+
+The honest statement is therefore the weak one: **it is unknown whether the
+`draft_cache_mode` result holds outside code.** Cross-category numbers below
+report what was measured, without a predicted direction.
 
 **Verdict: keep `Q4`.** Unchanged, but now on an interleaved measurement instead
 of a single cross-window one. And the general framing the ladder establishes:
