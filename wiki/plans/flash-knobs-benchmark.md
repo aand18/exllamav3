@@ -736,10 +736,18 @@ Result lives in `wiki/reports/2026-10-06-flash-next-knob-battery.md`.
 Production `config.yml` is **unmodified** and was never committed.
 
 **Accepted as finished.** The recommendation is `cpu_moe_split_experts: 380` +
-`EXL3_MOE_CPU_THREADS=16`, measured at every length tested — **1.36× at 11–16k,
-~1.00× at 62k, 1.157× at 130k, 1.096× at 224k, and at 250k either 1.13× or
-1.02× depending on the boot**. Nothing measured regressed anywhere in
+`EXL3_MOE_CPU_THREADS=16` + `draft_num_tokens: 3`, measured at every length
+tested — **1.36× at 11–16k, ~1.00× at 62k, 1.157× at 130k, 1.096× at 224k (one
+pair, suspect), ~1.00× at 250k**. Nothing measured regressed anywhere in
 11k–259k.
+
+**The gains are not uniform and the shape matters for this operator**, who runs
+200k+ prompts: the combo wins where the bottleneck is decode (short prompts) or
+mid-length prefill (130k), and is at **parity at 250k**. An apparent 1.11–1.13×
+win at 250k was an artifact of comparing the combo's fast machine-state against
+the baseline's slow one — both arms enter that state. The 224k point rests on a
+single pair and carries the same suspicion; **130k is the only long-context
+length with state-matched evidence**.
 
 **Known gaps, stated rather than hidden:**
 
@@ -748,11 +756,13 @@ Production `config.yml` is **unmodified** and was never committed.
   96–99% of it, so no untested band remains. (Earlier drafts of this plan
   called 260k impossible; that was a miscalibrated prompt file, not a real
   limit.)
-- **The 250k result is bimodal, and the cause is unidentified.** Two clean
-  modes ~11% apart (1.134× on fast boots, 1.016× on slow), tracking `pp median`
-  exactly (1676/1678 vs 1522/1525). Server logs are identical in both modes, so
-  it is not the config failing to apply. Never slower at any boot — but an
-  operator cannot assume the upper regime without measuring their own box.
+- **The 250k fast/slow mode is environmental, cause still unidentified.** Both
+  arms enter it (baseline reached 1715 T/s, matching combo's fast cluster), so it
+  is not a config property. Ruled out by measurement: paging, CPU clock/boost
+  (113.9–114.4% of nominal), available RAM, WDDM `SharedUsage`, run order, and
+  config application. Matched within state, combo is at parity (1.011× slow,
+  0.978× fast). Operators should match on this state before quoting any 250k
+  ratio — see §0.8.2.
 - **Per-half isolation was only re-run at 130k** with an interleaved reference;
   224k and 250k are combo-vs-baseline only.
 - **Tier 2 has been run** for the 5 finalists (`-short -sd -max_length 32768
