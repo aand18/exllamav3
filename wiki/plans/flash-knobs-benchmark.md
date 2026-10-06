@@ -675,6 +675,14 @@ at <last-good value>", recorded with the one bad row as proof.
    → Q8 → FP16 — enumerate from the sample). Prior finding: low
    draft-cache quants showed no slowdown, so press downward for
    VRAM until quality or speed moves, then stop.
+
+   **Done, and the "press downward" framing was half wrong.** Valid values are
+   `FP16`, `Q8`/`8,8`, `Q6`/`6,6`, `Q4`/`4,4`, plus any `k,v` pair matching
+   `^[2-8]\s*,\s*[2-8]$`. Measured interleaved (n=2 for FP16, n=1 for Q8/3,3):
+   the ladder is **monotone in VRAM and flat in speed down to Q8**, and a real
+   penalty below that. FP16 costs 384 MB and returns nothing — the draft-cache
+   quant is not on the throughput critical path, which kills the theory that
+   `2,2`'s penalty was dequant overhead. Keep `Q4`. Details in the report.
 6. Env threads/streams: `EXL3_MOE_CPU_THREADS` 8 → 1 / 2 / 4
    first (experience says low values score higher on LLM work
    and saturation rarely pays on this CPU; 12 / 16 only as

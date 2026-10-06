@@ -126,7 +126,7 @@ model:
 draft_model:
   dynamic_draft: true             # KEEP — +7.1%, static is slower despite
                                   # higher acceptance (2.92/5.00 vs 2.78/4.29)
-  draft_cache_mode: Q4            # KEEP — 2,2 cost -23% tg AND -24pp acceptance
+  draft_cache_mode: Q4            # KEEP — see §draft_cache_mode ladder below
   draft_num_tokens: 5             # KEEP (see §open: 6 ran clean, untested at 6)
 
 memory:
@@ -508,6 +508,46 @@ of the RAM that #1 already proved to be the binding constraint on this box.
 **Adopt it if edit-heavy long-context work becomes the norm** — it is a
 one-line change with a known price.
 
+## `draft_cache_mode` ladder — measured, and it is a pure VRAM knob
+
+The arms for `Q8`, `3,3` and `FP16` were **defined but never run** until now;
+only `2,2` had ever been measured, and that was a single cross-window run
+(n=1, compared against a baseline from a different window — exactly what §0.8.1
+forbids). Now measured interleaved, baseline bracketed at both ends (n=2).
+
+Production is `Q4` (= `4,4`). Turn-matched per-turn ratios against it:
+
+| mode | bits | turn-matched median | verdict | VRAM min free |
+|---|---|---|---|---|
+| `FP16` | 16 | **1.021** (n=2, ratios 0.975–1.066) | neutral | 2619 MB (**−384**) |
+| `Q8` | 8 | **1.001** (n=1) | neutral | 2825 MB (−178) |
+| `3,3` | 3 | **1.047** (n=1) | **slower** | 3067 MB (+64) |
+| `2,2` | 2 | −23% tg (earlier n=1) | **slower** | 3657 MB (+654) |
+
+**The ladder is monotone in VRAM and flat in speed down to Q8.** Quantizing the
+draft cache harder buys VRAM every step; it buys throughput at no setting.
+`FP16` and `Q8` are both inside noise of production `Q4`.
+
+**The `FP16` hypothesis was wrong.** I expected FP16 to recover the `2,2`
+penalty, on the theory that dequant overhead on the draft cache was the cost and
+that the box did not need the VRAM (RAM is the binding constraint —
+`sysmem_kv_cache` died on the RAM guard twice). It does not: FP16 costs **384 MB**
+and returns **nothing**. The draft-cache quant is not on the throughput
+critical path; `2,2` and `3,3` being slow must have a different cause, most
+plausibly accuracy loss reducing draft acceptance.
+
+**Caveat on precision.** `Q8` and `3,3` are n=1 and their per-turn ratios swing
+widely (Q8: 0.804 to 1.217). Only FP16 has n=2 with a tight range. Read those two
+as "no gain, possibly worse", not as point estimates. All these effects are 2–5%,
+inside the short-context noise floor — unlike the 130k+ stages, which replicate.
+
+**Verdict: keep `Q4`.** Unchanged, but now on an interleaved measurement instead
+of a single cross-window one. And the general framing the ladder establishes:
+`draft_cache_mode` is a **VRAM knob on this box with no throughput cost down to
+Q8 and a real penalty below that**. Since VRAM is not binding (RAM is), there is
+no reason to move off `Q4` in either direction — and FP16 is emphatically not the
+"free" upper setting it looks like.
+
 ## start_tuned.ps1 — verdict per env line
 
 | line | verdict | evidence |
@@ -642,6 +682,9 @@ Phase C (live server). All six metrics; boot = process start → first token.
 | `rci512` | 1 | 53.7 s | 35.6 | 1225 | 77% | 21346 / 2793 | 9.8 GB |
 | `malloc_async:False` | 1 | 53.7 s | 34.5 | 1199 | 72% | 21306 / 2833 | 9.7 GB |
 | `dcm 2,2` | 1 | 53.7 s | **26.4** | 1218 | **55%** | 20482 / 3657 | 9.8 GB |
+| `dcm FP16` | 2 | 65.4–70.6 s | 35.6–36.2 | 1184–1438 | — | 21520 / 2619 | — |
+| `dcm Q8` | 1 | 68.8 s | 33.6 | 1304 | — | 21314 / 2825 | — |
+| `dcm 3,3` | 1 | 71.7 s | 30.3 | 1258 | — | 21072 / 3067 | — |
 | `mcs360` | — | **will not boot** | — | — | — | — | — |
 | `rci_pp 8192` | 2 | 64.3 s | — | — | — | 21104 / 3035 | 5.1 GB RAM — see §0.9 #2b |
 | `sysmem_kv 8g` | 1 | **RAM guard: 492 MB free** | — | — | — | — | killed during load |
