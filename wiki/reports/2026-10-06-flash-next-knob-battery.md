@@ -541,6 +541,15 @@ widely (Q8: 0.804 to 1.217). Only FP16 has n=2 with a tight range. Read those tw
 as "no gain, possibly worse", not as point estimates. All these effects are 2–5%,
 inside the short-context noise floor — unlike the 130k+ stages, which replicate.
 
+**Caveat on scope — this ladder is for CODE, and code is MTP's best case.**
+Every Phase C measurement in this battery used `agentic_code_10.json`. Draft
+acceptance is exactly the quantity that varies with content: speculation pays
+when the next token is predictable, and code is the most predictable case. So
+code is the **worst case for draft-cache quantization** — there is the most
+acceptance to lose. The measured penalty at `2,2`/`3,3` is therefore an upper
+bound; prose should undercut it. **Do not read "penalty below Q8" as
+content-independent.** Cross-category numbers are in the section that follows.
+
 **Verdict: keep `Q4`.** Unchanged, but now on an interleaved measurement instead
 of a single cross-window one. And the general framing the ladder establishes:
 `draft_cache_mode` is a **VRAM knob on this box with no throughput cost down to
