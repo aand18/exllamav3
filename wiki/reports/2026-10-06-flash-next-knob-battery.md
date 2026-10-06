@@ -440,6 +440,58 @@ is a capacity question rather than a performance one — see below.
   (23308 MB) but **will not boot the server**; 400/500 are VRAM- or RAM-refused.
 - Mutually exclusive with `cpu_moe_offload_layers` — the server hard-errors.
 
+### `recurrent_checkpoint_interval_pp` — MEASURED, and it works
+
+Plan §0.9 #2b recorded this as unevaluable at 17k and said it "can only be
+judged in the §0.7 pass". That pass now exists, so it is measured here.
+
+It cannot be seen on a cold prefill — its doc says it governs what a
+**mid-conversation edit** costs. Neither existing harness mode edits anything,
+so the workload is two turns in one boot: turn 1 the original prompt (writes
+checkpoints), turn 2 the same prompt with an **early** message reworded by
+`_kb_mkedit.py` (~80 chars, so token count barely moves). 144,084 → 144,103
+tokens; turn 2's wall-clock delta *is* replay cost.
+
+At ~144k, default 32768 gives 4 checkpoints, 8192 gives 16.
+
+**The metric must be the within-boot ratio `t2/t1`**, not absolute turn-2
+wall-clock. Absolute comparisons here are wrecked by session drift — the two
+baseline boots ran 79.41 s and 95.07 s for the identical request (20% apart),
+which would have produced a spurious "1.22×" for the candidate. Dividing each
+arm's turn 2 by its *own* turn 1 cancels that entirely:
+
+| boot | arm | turn1 cold | turn2 edit | t2/t1 |
+|---|---|---|---|---|
+| 1 | baseline | 79.51 s | 79.41 s | **0.999** |
+| 1 | `rci_pp=8192` | 84.15 s | 77.05 s | **0.916** |
+| 2 | baseline | 96.29 s | 95.07 s | **0.987** |
+| 2 | `rci_pp=8192` | 82.03 s | 77.95 s | **0.950** |
+
+| arm | median t2/t1 | replay saving vs cold prefill |
+|---|---|---|
+| baseline (32768) | 0.993 | **0.7%** |
+| `rci_pp=8192` | 0.933 | **6.7%** |
+
+**On the default grid an early edit costs essentially the full cold prefill
+(0.7% saved); at 8192 it costs 6.7% less.** Both ratios separate from baseline
+in both boots with no overlap.
+
+Confirmed independently by the server log: `rci_pp=8192` turn 2 reports **11%
+cached / 127,719 new** against baseline's **6% cached / 135,911 new** — an
+8,192-token saving, i.e. exactly one checkpoint interval. That is the doc's
+stated behaviour, measured rather than assumed.
+
+**Cost: RAM, not VRAM.** Free RAM after the run falls from ~7,400 MB (baseline)
+to ~5,100 MB — about 2.3 GiB, matching the 16 × 148 MiB checkpoint arithmetic.
+VRAM is unchanged (2971–3035 MB free both arms).
+
+**Verdict: not adopted, and this is a judgement call, not a rejection.** The
+knob works and is the right tool if this workload *edits* long conversations
+often. It is left at default because ~6.7% on edits only, paid for with 2.3 GiB
+of the RAM that #1 already proved to be the binding constraint on this box.
+**Adopt it if edit-heavy long-context work becomes the norm** — it is a
+one-line change with a known price.
+
 ## start_tuned.ps1 — verdict per env line
 
 | line | verdict | evidence |
