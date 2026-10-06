@@ -654,6 +654,36 @@ values + expected gain + risk per line) AND a
 `start_tuned.ps1` verdict per env line (keep/drop). If a knob
 was skipped per §1 STOP rule, it still gets a row (with why).
 
+### 3.1 Status (2026-10-06 — all sections delivered)
+
+| section | state |
+|---|---|
+| §0 baseline + instrumentation | done |
+| §0.5 tiering, §0.6 premise corrections, §0.8 protocol, §0.8.1 interleaving | done |
+| §0.7 long context (§0.9 knobs investigated) | done at 11–16k / 55–62k / 130k / 224k |
+| §1 sweep, §2 interaction | done |
+| §3 report + diff proposal + `start_tuned.ps1` verdict | done |
+
+Result lives in `wiki/reports/2026-10-06-flash-next-knob-battery.md`.
+Production `config.yml` is **unmodified** and was never committed.
+
+**Accepted as finished.** The recommendation is `cpu_moe_split_experts: 380` +
+`EXL3_MOE_CPU_THREADS=16`, measured at every length tested (1.36× at 11–16k,
+~1.00× at 62k, 1.157× at 130k, 1.096× at 224k).
+
+**Known gaps, stated rather than hidden:**
+
+- **Nothing measured above 224k.** The planned 258k prompt file would be ~474k
+  tokens after per-message scaffolding and exceeds `cache_size 262144` outright,
+  so it could never load. The 224k–262k region is extrapolated, not measured —
+  and it is the region where KV pressure is highest, so it is the one most
+  likely to differ.
+- **Per-half isolation at 224k was not re-run** with an interleaved reference,
+  only at 130k.
+- **Tier 2 (`-dr 3`) was not run** for most finalists; Tier 0/1 deltas stand.
+- **`cache_mode` and draft-length quality were never assessed** (KLD owns
+  quality). Those two lines are perf-only here.
+
 ## Guards (binding, every run)
 
 - VRAM kill under 200MB free; RAM abort unless ≥2GB free
