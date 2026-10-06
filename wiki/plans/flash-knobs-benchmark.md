@@ -297,6 +297,21 @@ Caps the total recurrent checkpoint RAM for #2. Also holds recurrent cache in
 sysmem generally (`model.py:1022`). More budget ⇒ denser checkpoint grid
 possible ⇒ cheaper edits, at the cost of system RAM. Pairs with #2.
 
+**MEASURED (130k edit workload, 2 boots/arm interleaved).** The knob works;
+it is not adopted for now. Result in
+`wiki/reports/2026-10-06-flash-next-knob-battery.md`:
+on the default 32768 grid an early edit costs **99.3%** of a cold prefill
+(0.7% saved), at 8192 it costs **6.7% less** — server log confirms 11% cached
+vs 6%, an 8,192-token saving (exactly one interval). Costs 2.3 GiB RAM, no VRAM.
+
+Two things to carry forward:
+- **the metric must be the within-boot ratio `t2/t1`**, never absolute turn-2
+  wall-clock. Two baseline boots ran the identical request 20% apart, which
+  would have produced a spurious 1.22× for the candidate.
+- not adopted because ~6.7% on edits only is bought with 2.3 GiB of the RAM
+  that #1 proved binding. One-line change with a known price if edit-heavy
+  long-context work becomes the norm.
+
 #### 4. `recurrent_checkpoint_interval` — decode-side grid. **NEUTRAL, keep default.**
 
 Both directions now measured against baseline (median of per-turn ratios):
@@ -730,6 +745,9 @@ Nothing measured regressed anywhere in 11k–259k.
 - **Tier 2 (`-dr 3`) was not run** for most finalists; Tier 0/1 deltas stand.
 - **`cache_mode` and draft-length quality were never assessed** (KLD owns
   quality). Those two lines are perf-only here.
+- **§0.9 #2b (`recurrent_checkpoint_interval_pp`) is now measured** — it works
+  (6.7% cheaper early edits) and is deliberately not adopted, because the price
+  is 2.3 GiB of the RAM that is already binding.
 
 ## Guards (binding, every run)
 
