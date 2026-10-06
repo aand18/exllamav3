@@ -721,7 +721,7 @@ was skipped per §1 STOP rule, it still gets a row (with why).
 | §0 baseline + instrumentation | done |
 | §0.5 tiering, §0.6 premise corrections, §0.8 protocol, §0.8.1 interleaving | done |
 | §0.7 long context (§0.9 knobs investigated) | done at 11–16k / 55–62k / 130k / 224k / **250k** |
-| §1 sweep, §2 interaction | done |
+| §1 sweep, §2 interaction | done — **Tier 2 run for finalists; it overturned the Tier 1 interaction sign** |
 | §3 report + diff proposal + `start_tuned.ps1` verdict | done |
 
 Result lives in `wiki/reports/2026-10-06-flash-next-knob-battery.md`.
@@ -747,7 +747,11 @@ Production `config.yml` is **unmodified** and was never committed.
   operator cannot assume the upper regime without measuring their own box.
 - **Per-half isolation was only re-run at 130k** with an interleaved reference;
   224k and 250k are combo-vs-baseline only.
-- **Tier 2 (`-dr 3`) was not run** for most finalists; Tier 0/1 deltas stand.
+- **Tier 2 has been run** for the 5 finalists (`-short -sd -max_length 32768
+  -dr 3`, baseline interleaved n=3) and it **revised the Tier 1 reading**: combo
+  offline gain +21.6% → **+13.4%**, and the combo is strongly *sub-additive* on
+  decode (+26.1% and +10.0% sum to +36.1%, together +13.4%). `thr16` replicates
+  to 32.36 / 32.41. Tier 0/1 for the non-finalist arms was not re-run at Tier 2.
 - **`cache_mode` and draft-length quality were never assessed** (KLD owns
   quality). Those two lines are perf-only here.
 - **§0.9 #2b (`recurrent_checkpoint_interval_pp`) is now measured** — it works
