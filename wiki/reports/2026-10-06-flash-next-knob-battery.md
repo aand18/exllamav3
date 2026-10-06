@@ -118,6 +118,47 @@ memory:
 Expected total: **~1.36× sustained throughput** (5-turn conversation
 28.87 s → 20.75 s), boot unchanged, VRAM free 3593 → ~1065 MB.
 
+### 224k stage — prefill is NOT flat here, which revises the 62k reading
+
+The files labelled `118k` are actually **~224k prompt tokens** (see the
+calibration note in plan §0.7 — text tokens undercount prompt tokens by
+~1.8×). Treated as the near-maximum case instead of discarding it.
+
+| variant | prompt tok | baseline | combo | speedup |
+|---|---|---|---|---|
+| v0 | 224,502 | 142.18 s | 129.67 s | 1.096× |
+| v1 | 224,414 | 142.10 s | 129.67 s | 1.096× |
+
+**1.096× at 224k**, and the reason is prefill after all:
+
+| prompt tok | new tok | baseline prefill | combo prefill |
+|---|---|---|---|
+| 224,414 | 216,222 | 135.7 s | **125.0 s (+8.6%)** |
+| 62,189 | 53,997 | 33.2 s | 32.8 s (+1.2%, noise) |
+
+This **corrects** the "prefill never improves" conclusion from the 62k stage.
+The likely mechanism is **cache pressure**: at 62k the KV cache is lightly
+occupied, while at 224k against `cache_size 262144` it is ~85% full, so paging
+and eviction enter the prefill path — and that is CPU MoE work, which is
+precisely what `thr16` accelerates. `cpu_moe_split_experts:380` likewise
+reduces CPU-side expert work, so its benefit grows as the cache fills.
+
+Reproducibility is high enough to trust: baseline spread 0.08 s, combo 0.00 s
+across two variants.
+
+### Revised regime table
+
+| prompt length | cache pressure | measured |
+|---|---|---|
+| 11–16k | negligible | **1.36×** (decode-bound) |
+| ~55–62k | low | ~1.00× (prefill-bound, no cache pressure yet) |
+| ~224k | ~85% of `cache_size` | **1.096×** (prefill itself improves) |
+
+The curve is **non-monotonic**, so the 62k point must not be read as "the
+benefit decays with length". A true ~128k stage (correctly sized) is still
+missing and would show whether 1.096× holds or keeps improving toward the
+262k ceiling.
+
 ### Scope of the win — read before applying
 
 The combo's benefit is **decode-bound, not prefill-bound**:
