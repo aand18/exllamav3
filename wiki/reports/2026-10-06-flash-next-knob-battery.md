@@ -307,18 +307,8 @@ was met by construction.
 Every measured length is now a win. The apparent dip at 130k in two earlier
 revisions was a stale-reference artifact — see the 130k section.
 
-### Revised regime table
-
-| prompt length | cache pressure | measured |
-|---|---|---|
-| 11–16k | negligible | **1.36×** (decode-bound) |
-| ~55–62k | low | ~1.00× (prefill-bound, no cache pressure yet) |
-| ~224k | ~85% of `cache_size` | **1.096×** (prefill itself improves) |
-
 The curve is **non-monotonic**, so the 62k point must not be read as "the
-benefit decays with length". A true ~128k stage (correctly sized) is still
-missing and would show whether 1.096× holds or keeps improving toward the
-262k ceiling.
+benefit decays with length".
 
 ### Scope of the win — read before applying
 
