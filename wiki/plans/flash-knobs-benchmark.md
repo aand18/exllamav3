@@ -729,9 +729,9 @@ Production `config.yml` is **unmodified** and was never committed.
 
 **Accepted as finished.** The recommendation is `cpu_moe_split_experts: 380` +
 `EXL3_MOE_CPU_THREADS=16`, measured at every length tested — **1.36× at 11–16k,
-~1.00× at 62k, 1.157× at 130k, 1.096× at 224k, ~1.06× at 250k** (1.02–1.14×,
-n=2 boots/arm — the weakest-evidenced point, and the range's upper end).
-Nothing measured regressed anywhere in 11k–259k.
+~1.00× at 62k, 1.157× at 130k, 1.096× at 224k, and at 250k either 1.13× or
+1.02× depending on the boot**. Nothing measured regressed anywhere in
+11k–259k.
 
 **Known gaps, stated rather than hidden:**
 
@@ -740,6 +740,11 @@ Nothing measured regressed anywhere in 11k–259k.
   96–99% of it, so no untested band remains. (Earlier drafts of this plan
   called 260k impossible; that was a miscalibrated prompt file, not a real
   limit.)
+- **The 250k result is bimodal, and the cause is unidentified.** Two clean
+  modes ~11% apart (1.134× on fast boots, 1.016× on slow), tracking `pp median`
+  exactly (1676/1678 vs 1522/1525). Server logs are identical in both modes, so
+  it is not the config failing to apply. Never slower at any boot — but an
+  operator cannot assume the upper regime without measuring their own box.
 - **Per-half isolation was only re-run at 130k** with an interleaved reference;
   224k and 250k are combo-vs-baseline only.
 - **Tier 2 (`-dr 3`) was not run** for most finalists; Tier 0/1 deltas stand.

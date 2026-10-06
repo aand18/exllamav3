@@ -52,7 +52,7 @@ fixed, and the corrections are documented rather than quietly overwritten.
 | 55–62k | ~1.00× | — (neutral) |
 | 130k | **1.157×** | prefill, +14% T/s from `mcs380` |
 | 224k | 1.096× | prefill, +8.6% |
-| 250k | **~1.06×** (1.02–1.14×, n=2) | prefill, at 96–99% cache utilisation |
+| 250k | **1.13× or 1.02× — bimodal** | prefill, at 96–99% cache utilisation |
 
 **No length showed a regression** anywhere in 11k–259k. §"Scope of the combo" has the mechanism and the
 per-half attribution (`mcs380` does the prefill work, `thr16` is decode-only).
@@ -186,48 +186,64 @@ Note this stage was measured as a single interleaved pair (baseline spread
 0.08 s, combo 0.00 s across two variants), so it satisfies the shared-window
 requirement of §0.8.1.
 
-### 250k stage — a real but small win (~1.06×), not the 1.144× first reported
+### 250k stage — bimodal: 1.13× or 1.02× depending on the boot
 
-This is the plan's "260k desirable" tier and the region that had been recorded as
-untestable. **That was wrong** — only the miscalibrated ~474k file could not
-load. Correctly sized with the two-variable fit
-(`actual ≈ 0.2383×text + 294.4×msgs + 9,110`), four variants land at
-249,730 / 249,642 / 251,197 / 259,145 prompt tokens: **96–99% of `cache_size`
-262144**, all loading cleanly. Interleaved per §0.8.1, 2 boots per arm:
+This is the plan's "260k desirable" tier, and the region that had been recorded
+as untestable. **That was wrong** — only the miscalibrated ~474k file could not
+load. Sized with the two-variable fit (`actual ≈ 0.2383×text + 294.4×msgs +
+9,110`), four variants land at 249,730 / 249,642 / 251,197 / 259,145 prompt
+tokens: **96–99% of `cache_size` 262144**, all loading cleanly.
 
-| prompt tok | base b1 | base b2 | combo b1 | combo b2 | ratio b1 | ratio b2 |
-|---|---|---|---|---|---|---|
-| 249,730 | 163.2 | 162.2 | 140.0 | 159.3 | 0.858 | 0.982 |
-| 249,642 | 162.8 | 161.2 | 139.6 | 159.1 | 0.858 | 0.987 |
-| 251,197 | 168.2 | 167.1 | 149.8 | 164.2 | 0.891 | 0.983 |
-| 259,145 | 172.7 | 172.7 | 155.3 | 169.8 | 0.899 | 0.983 |
+Interleaved per §0.8.1, **4 boots per arm**, 4 prompts each (16 paired turns):
 
-| estimator | value |
-|---|---|
-| boot 1 only | 0.874 → 1.144× |
-| boot 2 only | 0.983 → **1.017×** |
-| **all 8 paired turns** | **0.941 → 1.063×** |
+| boot | arm | boot median | per-turn (249,730 / 249,642 / 251,197 / 259,145) | ratio |
+|---|---|---|---|---|
+| 1 | baseline | 165.7 s | 163.21 / 162.77 / 168.17 / 172.68 | ref |
+| 2 | combo **fast** | 144.9 s | 139.97 / 139.63 / 149.77 / 155.27 | **1.144×** |
+| 3 | baseline | 164.7 s | 162.21 / 161.18 / 167.11 / 172.71 | ref |
+| 4 | combo **slow** | 161.8 s | 159.31 / 159.12 / 164.24 / 169.77 | 1.017× |
+| 5 | baseline | 165.0 s | 162.08 / 162.28 / 167.66 / 172.55 | ref |
+| 6 | combo **fast** | 145.5 s | 141.39 / 140.12 / 149.61 / 155.74 | **1.133×** |
+| 7 | baseline | 164.8 s | 162.47 / 162.25 / 167.14 / 172.28 | ref |
+| 8 | combo **slow** | 162.3 s | 160.01 / 159.91 / 164.50 / 169.62 | 1.016× |
 
-**Read this as ~1.06×, not 1.144×.** The baseline is tight across its two boots
-(−0.62%) but the **combo arm swings 11.67%** (144.9 s vs 161.8 s boot median),
-and the two ranges overlap (combo max 169.8 s vs baseline min 161.2 s). Boot 2's
-turns are near-parity; boot 1's are a large win. With n=2 the honest statement is
-"a win, somewhere between 1.02× and 1.14×, most likely near the lower end".
+**The combo arm is bimodal, not noisy.** Two clean modes ~11% apart:
 
-An earlier revision of this section reported 1.144× from boot 1 alone, before
-boot 2 had finished. That is the same error this file documents twice already —
-**reading a small-n result as signal** — committed while writing the correction
-for having made it before. Recorded rather than quietly overwritten.
+| mode | boots | pooled speedup |
+|---|---|---|
+| fast | 2, 6 | **1.134×** |
+| slow | 4, 8 | **1.016×** |
 
-What the stage does establish firmly: **VRAM min-free held at 1479 MB at 96%
-cache utilisation**, clear of the 200 MB kill, and the spread does not widen with
-context. So `mcs380`'s headroom risk — the specific reason this band was called
-untestable — **does not materialise at the top of the range.** That conclusion is
-safe regardless of the speedup uncertainty.
+Baseline spread across four boots is **0.63%** (164.7–165.7 s) — the reference
+is solid. And every one of the 8 fast-mode combo turns (139.6–155.7 s) is
+**faster than every one of the 16 baseline turns** (161.2–172.7 s): no overlap.
 
-Also notable: `pp median` fell from 1676 (combo b1) to 1525 (combo b2), i.e. the
-whole 1.144× vs 1.017× difference lives in prefill throughput, not decode
-(tg median 63.0 vs 60.8). Consistent with `mcs380` being the active ingredient.
+`pp median` is the metric that tracks the mode exactly — fast boots read
+**1676 / 1678**, slow boots **1522 / 1525**, a 10% prefill throughput step. The
+step is entirely in prefill; `tg median` moves only 63.0 → 60.8.
+
+**Cause not identified.** The server log is identical in both modes (16 threads,
+split experts `[132..512)`, same arena size, load 48.3 s vs baseline 52.5 s), so
+this is *not* the config failing to apply. It is runtime variance inside the
+`mcs380` prefill path and no theory is offered, because nothing in the logs
+points at one.
+
+**How to read it.** The pooled all-16 median is 1.061×, but that is a mixture of
+two regimes and is not a good summary. The defensible statement: **at 250k the
+combo is never slower — it is either ~1.13× or ~1.02× faster, and which one you
+get is not predictable from the logs.** An operator wanting the upper regime
+should measure it on their own box; the lower regime is the floor.
+
+History of this one number, kept because it is instructive: reported as 1.144×
+from boot 1 of 2 (before boot 2 finished), then corrected to "~1.06×, range
+1.02–1.14×" at n=2, and n=4 shows the range is **two discrete modes**, not a
+confidence interval. Every revision was defensible on the data available at the
+time; only more boots distinguished "noise" from "bimodal".
+
+What the stage establishes independently of the speedup uncertainty: **VRAM
+min-free held at 1479–1511 MB at 96–99% cache utilisation**, clear of the
+200 MB kill, and the spread does not widen with context. `mcs380`'s headroom
+risk — the reason this band was called untestable — **does not materialise.**
 
 ### 130k stage — combo is 1.157× FASTER. Two retractions were both wrong; here is why.
 
@@ -349,7 +365,7 @@ was met by construction.
 | ~55–62k | low | ~1.00× |
 | ~130k | ~50% | **1.157× faster** (2 boots/arm, 4 prompts) |
 | ~224k | ~85% | 1.096× faster |
-| **~250k** | **96–99%** | **~1.06× faster** (b1 1.144×, b2 1.017×) |
+| **~250k** | **96–99%** | **1.13× (fast) or 1.02× (slow)** — bimodal, n=4 |
 
 Every measured length is now a win or neutral. The apparent dip at 130k in two earlier
 revisions was a stale-reference artifact — see the 130k section.
@@ -369,14 +385,14 @@ claimed:
 | ~55–62k | low | ~1.00× | 2 boots, tight |
 | **~130k** | ~50% | **1.157×** | turn-matched, **2 boots/arm × 4 prompts** |
 | ~224k | ~85% | 1.096× | turn-matched, spread 0.08 s / 0.00 s |
-| **~250k** | **96–99%** | **~1.06×** | turn-matched, 2 boots/arm × 4 prompts; **b1 1.144×, b2 1.017×** |
+| **~250k** | **96–99%** | **1.13× / 1.02×** | **bimodal**, turn-matched, **4 boots/arm × 4 prompts** |
 
 There is **no length at which the combo was measured to hurt**, including the
 62k point that looked neutral and the 130k point that two revisions wrongly
-called a regression. The **upper end of the range is the weakest measured
-point** — ~1.06× at 250k, and with only 2 boots per arm the true value is
-somewhere in 1.02–1.14×. Still a win, but do not quote the 250k figure as
-precisely as the 130k one.
+called a regression. The **upper end of the range is the least predictable
+point** — at 250k the combo is *bimodal*, measuring either ~1.13× or ~1.02×
+depending on the boot, with the cause unidentified. It is never slower; just
+do not assume the upper regime.
 
 **Which half does the work, measured in the same interleaved batch:**
 
@@ -394,7 +410,7 @@ one to keep, since it costs no VRAM.
 
 The honest reading of the shape: a large decode win at short prompts, roughly
 neutral at 62k, then a real win again at 130k+ where prefill dominates —
-holding at ~1.06× at 259k (n=2, 1.02–1.14×). The
+bimodal at 259k (1.13× or 1.02×, cause unknown). The
 130k and 224k gains are in **prefill itself**, so the combo is not purely a
 decode optimisation. This also **retires the "cache pressure" explanation** I
 proposed earlier in this file for the 224k prefill win — it is the same
