@@ -324,6 +324,27 @@ This is a **long-context knob** and can only be judged in the §0.7 pass. Do not
 draw a conclusion from short-context numbers, and do not treat the ~1.07 as a
 regression.
 
+**Measuring it requires an EDIT workload, not a cold prefill.** The knob does
+not move tok/s on a fresh prompt at all — its doc says it governs what a
+mid-conversation edit costs. So a rotating cold-prefix ladder cannot see it,
+and neither can the growing-prefix replay (nothing is edited). The measurement
+is two turns in ONE boot:
+
+1. turn 1 → original prompt (checkpoints written for that prefix)
+2. turn 2 → the **same** prompt with an early message reworded
+
+Turn 2's prefix is cached only up to the edit point, so everything after must
+be replayed, and the distance to the nearest usable checkpoint is precisely what
+the knob controls. Editing **early** is the whole point: a late edit is cheap
+under either setting.
+
+`eval/_kb_mkedit.py` builds the pair (deep-copies the source so shared
+`tool_calls` are never mutated — a lesson already paid once this session). Edit
+with a small wording change (~80 chars) so the token count barely moves and a
+wall-clock difference is replay cost rather than extra prefill. At 130k the
+checkpoint math is: default 32768 → 4 checkpoints, 8192 → 16, i.e. 0.6 GiB vs
+2.3 GiB of the 8 GB `sysmem_recurrent_cache` budget. Affordable, unlike #1.
+
 #### 5. `output_chunking` — currently `true`
 
 `max_rq_tokens = chunk_size if output_chunking else None` (`model.py:450`).
