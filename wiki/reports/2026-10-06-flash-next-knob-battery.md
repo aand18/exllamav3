@@ -494,9 +494,7 @@ speed, because CPU MoE is the bottleneck. Sweep **down** from it.
 
 ## Open / not established
 
-- **Long context (§0.7): NOT DONE.** Everything above is ~17k prompt tokens.
-  `mcs380`'s 269–2089 MB spread is the specific risk at 128k/260k.
-- `draft_num_tokens` 3 vs 5 is +6.0% tg but drops acceptance 2.78→2.20.
+- **`draft_num_tokens` 3 vs 5 is +6.0% tg but drops acceptance 2.78→2.20.**
   Quality not measured (KLD owns it).
 - `ZERO_COPY` at Tier 2; Tier 2 `-dr 3` not run for most finalists.
 - `cache_mode` quality (KLD).
@@ -506,3 +504,15 @@ speed, because CPU MoE is the bottleneck. Sweep **down** from it.
 - Vision tower is ~1.1 GB of VRAM (`Loading vision modules 30/30`, unquantized
   fp16) for a capability this workload never uses. Outside the knob list —
   worth a look if VRAM ever binds at 260k.
+- **Nothing measured above 224k prompt tokens.** The planned 258k stage is
+  impossible as specified: after per-message scaffolding it is ~474k tokens and
+  exceeds `cache_size 262144`, so the server can never load it. The untested
+  224k–262k band is precisely where KV pressure is highest, so it is the region
+  most likely to behave differently from the 224k result. This is the one
+  genuine gap left in the recommendation.
+- **`mcs380` per-half isolation was only re-run at 130k**, with an interleaved
+  reference. The 224k figure is a combo-vs-baseline comparison only.
+- **`mcs380`'s VRAM min-free spread remains the thinnest margin**: 269–2089 MB
+  across the four short-context boots, though 1479–1543 MB through the 130k and
+  224k stages. If VRAM ever binds, drop `mcs380` and keep `thr16`, which costs
+  no VRAM and still gives ~2.6% at 130k plus the full 11–16k decode win.
