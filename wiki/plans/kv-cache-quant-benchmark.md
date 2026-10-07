@@ -1,181 +1,152 @@
-# KV-cache quantisation benchmark — quality at depth + VRAM frontier at 256k
+# KV-cache quantisation benchmark — degradation-vs-length frontier at 256k (agentic)
 
-Goal: decide the serving `cache_mode` for Qwen3.8-Flash-Next-exl3 3.05bpw on
-the 4090 box for the operator's real workload — agentic coding, max 256k ctx,
-opencode-driven (xhigh thinking). Production ships `cache_mode: 2,2`
-@ `cache_size: 262144`; its **quality has never been measured** — the
-flash-knobs plan shipped it on perf evidence only ("cache_mode quality was
-never assessed; KLD owns quality", `flash-knobs-benchmark.md` §3.1). This plan
-owns that gap.
+## 0. Deliverable (what "done" means)
 
-**KVaRN is out of scope by operator decision (pinned memory 2026-10-07: "too
-slow, minimal VRAM gain for this model").** Bare symmetric pairs only; never a
-`kvarn*` preset; `-kvt/-kvt_type/-kvsk/-kvsv` inert. KVaRN's measured quality
-ledger does NOT transfer to the plain-`Cache` path (different dequant/serve
-path, obs #101) — plain-path arms start from zero evidence.
+A frontier table of the form **"use quant X up to length L; at length L' it
+degrades by D"**, per arm, with practical task-level examples, e.g.:
 
-## A. Why this is not a re-run of the knob battery
+> `2,2`: NIAH 40/40 @ 64k, 33/40 @ 131k, 26/40 @ 250k; agentic_code_10 @ 250k:
+> did not finish within 32k output, +11 turns vs ref, +4 invalid tool calls,
+> +3 min wall vs ref-fp16 @ same context (131k ceiling).
 
-The arch changes what KV quantisation can damage:
+plus a recommended serving config per use case (128k agentic vs 256k max).
+This is the first plain-`Cache` quality measurement on this box — **KVaRN is
+out of scope by operator decision (pinned 2026-10-07)** and its ledger does not
+transfer (different serve path, obs #101).
 
-- Only the **12 QSA layers** hold KV pages; the 36 GDN layers are recurrent
-  state and carry no KV. Quantisation touches a minority of the net.
-- The QSA indexer caps every query at **512 blocks × 4 = 2048 attended
-  tokens** (`qsa_indexer.py`, obs #140). So KV quant cannot "blur the whole
-  context" — it corrupts either (a) the *retrieval selection* (indexer picks
-  wrong blocks) or (b) the *values inside the 2048-token window the query
-  actually reads*. Both failure modes are retrieval errors at depth.
-- The **indexer planes stay fp16** (~320 B/token/layer, obs #56) and are
-  quant-invariant. Consequence for method: **the index is clean, so the
-  quantised model self-reports the damage** — forced-choice MC answers with
-  the correct span inside the 2048-token window are a valid same-item
-  reference, because retrieval itself is not what's perturbed.
-- Attn KV cost is only 12 layers × 2 KV heads × 256 dim → fp16 ≈ 24 KB/token,
-  ≈ 6.3 GB at 262144. The fp16 *indexer* floor (~3.8 KB/token) is paid by
-  every arm, so quant savings are smaller than they look.
+## 1. Why this arch changes what KV quant can break
 
-**The one structural property that makes a true reference possible:**
-attention is causal, so tokens up to depth *L* produce byte-identical logits
-and KV regardless of what is written later. Two runs with the same prefix and
-different filler beyond *L* share KV through position *L*. A run can therefore
-carry **one shared cold-prefill reference prefix for all depths**, with depth
-as an in-boot sweep variable instead of a boot variable. This kills the
-boot-count wall and is common-mode against machine state — the weakness that
-burned the 250k measurements before.
+- Only the **12 QSA layers** hold KV (36 GDN layers are recurrent state).
+- The QSA indexer caps every query at **512 blocks × 4 = 2048 attended tokens**
+  (`qsa_indexer.py`, obs #140) → damage is *retrieval at depth*: wrong block
+  selection (indexer path) or corrupted values inside the attended window.
+- **Indexer planes stay fp16** (~320 B/token/layer, obs #56) and are
+  quant-invariant → the quantised arm's own forced-choice answers are a valid
+  scoring reference; retrieval selection is not what's perturbed by quant.
+- fp16 KV ≈ 24 KB/token (≈ 6.3 GB @ 262144); the fp16 indexer floor
+  (~3.8 KB/token) is paid by every arm — quant savings are smaller than they
+  look, and `FP16 @ 262144` is not expected to boot; measure, don't lore.
+- **Causality trick**: KV through depth *L* is identical across depths, so one
+  shared cold-prefill prefix serves all depth probes inside a boot. Depth is a
+  variable, not a boot.
 
-## B. Metrics — chosen for what they can discriminate
+## 2. Adaptive protocol (2–3 exploratory runs before any ladder)
 
-| id | probe | discriminates |
-|---|---|---|
-| P1 | **Depth ladder** (new harness, §D1) | the *shape* of recall-vs-depth degradation: onset point, slope, plateau. Primary quality result. |
-| P2 | **Needle ≥7/8** (§D2) | clean pass/fail gate on the same mechanism at arm max length; a **same-pair** diff vs reference arm, not a score. |
-| P3 | **Production-shaped replay** (§D3) | whether *this* workload (agentic_code_10, 11 tools, 11–16k) is affected: tool-call/tool-result reuse accuracy across turns, turn wallSec vs noise band. |
-| P4 | **FP8 control** (§B) | separates "bits are insufficient" from "this dequant path is broken on this arch". |
-| P5 | **KLD vs fp16 KV, 16k** (optional, §D4) | attributes a P1/P2 delta to distributional drift vs behavioural noise; gated by `wiki/patterns/kld-median-noise-floor.md` (same-top + mean/max band, never median digits). |
+**Rule: never ladder the full {3,3…8,8} set up front.** Sequence:
 
-Not used as primary: free-gen divergence (thinking-length variance swamps
-signal), KLD as headline (1e-6 prints are noise; gate pattern), prose-summarise
-probes (wrong failure mode for a retrieval-capped arch).
+1. **S0 endpoints** (2 boots, interleaved): `ref-fp16` @ max bootable size and
+   `cur-22` @ 262144. Outputs: fp16 quality curve shape, and whether `2,2`
+   already breaks at any depth.
+2. **Gate 1 (decision point):**
+   - `2,2` clean at all depths → ship `2,2`; ladder runs only as confidence
+     nudge at the 2 depths nearest the operator's 200k+ regime (3 boots).
+   - `2,2` breaks at L₁ → bisect the *space between* 2,2 and the endpoint that
+     holds (test `4,4` at L₁ and just beyond; `3,3` only if 4,4 is borderline;
+     skip 5,5/6,6 unless the frontier at high bits is the open question).
+   - A depth where every quant fails but fp16 holds → the frontier is the
+     memory ceiling, not quantisation; record and stop that arm.
+3. **S2 targeted fill**: arms/lengths chosen from S0 data only. Budget target:
+   whole battery ≤ ~12 boots, not 40.
 
-### P1 — the depth ladder (new; primary)
+## 3. Arms and VRAM maximisation (never leave VRAM on the table)
 
-Synthetic KV-depth ladder built on the existing `_kb_mklongctx.py` recycler:
+Benchmark-session config overrides (proposed diff, never committed; production
+`config.yml` untouched outside runs):
 
-- Build ONE real conversation prefix (~2–4k tok: tools + agentic preamble,
-  ~10k template overhead included) + N needle trials. Each trial: a 1–2k-token
-  verbatim excerpt (code blocks, config lines, tool-result JSON — *code-flavoured*
-  needles, because the operator's KV content is code) planted at depth
-  `D ∈ {8k, 16k, 32k, 65k, 131k, 250k}`, then a **forced-choice question**
-  naming the span ("which of these 4 values is the timeout set in config X
-  above?").
-- **One boot per arm** streams depths ascending: depth *D* query is appended to
-  the shared prefix → warm prefill, no cache eviction, and the reference is
-  the same arm's own answer at 8k plus the fp16 arm's answer at the same depth.
-- Forced choice → greedy, deterministic, auto-scored. Record per (arm, depth):
-  correct?, latency-vs-band (the `wallSec` signal already validated in
-  flash-knobs §0.8), log-verified position of the span, and **indexer-window
-  coverage**: is the span's block inside the selected 512 blocks at the query
-  position? A miss with the span *outside* the window is a retrieval-selection
-  failure; miss with span *inside* window = value corruption. The harness must
-  log selected block ids (probe before theorising — if block ids are not
-  exposed, approximate via span-position sweep within one window).
-- One cold prefill per arm (~2 min at 250k, log-verified) + ~30 s of queries:
-  P1+P2 cost ~3 boots for the whole ladder.
+- **`vision: false`** for benchmark boots — free the vision tower's resident
+  bytes (measure the actual amount in pre-flight; `vision_offload` only freed
+  ~150–190 MB on the old regime, full-disable value is unmeasured → measure it
+  as part of S0).
+- **MTP stays ON**: `draft_mode: mtp`, `draft_num_tokens: 3`,
+  `draft_cache_mode: Q4` (settled, obs #161). Draft KV + head cost VRAM — that
+  is included in the budget on purpose, because production ships it; arms must
+  fit *with* drafting live.
+- `cache_size` per arm = **max that boots while respecting §5 guards at
+  runtime**, i.e. steady-state used + observed inference-time growth + transient
+  margin ≤ 24 GB − 200 MB. `max_bootable_tokens` at both memory regimes is a
+  first-class result. Note the pool preallocates at load, but **VRAM still
+  climbs during inference** (attention working set, dequant/staging
+  transients) — the frontier must be sized against the *run* peak, not the
+  load peak. Load-OK/run-OOM arms are UNSAFE, not fast (mcl34 lesson).
+- `cpu_moe_split_experts: 380` + `EXL3_MOE_CPU_THREADS=16` (`start_tuned.ps1`
+  current state) — this regime frees ~724 MB vs the old mcl38 regime; old
+  bootability verdicts are void, re-measure.
 
-### P2 — needle, at the gate practice
+Arms: `fp16` (reference, max bootable size), `2,2` (production, under trial),
+then bisected per §2; `fp8` control arm only if tabbyAPI's exllamav3 backend
+exposes FP8 KV — if FP8 (different quantiser path) degrades too, suspicion
+moves to the dequant/serve path, not bit width (obs #101 lesson).
 
-`eval/kvarn_needle.py` with **N ≥ 8 trials per length**: at p ≈ 0.85 (the
-plausible degraded-arm regime) a 4-trial test has a ~40% false-pass rate;
-8/8 vs 4/4 discriminates at α ≈ 0.43, 8/8 vs 6/8 is already suggestive, and
-12/12-vs-8/8 closes it. Gates: arm must match ref-fp16 at 131k (ref's standing
-4/4 becomes 8/8 under the new protocol) and hold ≥7/8 at 200k+. Report per-arm
-per-length pass counts, not scores.
+## 4. Probes
 
-### P4 — FP8 control (new arm)
+**P1 depth ladder (primary, new harness).** One shared cold-prefill prefix
+(tools + agentic preamble ~12k incl. template overhead, `_kb_mklongctx.py`
+`--ladder` mode), then code-flavoured verbatim spans (timeouts, flag names,
+error strings — the operator's actual KV content) planted at depths
+{8k, 16k, 32k, 65k, 131k, 250k}, queried by **forced choice** (greedy,
+auto-scored). NIAH-style batch sizing per user practice: **40 needles per
+depth checkpoint (40/40 gate), 200-trial set at the decision length only**
+(≥7/8 gate applies to the small set; at p≈0.85 a 4-trial test false-passes
+~40% — 4 was the old record, not the target). Per (arm, depth) row: pass
+count, pass-rate-vs-depth curve, latency-in-band check, and whether the span's
+block was inside the selected 512 (selection failure) or inside the window
+(value corruption). Scoring validity is the probe author's job: spans
+verbatim-unique, outside the trailing 2048-token window at query time, no
+recycler duplicates.
 
-`CacheLayer_quant` is 2–8 bit integer (assert at `cache/quant.py:30`); FP8 KV
-is a different quantiser on a different kernel path. Check whether
-tabbyAPI's exllamav3 backend exposes it (`fp8_kv`/`quantized_kv`); if it does,
-run it as the ceiling control: if FP8 also degrades recall, suspicion moves to
-the dequant/serve path rather than bit width — the exact lesson of obs #101
-(harness/path artifacts masquerade as model behaviour).
+**P2 production task metric (practical examples for the table).**
+`agentic_code_10.json` sustained replay (turn i = `messages[0..i]`), greedy,
+at 2 lengths: 11–16k (regression screen) and the arm's frontier length.
+Reported per arm as the user's example format: finished y/n, output tokens vs
+ref, turns used vs ref, invalid tool calls (name/arg schema violations), wall
+time vs ref (within-boot ratio only). Reference = `ref-fp16` same turns,
+interleaved.
 
-## C. Arms and the VRAM frontier
+**P3 optional objective tier (KLD/PPL) — run only if cheap.** `eval/ppl.py`
+wikitext2 stream is cached (perf.py shares the corpus); KLD of arm vs fp16-KV
+logits at 16k and 65k, one offline boot per arm, gated by
+`wiki/patterns/kld-median-noise-floor.md` (same-top + mean/max band; median
+digit flips are noise). If the harness needs new plumbing, it gets dropped —
+P1/P2 carry the decision.
 
-| id | arm | role |
-|---|---|---|
-| `ref-fp16` | FP16, cache_size = max bootable (est. ≤131k) | quality ceiling; NOT a 256k candidate |
-| `cur-22` | `2,2` @ 262144 | production under trial |
-| `q33`/`q44`/`q55`/`q66`/`q88` | ladder @ 262144; descend cache_size (224→192→160→128k) where boot fails | bits-vs-context frontier |
-| `fp8` | if backend-supported | mechanism control |
+**Determinism pre-flight first**: `EXL3_DSA_QC_STAGE` 0-vs-default cost on the
+*plain* path is unmeasured (the 3.9× figure is kvarn-path). Measure on
+arm-free boots; quality runs use whichever side keeps fingerprint noise below
+the between-arm effect, always the same stage across arms; never mix.
 
-FP16 arm economics changed 2026-10-07 (operator): `start_tuned.ps1` now ships
-`cpu_moe_split_experts: 380` + `EXL3_MOE_CPU_THREADS=16` (the battery winner,
-−724 MB vs the old mcl38 regime) and `vision_offload: true`, freeing ~1.5 GB
-over the regime the old ladder booted in. **Re-measure bootability** — do not
-carry the old "won't boot" verdicts; and remember the live server sits
-+1.7–2.5 GB above the offline harness, so offline "fits" proves nothing.
-FP16@262144 (~6.3 GB KV) is still expected to miss on a 64 GB box (RAM binds
-at load, flash-knobs §0.9 #1) — but measure, don't lore.
+All inherited protocol law applies verbatim: interleaved reference (§0.8.1),
+≥4 variants per boot at long context, within-boot ratios, no cross-window
+baselines, log-verified prompt lengths via the two-term law
+(`0.2383×text + 294.4×n_msg + 9110`, reject batch if any variant exceeds
+`cache_size − 256`), 250k fast/slow state matched within boot only.
 
-Output of this phase: `max_bootable_tokens` per arm at **both** memory regimes
-— that table IS the decision material, since the frontier question ("how many
-bits for how much context") is the operator's call, not the harness's.
+## 5. Guards — monitor kills the *script*, not just the server
 
-## D. Protocols
+The run harness (not the operator) enforces via `eval/smi_guard.py` +
+`_kb_monitor.ps1` (2 s poll, already LIVE):
 
-**D1 ladder harness** — extend `eval/_kb_mklongctx.py` (`--ladder` mode):
-emit shared-prefix + depth-parameterised queries; emit scoring key; validate
-all variants against the two-term prompt-size law
-(`0.2383×text + 294.4×n_msg + 9110`) and reject the batch if any variant
-exceeds `cache_size − 256`. Score automatically; write per-(arm,depth) rows.
+- **VRAM free < 200 MB → kill harness + server immediately.**
+- **Sys RAM free < 2 GB → kill.** (RAM binds at load on this box — flash-knobs
+  §0.9 #1; kill means *no arm result*, not a slow run. Swap = reboot territory.)
+- Poll continues **throughout generation**, not just at load: the kill trigger
+  is the *run* peak (§3), since KV fill + attention transients push VRAM above
+  the loaded steady state.
+- A guard kill invalidates the arm's row; re-arm only after reducing
+  `cache_size` one step and re-logging the fit. Two guard kills at the same
+  cell = arm capped at the next lower size, no third attempt.
+- `config.yml` `.bak-<date>` + md5 invariant checked only when idle;
+  `start_tuned.ps1` always; restarts announced; arms write
+  `config.yml.kb-<arm>` pristine-restore snapshots (naming convention: the
+  file is the *restore source* for that arm, not the applied config).
 
-**D3 production replay** — reuse the §0.8 sustained-replay protocol
-(`agentic_code_10.json`, turn i = `messages[0..i]`), temperature 0, one boot
-per arm interleaved with reference; primary estimator = median per-turn
-wallSec ratio; correctness = tool-call name+args + final-answer patch vs
-`ref-fp16`'s run of the same turns. Skip arms with >1 tool-call divergence at
-16k unless screening is the point.
+## 6. Run order
 
-**D5 determinism — the open pre-flight (NOT yet a rule):**
-`EXL3_DSA_QC_STAGE=0` pins the online-dequant attention path (deterministic,
-no threshold cliff at ~1M entries) but forfeits the gather-once staging win
-(~3.9× faster attention at 16k; ~95% of 250k wall-clock is prefill).
-**Unmeasured how much of that applies to the plain `Cache` path** — the 3.9×
-figure came from the kvarn-armed harness. Pre-flight #1 therefore measures it
-on the plain path (same prompts, `EXL3_DSA_QC_STAGE` 0 vs 1, boot-interleaved,
-wallSec + logits fingerprint). Quality runs: arm internal A/B only (each arm's
-answers vs its own fp16 control), never cross-stage ratios. Perf/timing rows
-use the default (staged) path — production default is what ships.
-
-All D phases inherit verbatim: interleaved reference (§0.8.1), ≥4 distinct
-variants per boot at long context, "within-config spread > between-config
-spread ⇒ uninformative", ≤3 pp = noise, no ratio before the last arm lands,
-`config.yml` .bak + md5 invariant checked only when idle, startup-log value
-verification, `start_tuned.ps1` always, restart announcements.
-
-## E. Run order (boot-cheap first)
-
-1. Pre-flight: plain-path `EXL3_DSA_QC_STAGE` cost; FP8 support check; block-id
-   logging availability probe. (3 boots, all reusable knowledge.)
-2. Frontier: bootability at 262144 for `3,3→8,8` (+FP8), then cache_size
-   descent; boot-time + VRAM + RAM rows.
-3. `ref-fp16` @ max bootable: ladder P1 depths ≤ its ceiling + P2 at 32k/65k.
-4. `cur-22` full: ladder to 250k, P2 at 131k/200k+, P3 replay, P5 at 16k.
-5. Survivors per arm quality-vs-length; P4 control if budget allows.
-6. Report: frontier table + per-arm quality-vs-depth curves + proposed
-   `config.yml` diff (never committed) + verdict only where evidence supports
-   it.
-
-## F. Known costs, stated
-
-- Ladder depth is capped by `cache_size`: at 262144, max usable D ≈ 250k after
-  the ~12k tools/preamble overhead + generation headroom (flash-knobs §0.7
-  calibration, verified to 0.07%).
-- 250k fast/slow machine state is environmental and unidentified; match state
-  within boot, never across (flash-knobs §0.8.2).
-- P1 scoring is auto but the *probe author* owns validity: spans must be
-  verbatim-unique, outside the trailing 2048-token window at query time, and
-  not duplicated by the recycler's `[pass N]` recycling.
-- First application of the depth-ladder protocol — validate against `2,2`
-  (expected: near-fp16 if quant is innocent) before trusting any other arm.
+1. Pre-flight (3 boots): vision-off VRAM delta; plain-path `DSA_QC_STAGE`
+   cost; block-id logging availability probe (decides P1 attribution depth).
+2. S0 endpoints (`fp16`, `2,2`) + Gate 1 decision.
+3. Targeted bisection arms per §2.
+4. P3 objective tier if budget survives.
+5. Report → `wiki/reports/` + CSV (`_kb_mkcsv.py` convention): frontier table,
+   per-arm quality-vs-depth curves, per-task rows in the §0 example format,
+   proposed `config.yml` diff, and an explicit "frontier is memory-bound"
+   verdict where quantisation is not the binding constraint.
