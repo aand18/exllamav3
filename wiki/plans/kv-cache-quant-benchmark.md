@@ -120,6 +120,41 @@ baselines, log-verified prompt lengths via the two-term law
 (`0.2383×text + 294.4×n_msg + 9110`, reject batch if any variant exceeds
 `cache_size − 256`), 250k fast/slow state matched within boot only.
 
+## 4b. Standard external benchmarks (comparability layer)
+
+Internal probes answer "does quant break *my* workload"; these answer "does
+the arm score where the published numbers say it should" — the check that
+catches a broken harness when every in-house probe agrees with itself.
+Selected for box availability (all already on disk, no installs — production
+machine rule) and because each probes a different failure surface:
+
+- **NoLiMa** (`/home/dev/NoLiMa`, data local): the industry-standard
+  "forgetting in long context" suite — queries whose answer sits at a known
+  depth inside distractor haystacks, deliberately built so keyword-matching
+  can't shortcut (low-relevance distractors defeat attention). This is
+  precisely the mechanism KV quantisation threatens. Run the multi-needle
+  task at 32k/64k/128k per arm; fp16 reference at each length that boots.
+  Its scores are publicly comparable across models.
+- **τ-bench** (`/home/dev/tau2-bench`, repo with automation guide on disk):
+  the standard multi-turn tool-agentic benchmark — airline/retail domains,
+  DB-state verification at episode end (task succeeds only if the final
+  database state is correct, so hallucinated tool effects cannot slip
+  through). Runs against OpenAI-compatible endpoints, i.e. against tabbyAPI
+  as-is. Subset: airline-20 + retail-20 per arm at ≤32k contexts. The
+  pass^k column doubles as a determinism check.
+- **LongBench-v2-style MC items via lm-eval-harness**
+  (`/home/dev/lm-evaluation-harness`): standard MC scoring plumbing exists;
+  use it only for the 16k/32k regression screen as a second, harness-external
+  implementation of MC scoring — cross-validates the P1 scorer itself.
+- **BFCL-style function-calling correctness**: no new install needed — the
+  P3 replay already scores tool-call validity; skip a dedicated runner
+  unless P3 and τ-bench disagree, then BFCL is the tiebreak.
+
+Cost control: per-item benchmarks get no shared-prefix trick, so subsets are
+fixed **before** the first run (above), reference arm measured once, and each
+arm runs the subset once — deltas outside the fp16 arm's own published-score
+band count as quantisation damage, in units the industry can read.
+
 ## 5. Guards — monitor kills the *script*, not just the server
 
 The run harness (not the operator) enforces via `eval/smi_guard.py` +
@@ -197,7 +232,10 @@ belong in the plan, not every report line).
 2. S0 endpoints (`fp16`, `2,2`) + Gate 1 decision.
 3. Targeted bisection arms per §2.
 4. P3 objective tier if budget survives.
-5. Report → `wiki/reports/` + CSV (`_kb_mkcsv.py` convention): frontier table,
+5. External layer (§4b) for the arms that reach a verdict: NoLiMa multi-needle
+   at 32k/64k/128k, τ-bench subsets, lm-eval MC screen — subsets fixed before
+   first boot, reference arm first.
+6. Report → `wiki/reports/` + CSV (`_kb_mkcsv.py` convention): frontier table,
    per-arm quality-vs-depth curves, per-task rows in the §0 example format,
    proposed `config.yml` diff, and an explicit "frontier is memory-bound"
    verdict where quantisation is not the binding constraint.
