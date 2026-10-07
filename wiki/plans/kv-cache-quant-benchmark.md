@@ -1,241 +1,243 @@
-# KV-cache quantisation benchmark — degradation-vs-length frontier at 256k (agentic)
+# KV-cache quantisation benchmark — quality-vs-length frontier at 256k (agentic)
 
-## 0. Deliverable (what "done" means)
+## 0. Goal and what "done" looks like
 
-A frontier table of the form **"use quant X up to length L; at length L' it
-degrades by D"**, per arm, with practical task-level examples, e.g.:
+Decide the serving `cache_mode` for Qwen3.8-Flash-Next-exl3 3.05bpw on the
+4090 box for the operator's real workload: code-heavy, tool-heavy, opencode
+sessions at 128k–256k context. The deliverable is a frontier table written in
+this shape:
 
-> `2,2`: NIAH 40/40 @ 64k, 33/40 @ 131k, 26/40 @ 250k; agentic_code_10 @ 250k:
-> did not finish within 32k output, +11 turns vs ref, +4 invalid tool calls,
-> +3 min wall vs ref-fp16 @ same context (131k ceiling).
+> "use `2,2` up to 128k for agentic work; `2,2` degrades at 200k —
+> NIAH 40/40 @ 64k, 22/40 @ 200k; agentic_code_10 @ 250k: did not finish,
+> +14 turns, 5 rejected tool calls, +3 min wall vs uncompressed reference."
 
-plus a recommended serving config per use case (128k agentic vs 256k max).
-This is the first plain-`Cache` quality measurement on this box — **KVaRN is
-out of scope by operator decision (pinned 2026-10-07)** and its ledger does not
-transfer (different serve path, obs #101).
+Per arm: max context it can honestly serve, accuracy-vs-length curve, and
+real-task rows. Production today is `cache_mode: 2,2` @ `cache_size: 262144`
+— shipped on perf evidence only; its quality has never been measured. This
+plan owns that gap.
 
-## 1. Why this arch changes what KV quant can break
+**Standing decisions (do not re-litigate):**
+- KVaRN is out (operator decision, pinned 2026-10-07: too slow, minimal VRAM
+  gain on this model). Plain-cache paths only; its quality ledger does not
+  transfer.
+- Draft-side KV (`draft_cache_mode`) is a separate, settled knob: keep Q4
+  (FP16/Q8 neutral, 3,3/2,2 slower — obs #161/#164). Do not mix those rows
+  with main-cache rows; that mislabel cost a retraction once.
 
-- Only the **12 QSA layers** hold KV (36 GDN layers are recurrent state).
-- The QSA indexer caps every query at **512 blocks × 4 = 2048 attended tokens**
-  (`qsa_indexer.py`, obs #140) → damage is *retrieval at depth*: wrong block
-  selection (indexer path) or corrupted values inside the attended window.
-- **Indexer planes stay fp16** (~320 B/token/layer, obs #56) and are
-  quant-invariant → the quantised arm's own forced-choice answers are a valid
-  scoring reference; retrieval selection is not what's perturbed by quant.
-- fp16 KV ≈ 24 KB/token (≈ 6.3 GB @ 262144); the fp16 indexer floor
-  (~3.8 KB/token) is paid by every arm — quant savings are smaller than they
-  look, and `FP16 @ 262144` is not expected to boot; measure, don't lore.
-- **Causality trick**: KV through depth *L* is identical across depths, so one
-  shared cold-prefill prefix serves all depth probes inside a boot. Depth is a
-  variable, not a boot.
+## 1. Why this model's quantisation damage is a retrieval-at-depth problem
 
-## 2. Adaptive protocol (2–3 exploratory runs before any ladder)
+- Only the **12 QSA layers** hold KV pages; the 36 GDN layers are recurrent
+  state and unaffected.
+- The QSA attention selector caps every query at **2048 attended tokens**
+  (`qsa_indexer.py`, obs #140). So quantisation cannot "blur the whole
+  context"; it breaks one of two things, and they are different bugs:
+  1. the model looks in the wrong region of the cache (selection failure), or
+  2. it finds the right region and reads corrupted values out of it.
+  The benchmark classifies misses into these two categories separately.
+- The index structures themselves stay uncompressed (~320 B/token/layer,
+  obs #56), so retrieval instructions survive quantisation — meaning the
+  quantised arm's own forced-choice answers are a valid scoring reference.
+- Cost reality: uncompressed KV ≈ 24 KB/token → ~6.3 GB at 262k; the
+  un-quantisable index floor is ~3.8 KB/token. Compression savings are
+  smaller than the bit count suggests, and uncompressed-at-256k probably
+  does not fit this box — measure, don't assume.
+- **Causality trick (makes the whole battery cheap):** content written later
+  cannot change KV of earlier positions, so one shared cold-prefill
+  conversation serves all probe depths inside one boot. Depth is a variable,
+  not a boot. This also makes results common-mode against the machine-state
+  drift that burned previous sessions.
 
-**Rule: never ladder the full {3,3…8,8} set up front.** Sequence:
+## 2. Arms and VRAM maximisation
 
-1. **S0 endpoints** (2 boots, interleaved): `ref-fp16` @ max bootable size and
-   `cur-22` @ 262144. Outputs: fp16 quality curve shape, and whether `2,2`
-   already breaks at any depth.
-2. **Gate 1 (decision point):**
-   - `2,2` clean at all depths → ship `2,2`; ladder runs only as confidence
-     nudge at the 2 depths nearest the operator's 200k+ regime (3 boots).
-   - `2,2` breaks at L₁ → bisect the *space between* 2,2 and the endpoint that
-     holds (test `4,4` at L₁ and just beyond; `3,3` only if 4,4 is borderline;
-     skip 5,5/6,6 unless the frontier at high bits is the open question).
-   - A depth where every quant fails but fp16 holds → the frontier is the
-     memory ceiling, not quantisation; record and stop that arm.
-3. **S2 targeted fill**: arms/lengths chosen from S0 data only. Budget target:
-   whole battery ≤ ~12 boots, not 40.
+Production baseline (verify each in the boot log before trusting):
+`cache_size: 262144`, `cpu_moe_split_experts: 380`, `max_batch_size: 2`,
+`chunk_size: 4096`, `draft_mode: mtp`, `draft_num_tokens: 3`,
+`dynamic_draft: true`, `draft_cache_mode: Q4`, warmup on. Server starts via
+`start_tuned.ps1` (`EXL3_MOE_CPU_THREADS=16` etc).
 
-## 3. Arms and VRAM maximisation (never leave VRAM on the table)
+- Arms: `fp16` (uncompressed reference at max bootable size), `2,2` (the arm
+  under trial), then `3,3` / `4,4` / `5,5` / `6,6` / `8,8` as needed —
+  symmetric pairs only, chosen adaptively (§3), never the full grid up front.
+- **Fill the GPU, don't court it:** benchmark boots run `vision: false`
+  (actual bytes freed is unmeasured — measure it in pre-flight; the old
+  offload figure ~150–190 MB is not the same knob), while **MTP stays ON** at
+  draft 3/Q4 — arms must fit with the draft head resident because that is
+  what production runs.
+- The limit that matters is peak memory **during generation**, not at load:
+  KV fill plus attention/transient working sets push the run peak above the
+  loaded steady state. Load-OK/dies-mid-run counts as unsafe, not fast
+  (mcl34 lesson). Old bootability verdicts are void: current thr16+split380
+  regime frees ~724 MB vs the regime the old ladder booted in.
+- `fp8` control arm only if tabbyAPI's exllamav3 backend exposes it — it
+  separates "too few bits" from "the read-back path is broken" (obs #101
+  lesson: suspect the harness path before the mechanism).
 
-Benchmark-session config overrides (proposed diff, never committed; production
-`config.yml` untouched outside runs):
+## 3. Adaptive execution — never brute-force the grid
 
-- **`vision: false`** for benchmark boots — free the vision tower's resident
-  bytes (measure the actual amount in pre-flight; `vision_offload` only freed
-  ~150–190 MB on the old regime, full-disable value is unmeasured → measure it
-  as part of S0).
-- **MTP stays ON**: `draft_mode: mtp`, `draft_num_tokens: 3`,
-  `draft_cache_mode: Q4` (settled, obs #161). Draft KV + head cost VRAM — that
-  is included in the budget on purpose, because production ships it; arms must
-  fit *with* drafting live.
-- `cache_size` per arm = **max that boots while respecting §5 guards at
-  runtime**, i.e. steady-state used + observed inference-time growth + transient
-  margin ≤ 24 GB − 200 MB. `max_bootable_tokens` at both memory regimes is a
-  first-class result. Note the pool preallocates at load, but **VRAM still
-  climbs during inference** (attention working set, dequant/staging
-  transients) — the frontier must be sized against the *run* peak, not the
-  load peak. Load-OK/run-OOM arms are UNSAFE, not fast (mcl34 lesson).
-- `cpu_moe_split_experts: 380` + `EXL3_MOE_CPU_THREADS=16` (`start_tuned.ps1`
-  current state) — this regime frees ~724 MB vs the old mcl38 regime; old
-  bootability verdicts are void, re-measure.
+**Stage 0 — pre-flight (3 boots):**
+1. `vision: false` VRAM delta (measure, don't inherit).
+2. `EXL3_DSA_QC_STAGE` default-vs-0 cost on the plain cache path (the known
+   3.9× figure is from a different code path; not transferable).
+3. Whether the server logs which cache blocks the attention search selects —
+   decides whether miss-classification (§1) is measurable or inferred.
 
-Arms: `fp16` (reference, max bootable size), `2,2` (production, under trial),
-then bisected per §2; `fp8` control arm only if tabbyAPI's exllamav3 backend
-exposes FP8 KV — if FP8 (different quantiser path) degrades too, suspicion
-moves to the dequant/serve path, not bit width (obs #101 lesson).
+**Stage 1 — endpoints (2 boots):** `fp16` reference + `2,2`, fully
+interleaved. This is the "run 2–3 things, then decide" step.
+
+**Gate 1 decision:**
+- `2,2` clean at all depths → ship it; ladder reduces to a confidence nudge
+  near 200k.
+- `2,2` breaks at length L → test only the next-cheaper setting (4,4 first)
+  at L and just beyond; 3,3 only if 4,4 is borderline; 5,5/6,6/8,8 only if
+  the high-bit frontier is itself the open question.
+- Every quantised setting fails where fp16 holds → that is the memory
+  ceiling, not quantisation; record and stop that arm.
+
+Budget target: whole battery ≈ 12 boots.
 
 ## 4. Probes
 
-**P1 depth ladder (primary, new harness).** One shared cold-prefill prefix
-(tools + agentic preamble ~12k incl. template overhead, `_kb_mklongctx.py`
-`--ladder` mode), then code-flavoured verbatim spans (timeouts, flag names,
-error strings — the operator's actual KV content) planted at depths
-{8k, 16k, 32k, 65k, 131k, 250k}, queried by **forced choice** (greedy,
-auto-scored). NIAH-style batch sizing per user practice: **40 needles per
-depth checkpoint (40/40 gate), 200-trial set at the decision length only**
-(≥7/8 gate applies to the small set; at p≈0.85 a 4-trial test false-passes
-~40% — 4 was the old record, not the target). Per (arm, depth) row: pass
-count, pass-rate-vs-depth curve, latency-in-band check, and whether the span's
-block was inside the selected 512 (selection failure) or inside the window
-(value corruption). Scoring validity is the probe author's job: spans
+**P1 — depth ladder (primary, new harness).** One shared cold-prefill
+conversation (tools + agentic preamble ~12k tokens including template
+overhead) with 40 planted code-flavoured snippets per checkpoint (timeouts,
+flag names, error strings, config values — what the operator's KV actually
+contains) at depths 8k/16k/32k/65k/131k/250k, queried by forced choice
+(greedy, auto-scored). Scoring validity is the probe author's job: spans
 verbatim-unique, outside the trailing 2048-token window at query time, no
-recycler duplicates.
+recycler duplicates. Each miss classified wrong-region vs corrupted-value
+(§1), using the block-id log if stage 0 says it exists. Latency kept in the
+known wall-clock band or the row is flagged.
 
-**P2 production task metric (practical examples for the table).**
-`agentic_code_10.json` sustained replay (turn i = `messages[0..i]`), greedy,
-at 2 lengths: 11–16k (regression screen) and the arm's frontier length.
-Reported per arm as the user's example format: finished y/n, output tokens vs
-ref, turns used vs ref, invalid tool calls (name/arg schema violations), wall
-time vs ref (within-boot ratio only). Reference = `ref-fp16` same turns,
-interleaved.
+**P2 — gate check.** Same mechanism, 8 trials per length at 131k and 200k,
+pass bar ≥7/8; 200-trial set only at the decision length. Eight, not four:
+at a true ~15% failure rate, a 4-trial test fakes a perfect pass ~40% of the
+time. Report pass counts, not scores.
 
-**P3 optional objective tier (KLD/PPL) — run only if cheap.** `eval/ppl.py`
-wikitext2 stream is cached (perf.py shares the corpus); KLD of arm vs fp16-KV
-logits at 16k and 65k, one offline boot per arm, gated by
-`wiki/patterns/kld-median-noise-floor.md` (same-top + mean/max band; median
-digit flips are noise). If the harness needs new plumbing, it gets dropped —
-P1/P2 carry the decision.
+**P3 — real-task replay.** `agentic_code_10.json` sustained replay (turn i =
+`messages[0..i]`), greedy, at 11–16k (regression screen) and at the arm's max
+length. Reported per arm: finished y/n, output tokens vs reference, turns vs
+reference, rejected tool calls (bad paths, stale symbols), wall-time delta.
+This is the operator's actual workload and the harshest fair test of exact
+recall — the property quantisation threatens — so it is included because it
+is real and unforgiving, not because the model does well there. (The
+"code is best case" note in obs #162 is about draft-acceptance *speed*, not
+quality; #164 further confounds content vs tool count — do not import either
+as a quality assumption.)
+The one caveat: it is a single conversation — never generalise from it alone.
 
-**Determinism pre-flight first**: `EXL3_DSA_QC_STAGE` 0-vs-default cost on the
-*plain* path is unmeasured (the 3.9× figure is kvarn-path). Measure on
-arm-free boots; quality runs use whichever side keeps fingerprint noise below
-the between-arm effect, always the same stage across arms; never mix.
+**P4 — FP8 control** (optional): if backend-supported, run it to attribute
+damage between bit width and dequant code path.
 
-All inherited protocol law applies verbatim: interleaved reference (§0.8.1),
-≥4 variants per boot at long context, within-boot ratios, no cross-window
-baselines, log-verified prompt lengths via the two-term law
-(`0.2383×text + 294.4×n_msg + 9110`, reject batch if any variant exceeds
-`cache_size − 256`), 250k fast/slow state matched within boot only.
+**P5 — objective numeric tier (optional, drop if it needs new plumbing):**
+wikitext2 perplexity (corpus already cached) + KLD vs uncompressed-cache
+logits at 16k/65k, offline, one boot per arm, judged by the same-top rule
+(`wiki/patterns/kld-median-noise-floor.md`): median-digit flips are noise;
+same-top and mean/max band carry the verdict.
 
 ## 4b. Standard external benchmarks (comparability layer)
 
-Internal probes answer "does quant break *my* workload"; these answer "does
-the arm score where the published numbers say it should" — the check that
-catches a broken harness when every in-house probe agrees with itself.
-Selected for box availability (all already on disk, no installs — production
-machine rule) and because each probes a different failure surface:
+In-house probes share one blind spot: the same harness designs and scores
+them. External suites catch a systematically wrong harness. All required
+repos are already on disk (no installs — production machine rule):
 
-- **NoLiMa** (`/home/dev/NoLiMa`, data local): the industry-standard
-  "forgetting in long context" suite — queries whose answer sits at a known
-  depth inside distractor haystacks, deliberately built so keyword-matching
-  can't shortcut (low-relevance distractors defeat attention). This is
-  precisely the mechanism KV quantisation threatens. Run the multi-needle
-  task at 32k/64k/128k per arm; fp16 reference at each length that boots.
-  Its scores are publicly comparable across models.
-- **τ-bench** (`/home/dev/tau2-bench`, repo with automation guide on disk):
-  the standard multi-turn tool-agentic benchmark — airline/retail domains,
-  DB-state verification at episode end (task succeeds only if the final
-  database state is correct, so hallucinated tool effects cannot slip
-  through). Runs against OpenAI-compatible endpoints, i.e. against tabbyAPI
-  as-is. Subset: airline-20 + retail-20 per arm at ≤32k contexts. The
-  pass^k column doubles as a determinism check.
-- **LongBench-v2-style MC items via lm-eval-harness**
-  (`/home/dev/lm-evaluation-harness`): standard MC scoring plumbing exists;
-  use it only for the 16k/32k regression screen as a second, harness-external
-  implementation of MC scoring — cross-validates the P1 scorer itself.
-- **BFCL-style function-calling correctness**: no new install needed — the
-  P3 replay already scores tool-call validity; skip a dedicated runner
-  unless P3 and τ-bench disagree, then BFCL is the tiebreak.
+- **NoLiMa** (`/home/dev/NoLiMa`, data local): industry-standard
+  forgetting-in-context suite; distractor haystacks defeat keyword matching —
+  the exact mechanism at risk. Multi-needle at 32k/64k/128k per arm;
+  externally comparable scores.
+- **τ-bench** (`/home/dev/tau2-bench`): standard multi-turn tool-agent
+  benchmark with database-state verification at episode end — a hallucinated
+  tool effect cannot pass grading. Speaks OpenAI-compatible, so tabbyAPI
+  serves it directly. Subsets: airline-20 + retail-20 at ≤32k.
+- **lm-evaluation-harness** MC screen at 16k/32k: independent scoring
+  implementation that cross-validates the P1 scorer itself.
+- BFCL: tiebreak only, if P3 and τ-bench disagree.
 
-Cost control: per-item benchmarks get no shared-prefix trick, so subsets are
-fixed **before** the first run (above), reference arm measured once, and each
-arm runs the subset once — deltas outside the fp16 arm's own published-score
-band count as quantisation damage, in units the industry can read.
+Rules: reference arm first; subsets frozen before the first boot; arms that
+drop outside the reference's published-score band count as damaged, in units
+the industry can read.
 
-## 5. Guards — monitor kills the *script*, not just the server
+## 5. Guards — the monitor kills the script, not just the server
 
-The run harness (not the operator) enforces via `eval/smi_guard.py` +
-`_kb_monitor.ps1` (2 s poll, already LIVE):
+- Hard kill: VRAM free < 200 MB **or** system RAM free < 2 GB → kill harness
+  AND server. Poll at 2 s **throughout generation**, not just at load — the
+  run peak, not the load state, is what must stay under the line (§2).
+- RAM is the binding constraint at load on this box (64 GB with the expert
+  host arena); treat every load as a RAM event.
+- A guard-killed cell is `invalidated`, never recorded as a result; re-arm
+  only at the next-lower `cache_size`. Two kills at the same cell = that cell
+  is capped, no third attempt.
+- Never swap, never "one more attempt" past the guard — a swap here is a
+  reboot, not a slow run.
 
-- **VRAM free < 200 MB → kill harness + server immediately.**
-- **Sys RAM free < 2 GB → kill.** (RAM binds at load on this box — flash-knobs
-  §0.9 #1; kill means *no arm result*, not a slow run. Swap = reboot territory.)
-- Poll continues **throughout generation**, not just at load: the kill trigger
-  is the *run* peak (§3), since KV fill + attention transients push VRAM above
-  the loaded steady state.
-- A guard kill invalidates the arm's row; re-arm only after reducing
-  `cache_size` one step and re-logging the fit. Two guard kills at the same
-  cell = arm capped at the next lower size, no third attempt.
-- `config.yml` `.bak-<date>` + md5 invariant checked only when idle;
-  `start_tuned.ps1` always; restarts announced; arms write
-  `config.yml.kb-<arm>` pristine-restore snapshots (naming convention: the
-  file is the *restore source* for that arm, not the applied config).
+## 6. Harness contract — the script must be sound
 
-## 6. Harness contract — the script must be sound (non-negotiable)
+1. **Never clobber a log:** `logs\kq\<arm>-<probe>-<UTCstamp>-a<attempt>.log`,
+   append-or-create only; results as append-only rows keyed
+   `arm|probe|depth|variant|configmd5`. A log name reused across configs is a
+   defect (this collision already cost one session).
+2. **Journal + resume:** per-cell journal; `done` only when the row is fully
+   written; re-runs skip `done`, re-run `invalidated`. A crash at minute 55
+   costs ≤1 cell, never the session.
+3. **Verify before measure:** boot hard timeout 120 s; the boot log must echo
+   the arm's actual values before the first request; mismatch = `BAD_CONFIG`,
+   seconds lost, not an hour of wrong data.
+4. **Watchdogs bound everything:** boot timeout, per-request inactivity
+   timeout (180 s → `HANG` row, next cell), guard thresholds kill the harness
+   itself. `eval/smi_guard.py` stays the backstop with its PID-diff rule
+   (only PIDs that appeared after `--before` are killable).
+5. **Loud post-run self-check:** expected vs journalled cell counts; no
+   `done` row with missing fields; log-verified prompt tokens on every long
+   row; `config.yml` md5 vs pristine when idle; no orphan processes. A phase
+   that finishes short of schedule FAILS.
+6. **`_kq_selftest.ps1` gates the battery** (pattern: `_kb_selftest.ps1`):
+   full pipeline on a throwaway tiny config, deliberately tripping a guard
+   kill, a BAD-CONFIG arm, and a mid-cell kill; resume must prove journal
+   semantics. Nothing real runs until selftest is green.
+7. Windows mechanics per AGENTS.md: unix2dos `.bat`, `Tee-Object` for server
+   stdout into the run's boot log, bounded-output commands only.
 
-The `_kb_*` harness already proved (and paid for) most of these rules; the new
-`_kq_*` scripts inherit them and close the gaps that remain (journaling, hang
-detection, verify-before-measure). Reusing `_kb_lib.ps1` patterns is expected,
-not optional.
+## 7. Measurement law (inherited, binding)
 
-1. **Never clobber a log.** Every run writes
-   `logs\kq\<arm>-<probe>-<UTCstamp>-a<attempt>.log`; attempt counters
-   increment, files are append-or-create only, results are append-only
-   TSV/JSONL rows tagged `arm|probe|depth|variant|attempt`. The LogTag
-   collision that already bit once (`_kb_lib.ps1` comment) generalises: a name
-   reused across tiers/configs is a defect, not a shortcut.
-2. **Per-cell journal + resume.** `_kq_run.jsonl` keyed by
-   `arm|probe|depth|variant|configmd5`; a cell is `done` only when its row is
-   fully written. Re-running the battery skips `done`, re-runs `invalidated`
-   (guard kill / BAD-CONFIG / crash). A crash at minute 55 must cost ≤1 cell
-   on resume, never the session.
-3. **Verify-before-measure, fail fast.** Boot hard timeout 120 s (ready line
-   expected ~65 s); the boot log must echo the arm's values (`cache_mode`,
-   `cache_size`, split_experts, draft block) before the first request. Any
-   mismatch → kill server, journal `BAD_CONFIG`, next arm. A typo'd YAML key
-   must cost seconds, not an hour of silently-wrong data — this is THE way
-   runs get lost.
-4. **Watchdogs, and they kill the harness too.** 2 s poll: VRAM free <200 MB /
-   sys-RAM free <2 GB → kill harness AND server (trip journaled, cell
-   `invalidated`). Per-request inactivity timeout (no progress line 180 s) →
-   `HANG` row, continue to next cell. Server-boot hangs and request hangs are
-   different paths — both bounded. `smi_guard.py` stays the WSL-side backstop
-   with its PID-diff rule (only PIDs present after `--before` are killable).
-5. **Post-run self-check, loud.** Expected-cells vs journalled-cells count;
-   every `done` row has non-null required fields; log-verified prompt tokens
-   present for every long-context row; `config.yml` md5 == pristine when idle;
-   no orphan `python.exe`. A phase finishing short of its schedule FAILS — it
-   does not "complete with fewer rows".
-6. **`_kq_selftest.ps1` before the first real boot** (pattern:
-   `_kb_selftest.ps1`): full pipeline against a throwaway tiny-cache_size
-   config with toy prompts; deliberately trips a guard kill, a BAD-CONFIG
-   arm, and a mid-cell kill, then resumes and proves the journal skips `done`
-   and re-runs `invalidated`. The battery is gated on selftest passing.
-7. Windows mechanics per AGENTS.md: `.bat` via unix2dos, PowerShell
-   `Tee-Object` for server stdout into the run's boot log, bounded-output
-   commands only, `tasklist` PID-diff for kill safety.
+- **Interleave the reference.** Machine speed drifts ~10% across a session
+  (measured: identical configs 8% apart; consecutive boots drift 0.07%). Run
+  reference–candidate–reference–candidate and compare only within the pair;
+  if the two reference runs disagree, the window is bad — repeat, don't
+  average through it. This rule cost three wrong reports before it was law.
+- Within-boot ratios for quality; ≥4 distinct variants per boot at long
+  context; ≥10% machine-state effect vs <10% = unresolvable, say so.
+- Prompt lengths are read from the server log, never from the file's
+  nominal size: `actual ≈ 0.2383×text + 294.4×n_msgs + 9110`; reject the
+  whole batch if any variant exceeds `cache_size − 256`.
+- 250k has an unidentified fast/slow machine state — match state within a
+  boot, never across boots.
+- Config hygiene: `.bak-<date>` before edits, md5-invariant checked only when
+  idle, per-arm pristine restore snapshots (`config.yml.kb-<arm>` = restore
+  source, not applied config), restarts announced, `start_tuned.ps1` always.
 
-**Report house style (all output docs):** bullet points, one fact per bullet;
-plain technical English — no in-house shorthand ("blur", "arm-adjacent",
-"frontier-bound") without a plain-English gloss; explain the failure cause in
-terms of what the model did wrong in the transcript, not internals jargon;
-no boilerplate the reader already assumes (e.g. "never committed" reminders
-belong in the plan, not every report line).
+## 8. Run order and output
 
-## 7. Run order
+1. Pre-flight (§3 stage 0, 3 boots).
+2. Endpoints `fp16` + `2,2` → Gate 1.
+3. Targeted bisection arms per Gate 1.
+4. Optional tiers: P5 numeric tier; external layer (§4b) for arms that reach
+   a verdict.
+5. Report → `wiki/reports/` + CSVs (`_kb_mkcsv.py` convention).
 
-1. Pre-flight (3 boots): vision-off VRAM delta; plain-path `DSA_QC_STAGE`
-   cost; block-id logging availability probe (decides P1 attribution depth).
-2. S0 endpoints (`fp16`, `2,2`) + Gate 1 decision.
-3. Targeted bisection arms per §2.
-4. P3 objective tier if budget survives.
-5. External layer (§4b) for the arms that reach a verdict: NoLiMa multi-needle
-   at 32k/64k/128k, τ-bench subsets, lm-eval MC screen — subsets fixed before
-   first boot, reference arm first.
-6. Report → `wiki/reports/` + CSV (`_kb_mkcsv.py` convention): frontier table,
-   per-arm quality-vs-depth curves, per-task rows in the §0 example format,
-   proposed `config.yml` diff, and an explicit "frontier is memory-bound"
-   verdict where quantisation is not the binding constraint.
+**Report house style:** bullets, one fact per bullet; plain technical English
+— the reader is a software engineer, not an LLM researcher; explain each
+failure by what the model did wrong in the transcript; no insider shorthand,
+no boilerplate the reader already assumes.
+
+**Decision rule:** recommend the lowest-bit arm that passes the gate at the
+lengths in use. If no arm passes at 256k, the honest output is still the
+frontier table: "accuracy-critical work caps at ~128k (3,3/4,4 territory);
+256k context is available at 2,2 with a measured deep-recall failure rate of
+X — a workload decision, not a benchmark failure." Where every quantised arm
+fails but fp16 holds, the frontier is memory-bound, not quantisation-bound —
+say exactly that. Proposed `config.yml` diff accompanies the report; the file
+itself is never committed.
+
+## 9. Status
+
+Not started. Executor: begin at §3 stage 0; everything above is either
+measured (obs/reports cited) or explicitly marked unmeasured.
