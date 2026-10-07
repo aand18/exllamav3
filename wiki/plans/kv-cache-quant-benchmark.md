@@ -108,11 +108,10 @@ after. Nothing below runs until selftest is green.
    3.9× figure is from a different code path; not transferable).
 3. Whether the server logs which cache blocks the attention search selects —
    decides whether miss-classification (§1) is measured or N/A.
-4. External-layer feasibility: NoLiMa data fetch/generation + 64k/128k
-   configs + isolated venv build (pinned `transformers==4.46.1` /
-   `openai==1.53.0`; venvs are permitted, host installs are not); τ-bench
-   runner smoke against tabbyAPI with the agent/simulator/judge split
-   declared (§4b); lm-eval padding method or natural-length-only scope.
+4. External-layer feasibility: NoLiMa cut to tiebreak-only (no further
+   task unless P1 and LongBench-v2 disagree); τ-bench runner smoke against
+   tabbyAPI with the agent-only split declared (§4b); LongBench-v2 item
+   length filter validated (≤32k screen + 32–128k band addressable).
    Any layer that fails feasibility is cut here, loudly, before it consumes
    arm boots.
 
@@ -236,9 +235,10 @@ stage 0.4; anything failing there is cut before spending arm boots:
 
 - **NoLiMa** (`/home/dev/NoLiMa`): forgetting-in-context suite whose
   distractor haystacks defeat keyword matching — the exact mechanism at
-  risk. Multi-needle at 32k/64k/128k per arm; externally comparable scores.
-  Requires: dataset fetch/generation, 64k/128k run configs (max shipped is
-  32K), isolated venv build.
+  risk. Demoted to tiebreak-only: it needs dataset generation, 64k/128k
+  run configs that don't exist (max shipped is 32K), and a venv build, for
+  information the P1 ladder plus LongBench-v2 already cover. Run it only
+  if P1 and LongBench-v2 disagree.
 - **τ-bench** (`/home/dev/tau2-bench`): multi-turn tool-agent benchmark with
   database-state verification — a hallucinated tool effect cannot pass
   grading. Backend defaults point agent, user simulator, NL assertions, and
@@ -247,9 +247,17 @@ stage 0.4; anything failing there is cut before spending arm boots:
   external model**, costed as an API dependency. Subsets: airline-20 +
   retail-20 at ≤32k. Agent-only; pointing any judge at the arm is
   self-grading and invalidates the layer.
-- **lm-evaluation-harness** MC screen: at natural task length unless a
-  padding method is named and validated — its standing role is an
-  independent scoring implementation that cross-validates the P1 scorer.
+- **LongBench-v2 via lm-evaluation-harness** (primary external layer):
+  503 multiple-choice questions, contexts 8k–2M words, including code
+  repository understanding and long-dialogue history — the closest
+  off-the-shelf match to code-heavy agentic sessions at length. The
+  harness's OpenAI-completions backend takes a `base_url`, so it points at
+  tabbyAPI with no new installs; MC scoring doubles as the independent
+  implementation that cross-validates the P1 scorer. Cost control is
+  mandatory: filter items by context length (≤32k screen + 32–128k band),
+  drop the tail items that exceed the cache by construction. Each item
+  carries its own haystack (no shared-prefix trick) — budget prefill per
+  item.
 - BFCL: not on disk — dropped unless fetched; P3 already covers
   tool-call validity.
 
