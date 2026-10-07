@@ -183,6 +183,13 @@ not optional.
    `Tee-Object` for server stdout into the run's boot log, bounded-output
    commands only, `tasklist` PID-diff for kill safety.
 
+**Report house style (all output docs):** bullet points, one fact per bullet;
+plain technical English — no in-house shorthand ("blur", "arm-adjacent",
+"frontier-bound") without a plain-English gloss; explain the failure cause in
+terms of what the model did wrong in the transcript, not internals jargon;
+no boilerplate the reader already assumes (e.g. "never committed" reminders
+belong in the plan, not every report line).
+
 ## 7. Run order
 
 1. Pre-flight (3 boots): vision-off VRAM delta; plain-path `DSA_QC_STAGE`
