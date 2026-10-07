@@ -139,7 +139,51 @@ The run harness (not the operator) enforces via `eval/smi_guard.py` +
   `config.yml.kb-<arm>` pristine-restore snapshots (naming convention: the
   file is the *restore source* for that arm, not the applied config).
 
-## 6. Run order
+## 6. Harness contract — the script must be sound (non-negotiable)
+
+The `_kb_*` harness already proved (and paid for) most of these rules; the new
+`_kq_*` scripts inherit them and close the gaps that remain (journaling, hang
+detection, verify-before-measure). Reusing `_kb_lib.ps1` patterns is expected,
+not optional.
+
+1. **Never clobber a log.** Every run writes
+   `logs\kq\<arm>-<probe>-<UTCstamp>-a<attempt>.log`; attempt counters
+   increment, files are append-or-create only, results are append-only
+   TSV/JSONL rows tagged `arm|probe|depth|variant|attempt`. The LogTag
+   collision that already bit once (`_kb_lib.ps1` comment) generalises: a name
+   reused across tiers/configs is a defect, not a shortcut.
+2. **Per-cell journal + resume.** `_kq_run.jsonl` keyed by
+   `arm|probe|depth|variant|configmd5`; a cell is `done` only when its row is
+   fully written. Re-running the battery skips `done`, re-runs `invalidated`
+   (guard kill / BAD-CONFIG / crash). A crash at minute 55 must cost ≤1 cell
+   on resume, never the session.
+3. **Verify-before-measure, fail fast.** Boot hard timeout 120 s (ready line
+   expected ~65 s); the boot log must echo the arm's values (`cache_mode`,
+   `cache_size`, split_experts, draft block) before the first request. Any
+   mismatch → kill server, journal `BAD_CONFIG`, next arm. A typo'd YAML key
+   must cost seconds, not an hour of silently-wrong data — this is THE way
+   runs get lost.
+4. **Watchdogs, and they kill the harness too.** 2 s poll: VRAM free <200 MB /
+   sys-RAM free <2 GB → kill harness AND server (trip journaled, cell
+   `invalidated`). Per-request inactivity timeout (no progress line 180 s) →
+   `HANG` row, continue to next cell. Server-boot hangs and request hangs are
+   different paths — both bounded. `smi_guard.py` stays the WSL-side backstop
+   with its PID-diff rule (only PIDs present after `--before` are killable).
+5. **Post-run self-check, loud.** Expected-cells vs journalled-cells count;
+   every `done` row has non-null required fields; log-verified prompt tokens
+   present for every long-context row; `config.yml` md5 == pristine when idle;
+   no orphan `python.exe`. A phase finishing short of its schedule FAILS — it
+   does not "complete with fewer rows".
+6. **`_kq_selftest.ps1` before the first real boot** (pattern:
+   `_kb_selftest.ps1`): full pipeline against a throwaway tiny-cache_size
+   config with toy prompts; deliberately trips a guard kill, a BAD-CONFIG
+   arm, and a mid-cell kill, then resumes and proves the journal skips `done`
+   and re-runs `invalidated`. The battery is gated on selftest passing.
+7. Windows mechanics per AGENTS.md: `.bat` via unix2dos, PowerShell
+   `Tee-Object` for server stdout into the run's boot log, bounded-output
+   commands only, `tasklist` PID-diff for kill safety.
+
+## 7. Run order
 
 1. Pre-flight (3 boots): vision-off VRAM delta; plain-path `DSA_QC_STAGE`
    cost; block-id logging availability probe (decides P1 attribution depth).
