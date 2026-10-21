@@ -31,7 +31,13 @@ That is 480 KiB/token against the 1.17 GiB/token the paper's design implies —
 **61.8 GiB** for a 24 GB card. Separately, exllamav3's speculative-decoding path
 asserts that the draft model has no recurrent state
 (`exllamav3/generator/generator.py:162`) — and Qwen3.8's Gated DeltaNet layers
-are recurrent, so an in-family draft model is rejected outright.
+are recurrent, so an in-family *autoregressive* draft model is rejected
+outright. (That second half no longer binds: `incoai/Qwen3.8-Flash-Next-DFlash2`
+is a **block-diffusion** draft for this exact target — 0.6 B, 5 dense
+sliding-attention layers, `is_causal: false`, `use_cache: false` — so it has no
+recurrent state for the assertion to reject, and it drafts a whole block in one
+pass, which is the multi-step lookahead the paper needs. The VRAM half of this
+blocker stands.)
 
 **3. The working set does not fit a GPU cache.** The paper's design is
 cache-centric: draft-time routing predictions fill a per-layer expert cache.
@@ -78,11 +84,17 @@ evaluations), for a 24 GB card with 12 host threads:
 | stream the weights, look-ahead hides 60% | 8.8 ms | 17.3 ms | 31.7 ms | 74.8 ms |
 | floor — all compute on the GPU | 3.4 ms | 3.4 ms | 3.4 ms | 3.4 ms |
 
-**~1.5–2.5x end-to-end TPOT on a gen5 x16 box, ~1.2–1.5x on gen5 x8, and nothing
-at all — a regression — on gen4 x4**, where the bus is slower than the host. The
-model is optimistic by roughly 1.3–1.8x: run against DeepSeek-V2-Lite it predicts
-a 2.5x offloaded-part gain, while the paper's own implementation realized 1.5x
-end-to-end.
+**~1.5–2.5x end-to-end TPOT on a gen5 x16 box, ~1.2–1.5x on gen5 x8, ~2.4x on
+gen4 x16 — and nothing at all, a regression, on gen4 x4**, where the bus is
+slower than the host. The model is optimistic by roughly 1.3–1.8x: run against
+DeepSeek-V2-Lite it predicts a 2.5x offloaded-part gain, while the paper's own
+implementation realized 1.5x end-to-end.
+
+**The gen4 x16 column is the one most cards live in** (an RTX 4090 is PCIe 4.0
+x16; 26.8 GB/s host-to-device, probed on the target box), and its number is
+conditional in a way the others are not: with the transfer *exposed* that link
+buys only 1.13x, so on a consumer card the look-ahead is not an optimization —
+it is the whole difference between a win and nothing.
 
 One gain needs no porting at all. Verifying K rows amortizes the host's weight
 reads over those rows, so the **MTP head already in the checkpoint** takes the
@@ -94,13 +106,23 @@ offloaded part from 89.3 to 57.8 ms/token at K=4 (1.55x) just by running
 1. Measure the host cost of one offloaded expert against the bus cost of the
    same expert on the target box. This single number decides between two designs
    that differ by ~2x in achievable TPOT, and it decides whether the work is
-   worth doing at all (it is not, on a gen4 x4 link).
+   worth doing at all (it is not, on a gen4 x4 link). A calibration point from
+   outside this repo: another engine for the same model on the same box measures
+   **44 µs per offloaded expert** with a hand-tuned AVX2/AVX-512 pool, against
+   the 186 µs this study assumes — the constant is engine-specific, so measure
+   this engine's.
 2. Export the router's top-k per layer per token. It is currently a local
    variable inside `BlockSparseMLP.forward` and never escapes the module; this
    is the missing primitive for any predictor, profiler or prefetch.
 3. Measure routing autocorrelation (temporal and cross-layer) to see how good a
    predictor can be before building one.
 4. Only then: a decode-time expert-streaming path, then the look-ahead on top.
+
+A draft model is no longer on the critical path: `incoai/Qwen3.8-Flash-Next-DFlash2`
+exists, is non-recurrent, and beats the model's own MTP on acceptance length
+(GSM8K 3.26 vs 3.08, HumanEval 2.94 vs 2.52). Porting it into the fork is its
+own piece of work — the capture patch today targets SGLang's `qwen4_exp.py` —
+but it is no longer a reason to say no.
 
 ## Links
 

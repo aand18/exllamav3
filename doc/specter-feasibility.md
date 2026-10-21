@@ -24,7 +24,7 @@ DeepSeek-V2-Lite, Qwen1.5-MoE and Phi-3.5-MoE at batch size 1.
 | Can the paper's *system* be reproduced in exllamav3 for Qwen3.8-Flash-Next? | **No.** Three independent blockers (§3): draft-model VRAM (61.8 GiB needed vs 24 GB available), a premise mismatch (exllamav3 does not have the PCIe bottleneck the paper hides), and a hard generator restriction (the AR-draft path rejects recurrent architectures, which is every Gated-DeltaNet model). |
 | Can the paper's *mechanism* (multi-step look-ahead to hide expert-transfer latency) be used? | **Yes, but it is not the paper's mechanism that is needed here.** For Qwen3.8-Flash-Next the dominant cost is the *host* expert compute, not the bus. The useful move is to shift expert compute from the host to the GPU, which makes the bus the bottleneck — and *then* the paper's look-ahead becomes the way to hide it. |
 | Is the work worth doing? | **Conditionally yes.** The first step is a measurement, not a port: one number (host cost per offloaded expert on the target box, vs the bus cost of the same expert) decides between two designs that differ by a factor of ~2 in achievable TPOT (§5). The measurement costs an afternoon on the 4090 box. |
-| What would it buy? | **~1.5–2.5x end-to-end TPOT on a gen5 x16 box, ~1.2–1.5x on gen5 x8, and nothing at all (a regression) on gen4 x4**, where the host is faster than the bus (§4.5). The ceiling for this design is the GPU-bound floor at ~5–7x. The cheapest slice of it is available today: `--mtp` speculation amortizes the host's weight reads over 4 rows (1.55x on the offloaded part) with no porting at all. |
+| What would it buy? | **~1.5–2.5x end-to-end TPOT on a gen5 x16 box, ~1.2–1.5x on gen5 x8, ~2.4x on gen4 x16** (the consumer-card regime — but only **1.13x** there if the transfer stays exposed, so on a 4090-class link the look-ahead is the whole difference between a win and nothing), **and nothing at all (a regression) on gen4 x4**, where the host is faster than the bus (§4.5). The ceiling for this design is the GPU-bound floor at ~5–7x. The cheapest slice of it is available today: `--mtp` speculation amortizes the host's weight reads over 4 rows (1.55x on the offloaded part) with no porting at all. |
 | Effort if it goes ahead | Phase 1 (streaming at decode) is a few hundred lines on existing machinery. Phase 2 (look-ahead) is the real work: a predictor, an async fetch path, and a residency policy. Phase 3 (the paper's full design) is **not** recommended for this model. |
 
 A deliberate non-goal: this document does not propose reimplementing Specter's
@@ -101,6 +101,13 @@ exists in-tree (`moe_cpu_host.py:1215`):
 So the fork has already been run with this model on a 24 GB-class card: ~102 of
 512 experts per layer resident on the GPU, 410 on the host, 12 host threads.
 
+**The target box is a gen4 x16 link.** An RTX 4090 on PCIe 4.0 x16: 26.8 GB/s
+probed host→device. The paper calibrates over gen5 x16, gen5 x8 and gen4 x4, so
+gen4 x16 is an extrapolation in every table below — and it is the regime most
+consumer cards are in. The box has 16 cores / 32 logical threads; the model
+assumes 12 host threads, so the thread count is itself one of the variables to
+measure.
+
 **The gap, stated plainly:** the router's top-k selection is a local variable
 inside `BlockSparseMLP.forward` (`exllamav3/modules/block_sparse_mlp.py:997-1008`)
 and is never exported. There is no GPU expert *cache* keyed by expert id, and no
@@ -120,6 +127,23 @@ primitives every Specter-style design needs.
 | P5 | The draft runs on-device and is fast | The MTP head does run on-device and is target-consistent (`default_draft_size = 4`), but it is 1 layer: it predicts *tokens*, not per-layer routing | **Partial.** Tokens are useful; per-layer routing is the paper's actual currency |
 | P6 | Expert weights are in host RAM in a form that can be DMA'd | True: the arena is huge-paged, and `EXL3_MOE_PINNED_ARENA=1` maps the worker's memfd into the parent and registers it with CUDA, so a direct host→device DMA of one expert is possible | **Available.** This is the strongest enabling fact in the whole fork |
 
+**Update, 2026-10-21 — the second half of P2 no longer holds.** The
+recurrent-state assertion only rejects an *autoregressive* draft.
+`incoai/Qwen3.8-Flash-Next-DFlash2` (0.6 B, Apache-2.0, published 2026-10-19) is
+a **block-diffusion** draft model for exactly this target: 5 dense
+sliding-attention layers, `is_causal: false`, `use_cache: false`, block size 8,
+a top-16 selector that traces one coherent path through the candidates. There is
+no recurrent state for `generator.py:162` to reject, it drafts a whole block in
+one pass — which is precisely the multi-step inter-token lookahead the paper
+needs and an AR drafter cannot give — and its acceptance length beats the
+model's own MTP on every task measured (GSM8K 3.26 vs 3.08, HumanEval 2.94 vs
+2.52, MT-Bench 2.83 vs 2.50). The VRAM half of P2 stands (61.8 GiB is still
+61.8 GiB); what changes is that a usable draft now exists, so P5 ("the draft
+predicts tokens, not per-layer routing") can be attacked with a real drafter
+rather than a hypothetical one. Its integration is not free: the capture patch
+targets SGLang's `qwen4_exp.py`, and neither this fork nor exllamav3 has a
+DFlash path.
+
 **Conclusion of the premise check:** the paper's *artifact* is aimed at a
 bottleneck this engine does not have, on a model whose scale breaks its cache
 and draft assumptions. The paper's *insight* — that a cheap predictor of future
@@ -134,7 +158,9 @@ operation every 128 steps.
 ## 4. Budget arithmetic for Qwen3.8-Flash-Next
 
 From `eval/specter_budget.py --preset qwen3.8-flash-next --vram-gb 24`
-(4.25 bpw, 12 host threads; the host-cost constants are *assumptions*, see §6).
+(4.25 bpw, 12 host threads — the target box has 16 cores / 32 logical threads,
+so the thread count is a variable to measure too; the host-cost constants are
+*assumptions*, see §6).
 
 ### 4.1 Footprint
 
@@ -287,8 +313,12 @@ starting point, not an answer.
 
 **Realistic expectation**, after the haircut and with the GPU-side work
 included: **~1.5–2.5x end-to-end TPOT on a gen5 x16 box** (roughly 15–25
-tok/s from a ~10 tok/s modelled baseline), **~1.2–1.5x on gen5 x8**, and **no
-gain at all — a regression — on gen4 x4**. The hard ceiling for this design is
+tok/s from a ~10 tok/s modelled baseline), **~1.2–1.5x on gen5 x8**, and **~2.4x
+on gen4 x16** (99.3 → 41.7 ms modelled, 10.1 → 24.0 tok/s) — but the gen4 x16
+number is conditional: with the transfer exposed that link yields only
+**1.13x**, so on a consumer-card link the look-ahead is not an optimization, it
+is the entire difference between a win and nothing. **No gain at all — a
+regression — on gen4 x4**. The hard ceiling for this design is
 the GPU-bound floor at ~5–7x. The cheapest available improvement today is
 `--mtp` (1.5x on the offloaded part, no porting), and the largest is the
 look-ahead, which is where the paper's contribution would land.
@@ -325,6 +355,17 @@ Qwen3.8-Flash-Next and read the per-expert time from `EXL3_MOE_CPU_PROF` (or
 `EXL3_SPLIT_PROF` brackets). Record: weight-read time, GEMV time per row, and
 the number of threads actually used. This is the `t_host` of §5.
 
+> A calibration point from outside this repo, measured on the same box
+> (2026-10-21): the *other* engine for this model — the Strata fork — runs its
+> own expert pool on the same Ryzen 9 7950X3D and the same expert bytes, and
+> its per-window decode timing puts the host at **44 µs per offloaded expert**
+> (3.53 ms of CPU-pool time per window / 48 layers / 1.68 experts). The 186 µs
+> this study assumes is therefore not a property of the box but of the engine:
+> a hand-tuned AVX2/AVX-512 pool is ~4x faster than a general CPU-MoE path.
+> The number that matters here is exllamav3's own, and it can only come from
+> M1 — but the spread means the model is not trustworthy to better than a
+> factor of four until then.
+
 **M2 — Bus cost per expert.** `EXL3_MOE_STREAM_DEBUG` already reports the
 probed pinned→device bandwidth (57 / 29 / 15.8 / 6.7 GB/s on the links the
 fork was calibrated on). Add a per-expert timing of the prefill streaming path
@@ -360,6 +401,14 @@ yet: it means converting the 125 B FP16 release (`convert.py`, plus
 a long conversion, with the n-gram table (95 GiB fp16) needing its own
 quantized file. Budget disk accordingly, and note the table is streamed from
 disk at runtime (`EXL3_NGRAM_STREAM=1`), which adds its own I/O to the step.
+
+> **Update, 2026-10-21:** the conversion step is no longer a prerequisite for
+> the measurement. `turboderp/Qwen3.8-Flash-Next-exl3` publishes 2.05 bpw and
+> 3.05 bpw branches for this model, and both are already on the target box
+> (`D:\llms\Qwen3.8-Flash-Next-exl3-2.05bpw`, `-3.05bpw`, the latter also
+> deployed through TabbyAPI). M1–M3 can run against those today; only a
+> *fork-local* checkpoint with the fork's own quantization would need the
+> conversion.
 All CUDA runs go through the `eval/smi_guard.py` watchdog that this repo's
 rules require (it does not exist in-tree yet — it has to be written).
 
@@ -449,7 +498,7 @@ layers — true for this model).
 | The host-cost model may be wrong by 3x either way | §5's verdict flips with it | M1 |
 | The link may be gen4 x4 (6.7 GB/s) on the target box | Below the 18 GB/s break-even → the paper's mechanism has no target at all | `EXL3_MOE_STREAM_DEBUG` |
 | The n-gram table (95 GiB fp16) is itself an I/O bottleneck at decode | It is gathered per forward from disk (`ngram_embedding.py:570-616`); the paper does not address this at all | M3 with and without the PLE layer's gathers |
-| The AR-draft path rejects recurrent architectures | Blocks "a copy of the target as draft" even if VRAM allowed it | `generator.py:162`; would need recurrent-state sharing between draft and target |
+| The AR-draft path rejects recurrent architectures | Blocks "a copy of the target as draft" even if VRAM allowed it | `generator.py:162`; would need recurrent-state sharing between draft and target. A *non-AR* draft is not rejected by that assertion — DFlash 2's dense block-diffusion draft has no recurrent state, so this risk now applies to the paper's copy of the target only |
 | The swap sweep perturbs logits | Same expert computed on host vs GPU differs numerically, which is why sweeps are deferred to a quiesced point (`block_sparse_mlp_cpu.py:587-592`) | A streaming design must keep the numerical difference explicit, or verification accuracy suffers |
 | 320 M-row n-gram table needs its own quantized file | Conversion prerequisite | `util/convert_ngram.py` |
 | Upstream merge | The fork's base *is* upstream master; a successful phase would be an upstream PR, not a fork-local feature | Decide the target repo before writing code |
