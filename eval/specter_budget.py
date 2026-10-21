@@ -319,6 +319,60 @@ def report(geo, args):
     out["host_ms_by_rows"] = row_costs
     p()
 
+    # ---- 4b. expected improvement: the regimes ---------------------------
+    p("[4b] Expected improvement per decode token (offloaded part only)")
+    p("  A  today: host computes the cold experts")
+    p("  B  stream the weights, transfer exposed on the critical path")
+    p("  C  stream the weights, look-ahead hides part of the transfer")
+    p("  floor: everything the GPU computes, read from VRAM at its bandwidth")
+    t_host = row_costs.get(1, {}).get("host_ms", 0.0)
+    d1 = distinct_experts(experts, top_k, 1, skew)
+    gpu_bytes = (d1 * layers * bpe +
+                 (b["shared_expert_params"] + geo["other_params"] + geo["embed_params"]) * args.bpw / 8)
+    t_floor = gpu_bytes / (args.vram_bw_gbs * 1e9) * 1e3
+    p(f"  {'regime':<6} " + " ".join(f"{n:>16}" for n, _ in links) + "   vs today")
+    reg_times = {}
+    for regime in ("A", "B", "C"):
+        cells, vals = [], []
+        for name, bw in links:
+            if regime == "A":
+                t = t_host
+            else:
+                t_bus = layers * d1 * bpe / (bw * 1e9) * 1e3
+                t = t_bus if regime == "B" else t_bus * (1.0 - args.hidden_ratio)
+            vals.append(t)
+            cells.append(f"{t:9.1f} ms")
+        reg_times[regime] = vals
+        p(f"  {regime:<6} " + " ".join(f"{c:>16}" for c in cells))
+    p(f"  floor  " + " ".join(f"{t_floor:9.1f} ms" for _ in links) +
+      "   GPU memory-bound")
+    p(f"       ({fmt_bytes(gpu_bytes)} of weights read per token at {args.vram_bw_gbs:.0f} GB/s;")
+    p("        excludes attention/GDN/QSA compute and the n-gram table gather)")
+    p("  speedup of the offloaded part, vs today (A):")
+    for regime in ("B", "C"):
+        sp = "  ".join(f"{t_host/t:5.2f}x" for t in reg_times[regime])
+        p(f"    {regime}: {sp}")
+    p(f"  (hidden ratio {args.hidden_ratio*100:.0f}%; the paper measured 55.5-60.5% for")
+    p("   DeepSeek-V2-Lite / Qwen1.5-MoE and 22.4% for Phi-3.5-MoE)")
+    p()
+    p("  end-to-end, adding the GPU's own per-token work (attention, GDN, QSA indexer,")
+    p(f"  shared expert, embeddings, n-gram gather) modelled at {args.gpu_other_ms:.0f} ms:")
+    p(f"  {'regime':<6} " + " ".join(f"{n:>16}" for n, _ in links))
+    for regime in ("A", "B", "C"):
+        cells = [f"{t + args.gpu_other_ms:9.1f} ms" for t in reg_times[regime]]
+        p(f"  {regime:<6} " + " ".join(f"{c:>16}" for c in cells))
+    cells = [f"{t_floor + args.gpu_other_ms:9.1f} ms" for _ in links]
+    p(f"  floor  " + " ".join(f"{c:>16}" for c in cells))
+    p("  tokens/s:")
+    for regime in ("A", "B", "C"):
+        cells = [f"{1000.0/(t + args.gpu_other_ms):9.1f}" for t in reg_times[regime]]
+        p(f"  {regime:<6} " + " ".join(f"{c:>16}" for c in cells))
+    cells = [f"{1000.0/(t_floor + args.gpu_other_ms):9.1f}" for _ in links]
+    p(f"  floor  " + " ".join(f"{c:>16}" for c in cells))
+    out["regimes"] = {"host_ms": t_host, "floor_ms": t_floor,
+                      "B_ms": reg_times["B"], "C_ms": reg_times["C"]}
+    p()
+
     # ---- 5. speculative working set --------------------------------------
     p("[5] Verification working set vs speculation depth K")
     p(f"  model skew factor {skew:.3f}, fitted so the recurrence reproduces the paper's")
@@ -415,6 +469,14 @@ def main():
                     help="measured host cost per expert; overrides the model above")
     ap.add_argument("--link-gbps", type=float, default=None,
                     help="extra host->device bandwidth to evaluate")
+    ap.add_argument("--hidden-ratio", type=float, default=0.6,
+                    help="fraction of the transfer a look-ahead manages to hide "
+                         "(paper: 0.555 / 0.605 / 0.224 for DSv2-Lite / Qwen1.5-MoE / Phi-3.5)")
+    ap.add_argument("--vram-bw-gbs", type=float, default=1000.0,
+                    help="device memory bandwidth for the GPU-bound floor (a 4090 reads ~1 TB/s)")
+    ap.add_argument("--gpu-other-ms", type=float, default=10.0,
+                    help="modelled GPU work per token that is not expert compute: attention, "
+                         "GDN, QSA indexer, shared expert, embeddings, n-gram gather")
     ap.add_argument("--rows", type=int, nargs="+", default=[1, 2, 4, 8, 16],
                     help="rows (tokens) per expert per step: 1 = plain decode, K = verification")
     ap.add_argument("--depths", type=int, nargs="+", default=[1, 2, 4, 8, 12, 16, 24, 32],

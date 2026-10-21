@@ -24,6 +24,7 @@ DeepSeek-V2-Lite, Qwen1.5-MoE and Phi-3.5-MoE at batch size 1.
 | Can the paper's *system* be reproduced in exllamav3 for Qwen3.8-Flash-Next? | **No.** Three independent blockers (§3): draft-model VRAM (61.8 GiB needed vs 24 GB available), a premise mismatch (exllamav3 does not have the PCIe bottleneck the paper hides), and a hard generator restriction (the AR-draft path rejects recurrent architectures, which is every Gated-DeltaNet model). |
 | Can the paper's *mechanism* (multi-step look-ahead to hide expert-transfer latency) be used? | **Yes, but it is not the paper's mechanism that is needed here.** For Qwen3.8-Flash-Next the dominant cost is the *host* expert compute, not the bus. The useful move is to shift expert compute from the host to the GPU, which makes the bus the bottleneck — and *then* the paper's look-ahead becomes the way to hide it. |
 | Is the work worth doing? | **Conditionally yes.** The first step is a measurement, not a port: one number (host cost per offloaded expert on the target box, vs the bus cost of the same expert) decides between two designs that differ by a factor of ~2 in achievable TPOT (§5). The measurement costs an afternoon on the 4090 box. |
+| What would it buy? | **~1.5–2.5x end-to-end TPOT on a gen5 x16 box, ~1.2–1.5x on gen5 x8, and nothing at all (a regression) on gen4 x4**, where the host is faster than the bus (§4.5). The ceiling for this design is the GPU-bound floor at ~5–7x. The cheapest slice of it is available today: `--mtp` speculation amortizes the host's weight reads over 4 rows (1.55x on the offloaded part) with no porting at all. |
 | Effort if it goes ahead | Phase 1 (streaming at decode) is a few hundred lines on existing machinery. Phase 2 (look-ahead) is the real work: a predictor, an async fetch path, and a residency policy. Phase 3 (the paper's full design) is **not** recommended for this model. |
 
 A deliberate non-goal: this document does not propose reimplementing Specter's
@@ -223,6 +224,74 @@ compute ahead** of layer `L+1`'s need — and in the current design that layer i
 the slow host-computed one, so there is ample wall-clock to fill it. This is
 the paper's "intra-token" look-ahead that the paper dismisses as too short a
 window; in this engine the window is one whole layer, not microseconds.
+
+### 4.5 Expected improvement
+
+Three regimes for the offloaded part of a decode step, per link speed
+(`eval/specter_budget.py`, section `[4b]`):
+
+* **A** — today: the host computes the cold experts.
+* **B** — stream the weights to the GPU, transfer exposed on the critical path.
+* **C** — stream the weights, and the look-ahead hides 60% of the transfer (the
+  paper's measured hidden ratio for Qwen1.5-MoE).
+
+| offloaded part, ms/step | gen5 x16 | gen5 x8 | gen4 x16 | gen4 x4 |
+| --- | --- | --- | --- | --- |
+| A — today (host computes) | 89.3 | 89.3 | 89.3 | 89.3 |
+| B — stream, exposed | 22.0 | 43.2 | 79.3 | 187.1 |
+| C — stream, 60% hidden | 8.8 | 17.3 | 31.7 | 74.8 |
+| floor — all GPU, memory-bound | 3.4 | 3.4 | 3.4 | 3.4 |
+
+| speedup of the offloaded part | gen5 x16 | gen5 x8 | gen4 x16 | gen4 x4 |
+| --- | --- | --- | --- | --- |
+| B vs A | **4.06x** | 2.07x | 1.13x | **0.48x** |
+| C vs A | **10.15x** | 5.17x | 2.81x | 1.19x |
+
+End-to-end, adding the GPU's own per-token work (attention, GDN, QSA indexer,
+shared expert, embeddings, n-gram gather) modelled at 10 ms:
+
+| end-to-end | gen5 x16 | gen5 x8 | gen4 x16 | gen4 x4 |
+| --- | --- | --- | --- | --- |
+| A — today | 99.3 ms (10.1 tok/s) | same | same | same |
+| B — stream, exposed | 32.0 ms (31.3 tok/s) | 53.2 ms (18.8) | 89.3 ms (11.2) | 197.1 ms (5.1) |
+| C — stream, 60% hidden | 18.8 ms (53.2 tok/s) | 27.3 ms (36.6) | 41.7 ms (24.0) | 84.8 ms (11.8) |
+| floor | 13.4 ms (74.4 tok/s) | same | same | same |
+
+Three caveats that matter more than the table:
+
+1. **The ratios are more trustworthy than the absolutes.** The absolute numbers
+   inherit the assumed host cost (1.5 GB/s/thread dequant, 20 GFLOP/s/thread
+   GEMV, 12 threads) and an assumed 10 ms of GPU work. M1 and M3 replace both.
+2. **The model is optimistic, and the paper says by how much.** For
+   DeepSeek-V2-Lite on a PCIe 4.0 x16 A100 the model gives B 24.7 ms → C
+   9.9 ms, i.e. 2.5x on the offloaded part, while the paper's *realized*
+   end-to-end gain over its own streaming baseline was 1.5x average (1.88x
+   max) — their implementation also pays for the draft, the ELB bookkeeping and
+   the verification overhead. Apply a haircut of roughly 1.3–1.8x to the
+   modelled ratios.
+3. **On a gen4 x4 link the whole direction is wrong.** B is 0.48x of A: the
+   bus is slower than the host, so streaming the weights would be a
+   *regression*. The link speed therefore has to be known before any of this
+   work starts (`EXL3_MOE_STREAM_DEBUG` already reports it).
+
+**A second, independent gain comes from speculation itself**, and it is the
+cheapest thing on the list. Verifying K rows amortizes the host's weight reads
+over those rows: at K=4 the offloaded cost falls from 89.3 ms/token to
+57.8 ms/token (1.55x) with no code change at all — just `--mtp`, because the
+MTP head is already in the checkpoint. At the same time the *bus* cost per
+token rises (the union of experts grows), so speculation helps the host path
+and hurts the streaming path, which is precisely the tension the paper resolves
+with prefetching. The MTP head's acceptance rate is unmeasured (M5), and the
+paper's own profiling shows TPOT degrading past the optimal depth, so K=4 is a
+starting point, not an answer.
+
+**Realistic expectation**, after the haircut and with the GPU-side work
+included: **~1.5–2.5x end-to-end TPOT on a gen5 x16 box** (roughly 15–25
+tok/s from a ~10 tok/s modelled baseline), **~1.2–1.5x on gen5 x8**, and **no
+gain at all — a regression — on gen4 x4**. The hard ceiling for this design is
+the GPU-bound floor at ~5–7x. The cheapest available improvement today is
+`--mtp` (1.5x on the offloaded part, no porting), and the largest is the
+look-ahead, which is where the paper's contribution would land.
 
 ---
 
