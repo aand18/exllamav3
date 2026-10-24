@@ -1,0 +1,317 @@
+# v1.6.4 retune - one measurement pass through the sanctioned regime, under the watcher.
+#
+# WHY THIS EXISTS: every arm of the retune must be the same commands, the same environment model,
+# the same parser and the same floors, or two numbers stop being comparable. This script is the
+# only sanctioned way to produce a pp/tg number for the retune. It is deployed from
+# bench/windows/ in the repo; never edit the deployed copy.
+#
+# It does NOT install anything, does NOT touch config.yml, and does NOT start the server. It loads
+# the model offline through perf.py (a copy of eval/perf.py; that file is byte-identical in v1.5.4
+# and v1.6.4, and it imports the INSTALLED engine).
+#
+# TWO TRAPS THIS SCRIPT GUARDS AGAINST (both measured 2026-10-24):
+#   1. The tabbyAPI venv's python.exe is a uv shim: Start-Process returns the shim, the real
+#      interpreter is its child. The watcher is told to resolve the real process by command line.
+#   2. When PowerShell is launched from a WSL directory, its working directory is a UNC path and
+#      `import exllamav3` resolves to the WSL source tree instead of site-packages. The script
+#      changes to a Windows directory first and refuses to run if the imported package is not the
+#      installed one.
+#
+# Usage:
+#   run_pass.ps1 -Tag armA-a
+#   run_pass.ps1 -Tag memops1-a -Env "EXL3_MOE_MEMOPS=1" -MaxLength 131072
+#   run_pass.ps1 -Tag t14-a -Threads 14 -MaxLength 131072
+#   run_pass.ps1 -Tag split320 -Split 320 -MaxLength 262144
+#   run_pass.ps1 -Tag q8 -Extra "-cq Q8" -MaxLength 131072
+#   run_pass.ps1 -Tag x -Unset "EXL3_MOE_MEMOPS,EXL3_MOE_CPU_PIN"
+#
+# -Env is a comma-separated KEY=VALUE list applied AFTER the regime's own environment, so it can
+# override a regime value. -Unset removes variables from the inherited environment. -Threads and
+# -Split replace the regime's -mct and -mcs. -Extra appends raw perf.py flags.
+#
+# Outputs (in -OutDir):
+#   logs/perf-<Tag>.log          perf.py stdout + stderr + an identity header appended last
+#   results/passes.csv           one row per pass: tag, status, engine, floors, env, args, harness hash
+#   results/pp.csv               one row per prefill band: tag, band, pp_tok_s
+#   results/tg.csv               one row per generation context: tag, context, s1..s4 it/s
+#   results/watch-<Tag>.csv      watcher samples
+#   stdout                       HARNESS / PASS / GPU / FLOORS / PP / TG_S1 / CSV lines
+
+param(
+    [Parameter(Mandatory = $true)][string] $Tag,
+    [string] $Regime = "production",
+    [string] $Env = "",
+    [string] $Unset = "",
+    [int] $MaxLength = 262144,
+    [int] $Threads = 16,
+    [int] $Split = 360,
+    [string] $Extra = "",
+    [string] $Root = "C:\Users\yoho\Downloads\tabbyAPI\_agent\v164",
+    [switch] $Short,
+    [switch] $NoSpecDec,
+    [switch] $SkipPrefill,
+    [switch] $SkipGen,
+    [switch] $SkipWarmup,
+    [switch] $Prof,
+    [int] $MinFreeVramMB = 200,
+    [int] $MinFreeRamMB = 2048
+)
+
+$ErrorActionPreference = "Continue"
+$inv = [System.Globalization.CultureInfo]::InvariantCulture
+
+$PY    = "C:\Users\yoho\Downloads\tabbyAPI\venv\Scripts\python.exe"
+$MODEL = "D:\llms\Qwen3.8-Flash-Next-exl3-2.05bpw"
+$LOGS  = Join-Path $Root "logs"
+$RES   = Join-Path $Root "results"
+$PERF  = Join-Path $Root "perf.py"
+$WATCH = Join-Path $Root "watch.ps1"
+
+New-Item -ItemType Directory -Force $LOGS, $RES | Out-Null
+Set-Location $Root   # trap 2: a WSL launch leaves a UNC working directory behind
+
+foreach ($f in @($PY, $PERF, $WATCH)) {
+    if (-not (Test-Path $f)) { Write-Output "ABORT: missing $f (deploy with bench/windows/deploy.sh)"; exit 2 }
+}
+if (-not (Test-Path $MODEL)) { Write-Output "ABORT: model not found: $MODEL"; exit 2 }
+
+# One owner of the box: refuse to start while another pass or a server is running.
+$other = @(Get-CimInstance Win32_Process |
+           Where-Object { $_.Name -match '^python' -and $_.ProcessId -ne $PID -and
+                          $_.CommandLine -match 'perf\.py|spec_decode\.py|tabbyAPI' })
+if ($other.Count -gt 0) {
+    Write-Output "ABORT: another pass is running:"
+    $other | ForEach-Object { Write-Output ("  " + $_.ProcessId + " " + $_.CommandLine) }
+    exit 3
+}
+
+# --- Identity of what is under test ------------------------------------------------------------
+$engine = ((& $PY -c "import exllamav3.version as v; print(v.__version__)" 2>&1) -join " ").Trim()
+$pkg    = ((& $PY -c "import exllamav3; print(exllamav3.__file__)" 2>&1) -join " ").Trim()
+$ext    = ((& $PY -c "import torch, exllamav3_ext as e; print(e.__file__)" 2>&1) -join " ").Trim()
+if ($ext -match '\.pyd$') { $extName = [System.IO.Path]::GetFileName($ext) } else { $extName = "n/a" }
+$torch  = ((& $PY -c "import torch; print(torch.__version__ + ' / cuda ' + str(torch.version.cuda))" 2>&1) -join " ").Trim()
+$gpu    = ((& nvidia-smi.exe --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>&1) -join " ").Trim()
+$freeAtStart = -1
+$smiLine = (& nvidia-smi.exe --query-gpu=memory.free --format=csv,nounits,noheader 2>$null | Select-Object -First 1)
+if ($smiLine) { $freeAtStart = [int]$smiLine.Trim() }
+
+if ($pkg -notmatch '\\venv\\Lib\\site-packages\\exllamav3\\__init__\.py$') {
+    Write-Output ("ABORT: imported engine is not the installed one: " + $pkg)
+    exit 2
+}
+$harnessHash = (Get-FileHash -Path $PSCommandPath -Algorithm SHA256).Hash
+
+# --- Regimes -----------------------------------------------------------------------------------
+# production = the deployed regime of 2026-10-24, expressed for v1.6.4: model 2.05 bpw, split mode
+# with the tail 360 of 512 experts on the CPU, 16 worker threads, 262144 cache in FP16, chunk 4096,
+# batch 2. Environment: only the three knobs production actually relies on. EXL3_MOE_MEMOPS=0 is the
+# DEPLOYED value, not the engine default (1.6.4 defaults to 1); Task 5 of the plan decides it.
+# Deliberately NOT set: EXL3_MOE_STREAM_T and EXL3_MOE_STREAM_BATCH_EXPERTS. Production's
+# start_tuned.ps1 carries the v1.4.9 values (6 / 48), which are no longer the defaults (per-device /
+# 24) - Task 6 tests them as knobs instead of baking them in.
+# Profilers are off by default: they cost throughput and the retune wants tok/s, not mechanism.
+$REGIMES = @{
+    "production" = @{
+        Args = @("-m", $MODEL, "-cs", "262144", "-chunk_size", "4096", "-ambs", "2", "-max_length", "$MaxLength")
+        Env  = [ordered]@{
+            EXL3_MOE_MEMOPS      = "0"
+            EXL3_MOE_CPU_PIN     = "1"
+            EXL3_MOE_CPU_SWIZZLE = "1"
+        }
+    }
+}
+
+if (-not $REGIMES.ContainsKey($Regime)) {
+    Write-Output ("ABORT: unknown regime '" + $Regime + "'. Known: " + (($REGIMES.Keys | Sort-Object) -join ", "))
+    exit 2
+}
+$R = $REGIMES[$Regime]
+$argsList = @($R.Args)
+$argsList += @("-mcs", "$Split", "-mct", "$Threads")
+if ($Extra -ne "") {
+    foreach ($tok in ($Extra -split '\s+')) { if ($tok -ne "") { $argsList += $tok } }
+}
+if ($Short)          { $argsList += "-short" }
+if (-not $NoSpecDec) { $argsList += "-sd" }
+if ($SkipPrefill)    { $argsList += "-spf" }
+if ($SkipGen)        { $argsList += "-sg" }
+if ($SkipWarmup)     { $argsList += "-swu" }
+
+# --- Environment -------------------------------------------------------------------------------
+foreach ($k in $R.Env.Keys) { Set-Item "env:$k" $R.Env[$k] }
+$envApplied = [ordered]@{}
+foreach ($k in $R.Env.Keys) { $envApplied[$k] = $R.Env[$k] }
+if ($Prof) {
+    foreach ($k in @("EXL3_MOE_CPU_PROF", "EXL3_MOE_CPU_SWAP_DEBUG", "EXL3_SPLIT_PROF", "EXL3_MOE_SUBMIT_PROF")) {
+        Set-Item "env:$k" "1"; $envApplied[$k] = "1"
+    }
+}
+if ($Unset -ne "") {
+    foreach ($k in ($Unset -split ",")) {
+        $k = $k.Trim()
+        if ($k -ne "") { Remove-Item "env:$k" -ErrorAction SilentlyContinue; if ($envApplied.Contains($k)) { $envApplied.Remove($k) } }
+    }
+}
+if ($Env -ne "") {
+    foreach ($pair in ($Env -split ",")) {
+        $kv = $pair.Trim()
+        if ($kv -eq "") { continue }
+        $i = $kv.IndexOf("=")
+        if ($i -lt 1) { Write-Output ("ABORT: -Env entry needs KEY=VALUE, got: " + $kv); exit 2 }
+        $k = $kv.Substring(0, $i).Trim()
+        $v = $kv.Substring($i + 1).Trim()
+        Set-Item "env:$k" $v
+        $envApplied[$k] = $v
+    }
+}
+
+# --- Run ---------------------------------------------------------------------------------------
+$log = Join-Path $LOGS ("perf-" + $Tag + ".log")
+$err = Join-Path $LOGS ("perf-" + $Tag + ".err.log")
+Remove-Item $log, $err -ErrorAction SilentlyContinue
+
+$header = @(
+    "",
+    "=== pass     : $Tag",
+    "=== regime   : $Regime",
+    "=== engine   : $engine",
+    "=== package  : $pkg",
+    "=== extension: $ext",
+    "=== torch    : $torch",
+    "=== gpu      : $gpu",
+    "=== free vram at start (MiB): $freeAtStart",
+    "=== harness  : $harnessHash",
+    "=== args     : " + ($argsList -join " "),
+    "=== env      : " + (($envApplied.Keys | Sort-Object | ForEach-Object { "$_=$($envApplied[$_])" }) -join " "),
+    "=== started  : " + (Get-Date).ToString("s")
+)
+
+$t0 = Get-Date
+$p = Start-Process -FilePath $PY -ArgumentList (@($PERF) + $argsList) -NoNewWindow -PassThru `
+                   -RedirectStandardOutput $log -RedirectStandardError $err
+$w = Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -PassThru -ArgumentList @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$WATCH`"",
+        "-Tag", $Tag, "-TargetPid", $p.Id, "-MatchCmd", "perf\.py",
+        "-MinFreeVramMB", $MinFreeVramMB, "-MinFreeRamMB", $MinFreeRamMB,
+        "-OutDir", "`"$RES`"")
+$p.WaitForExit()
+$elapsed = [int]((Get-Date) - $t0).TotalSeconds
+New-Item -ItemType File -Force (Join-Path $RES ("stop-" + $Tag + ".flag")) | Out-Null
+$w.WaitForExit(60000) | Out-Null
+
+# perf.py writes progress to stdout and worker profiler output to stderr; the header goes in last
+# so a killed pass still leaves its partial metrics, and the file stays tail-able while it runs.
+Get-Content $err -ErrorAction SilentlyContinue | Add-Content -Path $log -Encoding ASCII
+$header += @("=== elapsed s: $elapsed")
+$header | Add-Content -Path $log -Encoding ASCII
+
+# Exit code of the venv python is not readable (uv shim; measured 2026-10-24), so the verdict comes
+# from the evidence: metrics parsed, no traceback, floors held.
+$traceback = $false
+$perfPart = $raw
+$marker = [regex]::Match($raw, '\r?\n=== pass     :')
+if ($marker.Success) { $perfPart = $raw.Substring(0, $marker.Index) }
+if ([regex]::IsMatch($perfPart, 'Traceback \(most recent call last\)')) { $traceback = $true }
+
+# --- Floors from the watcher samples -----------------------------------------------------------
+$minVram = -1; $minRam = -1; $peakWs = 0; $samples = 0
+$wCsv = Join-Path $RES ("watch-" + $Tag + ".csv")
+if (Test-Path $wCsv) {
+    foreach ($row in (Get-Content $wCsv -ErrorAction SilentlyContinue | Select-Object -Skip 1)) {
+        $c = @($row -split ",")
+        if ($c.Count -lt 5) { continue }
+        $samples++
+        $fv = [int]$c[1]; $fr = [int]$c[3]; $ws = [int]$c[4]
+        if ($fv -ge 0 -and ($minVram -lt 0 -or $fv -lt $minVram)) { $minVram = $fv }
+        if ($fr -ge 0 -and ($minRam  -lt 0 -or $fr -lt $minRam))  { $minRam  = $fr }
+        if ($ws -gt $peakWs) { $peakWs = $ws }
+    }
+}
+$breach = Test-Path (Join-Path $RES ("BREACH-" + $Tag + ".txt"))
+
+# --- Parse -------------------------------------------------------------------------------------
+$ppRows = New-Object System.Collections.ArrayList
+$tgRows = New-Object System.Collections.ArrayList
+$ansi = [char]27 + "\[[0-9;]*[A-Za-z]"
+$raw = (Get-Content $log -Raw -ErrorAction SilentlyContinue)
+if ($null -eq $raw) { $raw = "" }
+foreach ($rawLine in (($raw -replace "`r", "`n") -split "`n")) {
+    $l = $rawLine -replace $ansi, ""
+    if ($l -match 'Length\s+(\d+):\s+([0-9.]+)\s+tokens/s') {
+        [void]$ppRows.Add(@([int]$Matches[1], [double]::Parse($Matches[2], $inv)))
+        continue
+    }
+    if ($l -match 'Context\s+(\d+):\s+(.+)$') {
+        $ctx = [int]$Matches[1]
+        $existing = $null
+        foreach ($r in $tgRows) { if ($r[0] -eq $ctx) { $existing = $r; break } }
+        if ($null -eq $existing) {
+            $existing = @($ctx, @{ 1 = 0.0; 2 = 0.0; 3 = 0.0; 4 = 0.0 })
+            [void]$tgRows.Add($existing)
+        }
+        foreach ($m in [regex]::Matches($Matches[2], 'S=(\d)\s+([0-9.]+)')) {
+            $existing[1][[int]$m.Groups[1].Value] = [double]::Parse($m.Groups[2].Value, $inv)
+        }
+    }
+}
+$ppRows = @($ppRows | Where-Object { $_[1] -gt 0 })
+$tgRows = @($tgRows | Where-Object { $_[1][1] -gt 0 })
+
+# --- Verdict -----------------------------------------------------------------------------------
+$status = "ok"
+if ($breach) { $status = "breach" }
+elseif ($traceback -or ($ppRows.Count -eq 0 -and $tgRows.Count -eq 0)) { $status = "fail" }
+
+# --- Persist -----------------------------------------------------------------------------------
+$passesCsv = Join-Path $RES "passes.csv"
+if (-not (Test-Path $passesCsv)) {
+    Set-Content -Path $passesCsv -Value "tag,finished_utc,regime,status,engine,ext,elapsed_s,max_length,min_free_vram_mb,min_free_ram_mb,peak_proc_ws_mb,samples,breach,env,split,threads,args,harness_sha256" -Encoding ASCII
+}
+$envStr = (($envApplied.Keys | Sort-Object | ForEach-Object { "$_=$($envApplied[$_])" }) -join " ")
+$argStr = (($argsList -join " ") -replace ",", ";")
+$breachInt = 0
+if ($breach) { $breachInt = 1 }
+$row = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17}" -f `
+    $Tag, (Get-Date).ToString("s"), $Regime, $status, $engine, $extName, $elapsed, $MaxLength, `
+    $minVram, $minRam, $peakWs, $samples, $breachInt, $envStr, $Split, $Threads, $argStr, $harnessHash
+Add-Content -Path $passesCsv -Value $row -Encoding ASCII
+
+$ppCsv = Join-Path $RES "pp.csv"
+if (-not (Test-Path $ppCsv)) { Set-Content -Path $ppCsv -Value "tag,band,pp_tok_s" -Encoding ASCII }
+foreach ($r in $ppRows) {
+    Add-Content -Path $ppCsv -Value ("{0},{1},{2}" -f $Tag, $r[0], ([string]::Format($inv, "{0:F2}", $r[1]))) -Encoding ASCII
+}
+
+$tgCsv = Join-Path $RES "tg.csv"
+if (-not (Test-Path $tgCsv)) { Set-Content -Path $tgCsv -Value "tag,context,s1,s2,s3,s4" -Encoding ASCII }
+foreach ($r in $tgRows) {
+    $s = $r[1]
+    Add-Content -Path $tgCsv -Value ("{0},{1},{2},{3},{4},{5}" -f $Tag, $r[0],
+        [string]::Format($inv, "{0:F2}", $s[1]), [string]::Format($inv, "{0:F2}", $s[2]),
+        [string]::Format($inv, "{0:F2}", $s[3]), [string]::Format($inv, "{0:F2}", $s[4])) -Encoding ASCII
+}
+
+# --- Summary block (paste this into the task report) -------------------------------------------
+Write-Output ("HARNESS sha256=$harnessHash")
+Write-Output ("PASS tag=$Tag regime=$Regime status=$status elapsed_s=$elapsed engine=$engine ext=$extName")
+Write-Output ("GPU  $gpu")
+Write-Output ("FLOORS min_free_vram_mb=$minVram min_free_ram_mb=$minRam peak_proc_ws_mb=$peakWs samples=$samples breach=$breachInt")
+if ($ppRows.Count -gt 0) {
+    $parts = @()
+    foreach ($r in $ppRows) { $parts += ("{0}={1}" -f $r[0], [string]::Format($inv, "{0:F2}", $r[1])) }
+    Write-Output ("PP   " + ($parts -join " "))
+}
+if ($tgRows.Count -gt 0) {
+    $parts = @()
+    foreach ($r in $tgRows) { $parts += ("{0}={1}" -f $r[0], [string]::Format($inv, "{0:F2}", $r[1][1])) }
+    Write-Output ("TG_S1 " + ($parts -join " "))
+}
+Write-Output ("CSV  " + $passesCsv + " ; " + $ppCsv + " ; " + $tgCsv + " ; " + $wCsv)
+
+if ($status -eq "breach") {
+    Write-Output ("BREACH tag=$Tag floors violated; see " + (Join-Path $RES ("BREACH-" + $Tag + ".txt")))
+    exit 4
+}
+if ($status -eq "fail") { exit 5 }
+exit 0
