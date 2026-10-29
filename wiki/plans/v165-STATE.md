@@ -15,6 +15,14 @@ Owner of the box: none yet — ask the operator before the first GPU task. Rollb
 - installed engine (verified T0, 2026-10-29): **1.6.4** — not the expected 1.5.4 (a 1.6.4 wheel
   is already installed; torch 2.11.0+cu130). The 1.5.4 wheel path above is the only 1.5.4
   artifact; T3 installs stock 1.6.5 from source regardless.
+- **T1 verified 2026-10-29** (`wiki/plans/v165-reports/T01-codebase.md`): tag
+  `win-perf-1.6.5` = `d0f55f71` is NOT the branch tip — `165-win-perf` = `5835bb6b`, 3
+  commits ahead (harness fix `09923498` + plan commits; bench/wiki only, engine code
+  identical at the tag). 13/14 regime defaults confirmed at v1.6.5. **Mismatch:**
+  `EXL3_NO_BATCH_READBACK` is not an env knob at v1.6.5 (or v1.6.4/fork) — it is a
+  hardcoded test hook `_NO_BATCH_READBACK = False` in `generator/generator.py:32`
+  (batched readback ON by default). T6's env A/B is impossible; needs a source patch
+  or the arm drops — decide before T6.
 
 ## Models (operator decision 2026-10-29; T2 downloads, then old 2.05bpw deleted)
 
@@ -81,4 +89,6 @@ the RAM floor is the component shrunk instead.
 ## Tasks
 
 See `wiki/plans/2026-10-29-v165-retune.md` (T0–T13). T0 done 2026-10-29
-(`wiki/plans/v165-reports/T00-preconditions.md`); harness commit `09923498`. Next: T1.
+(`wiki/plans/v165-reports/T00-preconditions.md`); harness commit `09923498`.
+T1 done 2026-10-29 (`wiki/plans/v165-reports/T01-codebase.md`) — pass, with the
+`EXL3_NO_BATCH_READBACK` flag for T6. Next: T2 (steps 4–5, GPU).
