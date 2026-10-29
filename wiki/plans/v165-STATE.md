@@ -38,7 +38,7 @@ always pass `-Root "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165"`.
 - THREADS/HOST_CORES: — (T6)
 - SPLIT: — (T7)
 - CACHE_MODE + STAGING_PAGES: — (T8)
-- DRAFT (readback/sdh/dnt/hdt/dds): — (T9)
+- DRAFT (readback/sdh/dnt/hdt/dds + head: stock / sidecar-2.6 / DFlash2): — (T9, T9b)
 - PLE/GDN: — (T10)
 
 ## Advise-only (do not change without a task)
