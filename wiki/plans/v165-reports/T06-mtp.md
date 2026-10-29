@@ -71,3 +71,23 @@ CPU (≈1.7 GB host RAM back, ≈1.7 GB more VRAM) and a 64k cache instead of 26
 VRAM, and the workloads are short). Every drafting arm shares those two constants, so knob ratios
 stay comparable; the deployment consequence (a drafter needs ~2 GB more VRAM or a lower split)
 goes to T13.
+
+## Drafting leaks ~700 MB of host RAM per arm in one process (measured)
+
+The split-392 attempt died at 32 s (RAM 1165 MB) and the split-388 attempt ran 1765 s before
+dying (RAM 974 MB). The watcher trace from the 29-minute run shows the shape:
+
+| phase (min free RAM per eighth of the run) | 2517 | 5346 | 4796 | 3711 | 2756 | 2272 | 1808 | 1229 | 974 |
+|---|---|---|---|---|---|---|---|---|---|
+| free VRAM (same blocks) | 3333 | 2625 | 2431 | 2431 | 2427 | 2427 | 2427 | 2427 | 2427 |
+
+VRAM is flat; host RAM falls monotonically — every further `Generator` built for another arm
+costs ~0.6–0.8 GB that never comes back. So a four-arm `-rb_ab` run cannot finish on this box at
+the 3.68 model's arena size, and that is a **deployment caveat** too: a long-lived server that
+builds generators repeatedly grows the same way.
+
+**Protocol change (ruling):** drafting arms run **one arm per process** — no `-rb_ab`, each run
+measures the baseline and one arm, and the verdict is the in-process in-run ratio. Same knobs,
+same constants (`-Split 388`, `-cs 40960`), ~6–8 min per arm instead of 30. Cost if wrong: the
+readback A/B stays unmeasured (default kept, which the plan expects anyway), and cross-arm
+comparisons rely on each arm's own baseline instead of one shared baseline.
