@@ -54,18 +54,17 @@ Owner of the box: none yet — ask the operator before the first GPU task. Rollb
   hardlink is proven by the table file carrying the `head_offsets`/`head_vocab_sizes`/
   `layer_multipliers`/`head_bias` tensors that `_load_aux` requires with `optional=False` — the
   1.66 dir has no other copy, and it loaded. Table streams from disk (never in RSS).
-- **Fit on this box, measured 2026-10-29 (the campaign's hard constraint):** the 3.68bpw model
-  at 262144/Q2 sits on a knife edge in both resources, pulling opposite ways — `-mcs` 372 → VRAM
-  OoM (layer 45); 392 → loads but VRAM free 211 MB (floor 200) and RAM free 2088 MB (floor 2048);
-  400 → host-RAM guard aborts by ~50–100 MB (43.02 GB arena vs 63.6 GB total, with the agent's
-  own WSL VM holding ~5 GB). Two rulings follow: (1) production regime carries
-  `EXL3_HOST_MEM_RESERVE_MB=1024` (single enforced margin; the watcher keeps the 2 GB floor);
-  (2) **`-sd` costs ~1.1 GB VRAM** (a second draft cache sized like the main one), so 262144 with
-  drafting on does not fit at any split — **Arm A runs `-NoSpecDec`** and drafting arms screen at
-  131072 (the plan's own screening length). The arena lives in the engine's CPU-MoE *worker*, so
-  `peak_proc_ws_mb` (the perf.py process) never shows it — read free RAM, not process RAM.
-  Deployment consequence for T13: the tuned config needs ~43 GB of host RAM, so it cannot share
-  the box with a resident 36–41 GB inference server.
+- **Fit on this box, measured 2026-10-29 (the campaign's hard constraint):** RESOLVED. The
+  3.68bpw model at 262144/Q2 runs full length with **`-Split 400` + `EXL3_HOST_MEM_RESERVE_MB=0` +
+  the operator's floors (100 MB VRAM / 1200 MB RAM)**. Verified pass (`probe400`, 258 s):
+  PP 1619@4096 … 1636@262144 t/s, TG 47–56 t/s, min free VRAM 503 MB, min RAM 5203 MB. Earlier
+  kills were thresholds, not the model: 360/372 VRAM OoM at load; 392 killed at the 65536 band
+  (23 MB VRAM); 400 killed by the old 2048 MB RAM floor / the engine guard (the load transient
+  sits at ~2.0 GB). Q2 cache measured without a load = **2.093 GiB** at 262144/2 slots (KV 1.875
+  + GDN states 0.218), so the binding constraint is the pinned arena, not KV.
+  **Deployment consequence for T13:** the tuned config needs ~43 GB of host RAM for the CPU
+  arena, so it cannot share the box with a resident 36–41 GB inference server — and
+  `EXL3_HOST_MEM_RESERVE_MB=0` plus 100/1200 floors must be part of the served configuration.
 - **Log durability (operator requirement 2026-10-29, commit `94f4c305`):** every run now gets
   `runId = <Tag>-<UTC yyyymmdd-HHmmss>` in its log/err/watcher filenames and refuses to
   overwrite; CSVs carry `run_id` (+ the log filename in `passes.csv`);

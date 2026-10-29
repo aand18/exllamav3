@@ -1,0 +1,5 @@
+BREACH tag=probe448-20261029-193429 at 2026-10-29T20:34:57
+free_vram_mb=8873 floor=200 low=False
+free_ram_mb=21 floor=1024 low=True
+watched_pid=6772 launcher_pid=24376
+action=killed process tree
