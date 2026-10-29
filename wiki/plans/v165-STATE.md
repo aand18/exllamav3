@@ -96,15 +96,21 @@ T1 done 2026-10-29 (`wiki/plans/v165-reports/T01-codebase.md`) — pass, with th
 
 ## Non-GPU prep done 2026-10-29
 
-- **T3 build:** stock v1.6.5 building under the watcher (`run_build.ps1 -Tag build-stock`,
-  src `C:\Users\yoho\Downloads\exl3-build-165\src` = copy of the v165-stock worktree; the
-  staged `_build.bat` needed `SCRATCH` pointed at `...\src` — the check is `%SCRATCH%\setup.py`).
-  Install when done: Windows-side `uv.exe` (`C:\Users\yoho\.local\bin\uv.exe`) — the WSL uv
+- **T3 build: DEFERRED — machine has no RAM headroom.** Two attempts under the watcher
+  (`build-stock` MAX_JOBS=4: breach at 368 s, free RAM 1999; `build-stock2` MAX_JOBS=2: breach
+  at 96 s, free RAM 1713 — the operator's workload holds ~62/65 GB RAM + 23.5 GB VRAM right
+  now). The watcher killed both cleanly; nothing of the operator's was touched. Build both
+  wheels when the operator frees the machine (stock first, then winperf — builds serialize).
+  Src staged: `C:\Users\yoho\Downloads\exl3-build-165\src` (v165-stock copy) and
+  `exl3-build-165-winperf\src`; recipes fixed (`SCRATCH=…\src`, MAX_JOBS=2).
+  Install when built: Windows-side `uv.exe` (`C:\Users\yoho\.local\bin\uv.exe`) — the WSL uv
   cannot resolve a Windows venv interpreter (`--python ...\python.exe` → "No virtual
   environment found"). Verify from a Windows cwd that `exllamav3.__file__` is the venv path.
 - **T6 step 0:** `spec_decode.py` deployed to `_agent/v165/`, sha256
-  `2902dec04ffa97b0addbb8224fc0f77d03443575033e0fec7924bf23e136af2d` (from v165-stock
-  `eval/spec_decode.py`).
+  `204fac5fb61fcc2e2367f80614dd8bf06d7f7bca8974bb1ea83af08a8836c9d1` — the branch copy
+  (`eval/spec_decode.py` on `165-win-perf`) carries a `-rb_ab` patch: measures the draft arm
+  ABBA over `generator._NO_BATCH_READBACK` in one process (T6 step 1). The stock-worktree
+  copy (unpatched, sha `2902dec0…`) is superseded.
 - **T7 prep:** `D:\llms\mtp-sidecars\mtp-2.6bpw.safetensors` (805 MiB) and
   `D:\llms\Qwen3.8-Flash-Next-DFlash2\` (config.json + 1.206 GB model.safetensors + patches,
   assets excluded) downloaded. The T7 step-2 base-dir copy can **hardlink the 51.8 GB ng8

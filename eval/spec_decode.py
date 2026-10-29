@@ -1,6 +1,7 @@
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from exllamav3 import Generator, Job, model_init, GreedySampler, TopPSampler
+import exllamav3.generator.generator as exl_gen
 import argparse
 import torch
 import json
@@ -235,32 +236,46 @@ def main(args):
         if args.temperature:
             result_ngram_temp = measure(generator, tokenizer, TopPSampler(0.9, 1), args.max_new_tokens)
 
-    # SD with draft model
+    # SD with draft model. With -rb_ab the arm is measured four times, ABBA over the module
+    # flag generator._NO_BATCH_READBACK (batched vs. serial speculative-window readback);
+    # the flag is read per round, so toggling between measure() windows is a clean in-process
+    # A/B (the EXL3_NO_BATCH_READBACK env of the original PR is gone at v1.6.5).
     result_draft = None
     result_draft_temp = None
+    rb_results = []
     if args.draft_model_dir:
-        generator = Generator(
-            model = model,
-            cache = cache,
-            draft_model = draft_model,
-            draft_cache = draft_cache,
-            tokenizer = tokenizer,
-            num_draft_tokens = args.num_draft_tokens,
-            sparse_draft_head = getattr(args, 'sparse_draft_head', 0),
-            hybrid_draft_tokens = args.hybrid_draft_tokens,
-            draft_confidence = args.draft_confidence,
-            dynamic_draft_tokens = args.dynamic_draft,
-            record_draft_stats = stats_sink is not None,
-            max_chunk_size = args.chunk_size,
-        )
-        result_draft = measure(generator, tokenizer, GreedySampler(), args.max_new_tokens, stats_sink)
-        if generator.sparse_head is not None:
-            st = generator.sparse_head.stats()
-            print(f" -- sparse draft head: {st['active']} columns, mode sparse {st['mode_sparse']} ({st['mode_switches']} switches), "
-                  f"miss rate {st['miss_rate'] * 100:.2f}% (break-even {(st['breakeven_miss_rate'] or 0) * 100:.2f}%), "
-                  f"rounds {st['rounds']}, probes {st['probes']} ({st['probe_disagree_inside']} inside / {st['probe_disagree_outside']} outside)")
-        if args.temperature:
-            result_draft_temp = measure(generator, tokenizer, TopPSampler(0.9, 1), args.max_new_tokens)
+        rb_arms = [("", None)] if not args.readback_ab else \
+                  [("batched", False), ("serial", True), ("serial", True), ("batched", False)]
+        for rb_i, (rb_label, rb_flag) in enumerate(rb_arms):
+            if rb_flag is not None:
+                exl_gen._NO_BATCH_READBACK = rb_flag
+            generator = Generator(
+                model = model,
+                cache = cache,
+                draft_model = draft_model,
+                draft_cache = draft_cache,
+                tokenizer = tokenizer,
+                num_draft_tokens = args.num_draft_tokens,
+                sparse_draft_head = getattr(args, 'sparse_draft_head', 0),
+                hybrid_draft_tokens = args.hybrid_draft_tokens,
+                draft_confidence = args.draft_confidence,
+                dynamic_draft_tokens = args.dynamic_draft,
+                record_draft_stats = stats_sink is not None and rb_i == 0,
+                max_chunk_size = args.chunk_size,
+            )
+            res_draft = measure(generator, tokenizer, GreedySampler(), args.max_new_tokens, stats_sink if rb_i == 0 else None)
+            if generator.sparse_head is not None:
+                st = generator.sparse_head.stats()
+                print(f" -- sparse draft head: {st['active']} columns, mode sparse {st['mode_sparse']} ({st['mode_switches']} switches), "
+                      f"miss rate {st['miss_rate'] * 100:.2f}% (break-even {(st['breakeven_miss_rate'] or 0) * 100:.2f}%), "
+                      f"rounds {st['rounds']}, probes {st['probes']} ({st['probe_disagree_inside']} inside / {st['probe_disagree_outside']} outside)")
+            if args.readback_ab:
+                rb_results.append((rb_label, rb_i // 2 + 1, res_draft))
+            else:
+                result_draft = res_draft
+                if args.temperature:
+                    result_draft_temp = measure(generator, tokenizer, TopPSampler(0.9, 1), args.max_new_tokens)
+        exl_gen._NO_BATCH_READBACK = False
 
     # Print results
     draft_mode = "Draft model"
@@ -277,6 +292,8 @@ def main(args):
         f"{draft_mode} (greedy)": result_draft,
         f"{draft_mode} (temp 1)": result_draft_temp,
     }
+    for rb_label, rb_run, res in rb_results:
+        r[f"{draft_mode} (rb={rb_label} r{rb_run}, greedy)"] = res
     r = {k: v for k, v in r.items() if v is not None}
     if not r:
         print("No results to display")
@@ -349,6 +366,7 @@ if __name__ == "__main__":
     parser.add_argument("-temp", "--temperature", action = "store_true", help = "Also sample with temperature")
     parser.add_argument("-single", "--single_workload", type = str, help = "Limit to single workload", default = None)
     parser.add_argument("-dstats", "--draft_stats", type = str, help = "Write per-round (position, window, accepted) records to JSON file", default = None)
+    parser.add_argument("-rb_ab", "--readback_ab", action = "store_true", help = "Measure the draft-model arm ABBA over generator._NO_BATCH_READBACK (batched vs. serial speculative-window readback) in one process")
     parser.add_argument("-plot", "--plot_stats", action = "store_true", help = "Plot per-round draft stats in a matplotlib window after the run")
     parser.add_argument("-print", "--print_stats", action = "store_true", help = "Print per-round draft stats to the console after the run")
     _args = parser.parse_args()
