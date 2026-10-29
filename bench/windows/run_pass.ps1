@@ -127,12 +127,17 @@ $REGIMES = @{
             EXL3_MOE_CPU_PIN     = "1"
             EXL3_MOE_CPU_SWIZZLE = "1"
             # Host-memory guard, not a perf knob. The 3.68bpw model at split 400 offloads a 43.02 GB
-            # expert arena to a separate worker process, which leaves ~3.0 GB of host RAM available
-            # at the last chunk; the engine's default reserve (2048 MB) asks for 3072 MB and aborts
-            # by ~100 MB (armA-1, 2026-10-29). The watcher independently enforces a 2 GB free-RAM
-            # floor and kills the tree on breach, so the two defaults double-count the same margin:
-            # 1024 MB keeps a single, still-enforced margin instead of two.
-            EXL3_HOST_MEM_RESERVE_MB = "1024"
+            # expert arena to a separate worker process, leaving ~2.0 GB of host RAM available at
+            # the deepest chunk; the engine's default reserve (2048 MB) aborts the load there, and
+            # so does 1024 MB. The watcher holds the enforced floor (1200 MB, operator 2026-10-29),
+            # so the engine guard is off and one margin is charged once.
+            EXL3_HOST_MEM_RESERVE_MB = "0"
+            # Determinism, not a perf knob. The OS grants a variable slice of the 42.9 GB CPU arena
+            # as large pages (measured 0.87 GB in A1 vs 2.08 GB in A2, same config), and CPU expert
+            # gathers run faster through huge pages - that alone moved tg 12-19 % between two
+            # identical passes. Regular pages for every run make the arms comparable; any loss
+            # against a lucky huge-page run belongs to the measurement, not to the knobs.
+            EXL3_MOE_ARENA_HUGEPAGE = "0"
         }
     }
 }
