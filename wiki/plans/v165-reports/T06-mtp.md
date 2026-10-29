@@ -120,3 +120,29 @@ min VRAM 2573 MB, min RAM 2139 MB):
 **The series continues on the swapped-in 3.18bpw model** (operator decision, same day): the 3.68
 numbers above establish that drafting is worth measuring; the knob verdicts must come from the
 model that will be deployed.
+
+## Draft length on 3.18 (split 376, `-cs 40960`, `-tokens 512`): `-ndt 2` wins
+
+One arm per process, each with its own in-run baseline (the protocol forced by the per-arm RAM
+growth). Median of the eight per-category ratios:
+
+| arm | median ratio | mean baseline → mean MTP | acceptance |
+|---|---|---|---|
+| default (`-ndt` unset = 4) | 1.10× | 35.15 → 39.05 t/s | 1.14–2.01 / 4 |
+| **`-ndt 2`** | **1.42×** | 36.24 → 50.14 t/s | 1.01–1.68 / 2 (50–84 % per draft) |
+| `-ndt 6` | 0.98× | 38.76 → 37.94 t/s | 1.12–2.41 / 6 |
+
+- **Fewer drafts win**, and the mechanism is visible in acceptance: at 2 drafts the head lands
+  50–84 % per draft; at 6 it lands 19–40 %, so most verification work is wasted. Six drafts is a
+  net loss (0.98×), four is barely positive (1.10×), two is +42 %.
+- Cross-process baseline means vary 35.2–38.8 t/s (±5 %), so the verdict rests on the in-run
+  ratios, all of which point the same way (ndt2 beats the default in 8/8 categories).
+- **`MTP_WINNER` so far: `-ndt 2`, batched readback (default), stock MTP head.**
+
+### Series interrupted
+
+The operator cancelled the remaining arms (`-sdh` ×2, `-hdt`, `-dds`) mid-series; `mtp-sdh1-318`
+was already past load and finishes on its own (its numbers are the discardable profile build).
+**Unmeasured: `-sdh` (sparse draft head), `-hdt` (hybrid drafting), `-dds` (dynamic draft).**
+`-sdh` is the one worth resuming first — it is the only knob here that changes *what* is drafted
+rather than how much, and the plan expects it to matter most for MTP.

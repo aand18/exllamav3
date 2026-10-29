@@ -134,7 +134,12 @@ default) and `-cq 2,2` in the production regime. Deployed `run_pass.ps1` sha256 
 - **MEMOPS_WINNER: 0** (T5, ABBA 2026-10-29: memops=1 is 8–17 % slower on tg at every
   context, medians 0.83–0.93, pp neutral-to-worse; reproduces the 1.4.9 finding). Deployment
   value unchanged; no 262144 confirmation (nothing to deploy changes).
-- MTP_WINNER (readback/dnt/sdh/hdt/dds): readback arm inconclusive on the screening model
+- **MTP_WINNER (partial, 2026-10-29): `-ndt 2` + batched readback + stock MTP head.** On 3.18 at
+  split 376: ndt2 median **1.42×** tg (acceptance 50–84 % per draft), default (4) 1.10×, ndt6
+  0.98×. Drafting on the production model is worth deploying (+35 % on 3.68 with 3 drafts,
+  +42 % on 3.18 with 2). **Operator cancelled the rest of the series** — `-sdh`, `-hdt`, `-dds`
+  unmeasured; resume with `-sdh` first (it changes *what* is drafted, not how much).
+- MTP readback (history): inconclusive on the screening model
   (T06 report) — **default batched (`_NO_BATCH_READBACK=False`) stands**; knobs move to the
   production model, because acceptance is a body/head quality property: 1.66 model = 1.91 bpw
   body / 4.01 bpw head → 1.0–2.2 of 4 accepted (break-even), 3.68 = 4.00 / 6.01 → measuring now.

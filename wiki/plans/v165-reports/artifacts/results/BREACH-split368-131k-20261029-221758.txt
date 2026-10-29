@@ -1,0 +1,5 @@
+BREACH tag=split368-131k-20261029-221758 at 2026-10-29T23:18:37
+free_vram_mb=15 floor=100 low=True
+free_ram_mb=12583 floor=1200 low=False
+watched_pid=24904 launcher_pid=16628
+action=killed process tree

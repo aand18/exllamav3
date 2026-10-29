@@ -1,0 +1,11 @@
+remark: triton_paged.py:902:0: 2459 instructions in function
+remark: triton_paged.py:1060:0: 391 instructions in function
+remark: conv1d.py:17:0: 484 instructions in function
+remark: conv1d.py:17:0: 992 instructions in function
+remark: conv1d.py:17:0: 991 instructions in function
+remark: triton_paged.py:902:0: 2466 instructions in function
+remark: triton_paged.py:1060:0: 390 instructions in function
+remark: dsa_triton.py:668:0: 259 instructions in function
+remark: dsa_triton.py:797:0: 61 instructions in function
+remark: dsa_triton.py:668:0: 259 instructions in function
+remark: dsa_triton.py:797:0: 60 instructions in function
