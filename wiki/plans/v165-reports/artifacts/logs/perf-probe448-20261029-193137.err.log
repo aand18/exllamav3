@@ -1,0 +1,75 @@
+Process SpawnProcess-1:
+Traceback (most recent call last):
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\perf.py", line 232, in <module>
+Traceback (most recent call last):
+    main(_args)
+  File "C:\Python312\Lib\multiprocessing\process.py", line 314, in _bootstrap
+    self.run()
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\torch\utils\_contextlib.py", line 124, in decorate_context
+  File "C:\Python312\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\moe_cpu_host.py", line 798, in _moe_cpu_child_main
+    collect(pending)
+    return func(*args, **kwargs)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\moe_cpu_host.py", line 781, in collect
+    bg_, bu_, bd_, bb, ba = fut.result()
+                            ^^^^^^^^^^^^
+  File "C:\Python312\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\perf.py", line 189, in main
+  File "C:\Python312\Lib\concurrent\futures\thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\moe_cpu_host.py", line 713, in rehome_experts
+    blocks.append(arena.reserve(total))
+                  ^^^^^^^^^^^^^^^^^^^^
+    model, config, cache, tokenizer = model_init.init(args)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\moe_cpu_host.py", line 559, in reserve
+    self._new_chunk(aligned)
+                                      ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\moe_cpu_host.py", line 464, in _new_chunk
+    check_host_memory(size, f"CPU MoE expert arena chunk {len(self.chunks)} "
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model_init.py", line 392, in init
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\util\memory.py", line 631, in check_host_memory
+    raise RuntimeError(
+RuntimeError: CPU MoE expert arena chunk 40 (41088 MiB in total) needs 1024 MiB of host memory, but only 1776 MiB is available and EXL3_HOST_MEM_RESERVE_MB = 1024 MiB is kept free. Lower the amount of data held in host memory (fewer offloaded experts, no --ngram_ram, ...) or set EXL3_HOST_MEM_RESERVE_MB=0 to skip this check.
+    model.load(
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\torch\utils\_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\model.py", line 772, in load
+    host.ensure_started()
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\moe_cpu_host.py", line 1191, in ensure_started
+    self._pump(1.0)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\moe_cpu_host.py", line 1037, in _pump
+    raise RuntimeError(f"CPU MoE worker failed:\n{msg[1]}")
+RuntimeError: CPU MoE worker failed:
+Traceback (most recent call last):
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\moe_cpu_host.py", line 798, in _moe_cpu_child_main
+    collect(pending)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\moe_cpu_host.py", line 781, in collect
+    bg_, bu_, bd_, bb, ba = fut.result()
+                            ^^^^^^^^^^^^
+  File "C:\Python312\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Python312\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Python312\Lib\concurrent\futures\thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\moe_cpu_host.py", line 713, in rehome_experts
+    blocks.append(arena.reserve(total))
+                  ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\moe_cpu_host.py", line 559, in reserve
+    self._new_chunk(aligned)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\moe_cpu_host.py", line 464, in _new_chunk
+    check_host_memory(size, f"CPU MoE expert arena chunk {len(self.chunks)} "
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\util\memory.py", line 631, in check_host_memory
+    raise RuntimeError(
+RuntimeError: CPU MoE expert arena chunk 40 (41088 MiB in total) needs 1024 MiB of host memory, but only 1776 MiB is available and EXL3_HOST_MEM_RESERVE_MB = 1024 MiB is kept free. Lower the amount of data held in host memory (fewer offloaded experts, no --ngram_ram, ...) or set EXL3_HOST_MEM_RESERVE_MB=0 to skip this check.
+
