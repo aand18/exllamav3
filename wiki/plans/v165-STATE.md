@@ -7,39 +7,51 @@ Owner of the box: none yet — ask the operator before the first GPU task. Rollb
 
 - upstream `v1.6.5` = `cdc785db`; stock worktree `/home/dev/exllamav3/.worktrees/v165-stock`
   (branch `v165-stock`).
-- fork rebase: branch `165-win-perf`, tag `win-perf-1.6.5` = v1.6.5 + 4 commits
-  (worker knobs `5cef00e1`, .gitignore, Specter docs, harness `68eea9dc`). Rebased clean onto
+- fork rebase: branch `165-win-perf`, tag `win-perf-1.6.5` = v1.6.5 + Windows commits (worker
+  knobs `5cef00e1`, .gitignore, Specter docs, harness `68eea9dc`, plans). Rebased clean onto
   v1.6.5; the four knobs (`EXL3_MOE_TIMER_RES/_THREAD_PRIO/_BLOCKING_SYNC/_CPU_PIN_OFFSET`) are
   wired in the rewritten pool code. Build worktree: `/home/dev/exllamav3/.worktrees/v165-win-perf`
   (detached at the tag).
 - installed engine (expected, confirm in T0): 1.5.4.
 
+## Models (operator decision 2026-10-29; T2 downloads, then old 2.05bpw deleted)
+
+- **production:** `D:\llms\Qwen3.8-Flash-Next-exl3-3.68bpw_h6_ng8`
+  (turboderp/Qwen3.8-Flash-Next-exl3@3.68bpw_h6_ng8; 62.2 GB model + 51.8 GB
+  `ngram_embedding.safetensors`)
+- **screening:** `D:\llms\Qwen3.8-Flash-Next-exl3-1.66bpw_h4_ng3` (same repo @1.66bpw_h4_ng3,
+  30.2 GB, its ng3 table NOT downloaded; the ng8 table is NTFS-hardlinked in). Fast loads,
+  more experts in VRAM — screening ratios only, never absolute tok/s; placement/cache/drafter-
+  VRAM arms and all confirmations run on the production model.
+
 ## Harness
 
-Repo source of truth: `bench/windows/` on `win-perf-1.6.5`. Deploy target:
+Repo source of truth: `bench/windows/` on `165-win-perf`. Deploy target:
 `C:/Users/yoho/Downloads/tabbyAPI/_agent/v165/` via
 `DEST=/mnt/c/Users/yoho/Downloads/tabbyAPI/_agent/v165 bench/windows/deploy.sh`;
-always pass `-Root "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165"`.
-`perf.py` unchanged v1.6.4→v1.6.5, sha256 `246e721a62d7c5238de4b7296adb0b26cd9f42a734b9f648436b35b9b6a29e04`.
+always pass `-Root "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165"`. T0 adds a `-Model`
+override to `run_pass.ps1`. `perf.py` unchanged v1.6.4→v1.6.5, sha256
+`246e721a62d7c5238de4b7296adb0b26cd9f42a734b9f648436b35b9b6a29e04`.
 
-## Regime (production, 2026-10-29 baseline)
+## Regime (production baseline, 3.68bpw model)
 
-- model: Qwen3.8-Flash-Next exl3 2.05 bpw (`D:\llms\Qwen3.8-Flash-Next-exl3-2.05bpw`), arch `qwen4_exp`
-- cache: 262144, FP16 (quantized allowed from T8), chunk 4096, batch 2
-- MoE: split 360 / 512, 16 threads, `EXL3_MOE_MEMOPS=0` (T4 re-decides), `EXL3_MOE_CPU_PIN=1`,
-  `EXL3_MOE_CPU_SWIZZLE=1`
-- MTP: draft block 3 (`-sd`)
-- NGRAM: off, vision: off
+- cache: 262144, FP16 provisional (Arm A may force quantized), chunk 4096, batch 2
+- MoE: split 360 provisional (was tuned for the deleted 2.05bpw; T10 re-founds, ladder up),
+  16 threads, `EXL3_MOE_MEMOPS=0` (T5 re-decides), `EXL3_MOE_CPU_PIN=1`, `EXL3_MOE_CPU_SWIZZLE=1`
+- drafting: MTP draft block 3 provisional; T6/T7 settle `DRAFT_WINNER` (stock MTP / HermiHg
+  sidecar / DFlash2), then every tg row carries it
+- NGRAM: table present (ng8), `ngram_ram` off (T12 tests), vision: off
 
 ## Frozen winners (fill as tasks complete)
 
-- MEMOPS_WINNER: — (T4)
-- CODE_WINNER (stock vs win-perf): — (T5)
-- THREADS/HOST_CORES: — (T6)
-- SPLIT: — (T7)
-- CACHE_MODE + STAGING_PAGES: — (T8)
-- DRAFT (readback/sdh/dnt/hdt/dds + head: stock / sidecar-2.6 / DFlash2): — (T9, T9b)
-- PLE/GDN: — (T10)
+- MEMOPS_WINNER: — (T5)
+- MTP_WINNER (readback/dnt/sdh/hdt/dds): — (T6)
+- DRAFT_WINNER (stock / sidecar-2.6 / DFlash2 + window + sdh): — (T7)
+- CODE_WINNER (stock vs win-perf): — (T8)
+- THREADS/HOST_CORES: — (T9)
+- SPLIT: — (T10)
+- CACHE_MODE + STAGING_PAGES: — (T11)
+- PLE/GDN: — (T12)
 
 ## Advise-only (do not change without a task)
 
@@ -49,6 +61,12 @@ always pass `-Root "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165"`.
 - `EXL3_MOE_ZERO_COPY` (gone), KVaRN (operator decision)
 - QSA attention cap 2048
 
+## VRAM relief valve (standing rule)
+
+When a component (drafter, cache, staging) does not fit: raise `-mcs` (more experts to system
+RAM) and record the tg cost of the offload in the same row; only if the offload itself breaches
+the RAM floor is the component shrunk instead.
+
 ## Tasks
 
-See `wiki/plans/2026-10-29-v165-retune.md`. T0 pending.
+See `wiki/plans/2026-10-29-v165-retune.md` (T0–T13). T0 pending.
