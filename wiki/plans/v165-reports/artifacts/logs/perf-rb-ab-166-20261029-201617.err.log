@@ -1,0 +1,15 @@
+remark: triton_paged.py:902:0: 2452 instructions in function
+remark: triton_paged.py:1060:0: 389 instructions in function
+Traceback (most recent call last):
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 373, in <module>
+    main(_args)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\torch\utils\_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 216, in main
+    result_baseline = measure(generator, tokenizer, GreedySampler(), args.max_new_tokens)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 49, in measure
+    with open(os.path.join(path, "prompts", filename), "r") as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\yoho\\Downloads\\tabbyAPI\\_agent\\v165\\prompts\\trivial.json'

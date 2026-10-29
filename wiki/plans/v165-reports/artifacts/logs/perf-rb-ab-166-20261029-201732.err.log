@@ -1,0 +1,22 @@
+remark: conv1d.py:17:0: 462 instructions in function
+remark: triton_paged.py:1504:0: 5042 instructions in function
+remark: triton_paged.py:902:0: 2459 instructions in function
+remark: triton_paged.py:1060:0: 392 instructions in function
+remark: dsa_triton.py:668:0: 259 instructions in function
+remark: dsa_triton.py:797:0: 61 instructions in function
+remark: conv1d.py:17:0: 950 instructions in function
+Traceback (most recent call last):
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 373, in <module>
+    main(_args)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\torch\utils\_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 216, in main
+    result_baseline = measure(generator, tokenizer, GreedySampler(), args.max_new_tokens)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 86, in measure
+    print(text, end = "", flush = True)
+  File "C:\Python312\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2192' in position 1: character maps to <undefined>

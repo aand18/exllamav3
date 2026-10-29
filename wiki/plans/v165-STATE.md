@@ -109,7 +109,10 @@ default) and `-cq 2,2` in the production regime. Deployed `run_pass.ps1` sha256 
 - **MEMOPS_WINNER: 0** (T5, ABBA 2026-10-29: memops=1 is 8–17 % slower on tg at every
   context, medians 0.83–0.93, pp neutral-to-worse; reproduces the 1.4.9 finding). Deployment
   value unchanged; no 262144 confirmation (nothing to deploy changes).
-- MTP_WINNER (readback/dnt/sdh/hdt/dds): — (T6)
+- MTP_WINNER (readback/dnt/sdh/hdt/dds): readback arm inconclusive on the screening model
+  (T06 report) — **default batched (`_NO_BATCH_READBACK=False`) stands**; knobs move to the
+  production model, because acceptance is a body/head quality property: 1.66 model = 1.91 bpw
+  body / 4.01 bpw head → 1.0–2.2 of 4 accepted (break-even), 3.68 = 4.00 / 6.01 → measuring now.
 - DRAFT_WINNER (stock / sidecar-2.6 / DFlash2 + window + sdh): — (T7)
 - CODE_WINNER (stock vs win-perf): — (T8)
 - THREADS/HOST_CORES: — (T9)
@@ -139,7 +142,9 @@ See `wiki/plans/2026-10-29-v165-retune.md` (T0–T13). T0 done 2026-10-29
 T1 done 2026-10-29 (`wiki/plans/v165-reports/T01-codebase.md`) — pass, with the
 `EXL3_NO_BATCH_READBACK` flag for T6. T2 done (`T02-models.md`), T3 done (`T03-build.md`),
 **T4 done (`T04-armA.md`)** — reference arm + acceptance thresholds frozen. T5 done (`T05-memops.md`) — MEMOPS_WINNER=0.
-Next: T6 (MTP drafting knobs on the 1.66 screening model), T7 (drafter), T8 (code delta), T9–T13.
+T6 in flight (`T06-mtp.md`): readback settled as inconclusive (default kept), drafting knobs now
+measured on the 3.68 model with `-cs 32768` (two caches exist while drafting; workloads are
+short). Next: T7 (drafter), T8 (code delta), T9–T13.
 
 ## Non-GPU prep done 2026-10-29
 
