@@ -89,15 +89,24 @@ default) and `-cq 2,2` in the production regime. Deployed `run_pass.ps1` sha256 
 
 - cache: 262144, **Q2 (`-cq 2,2`) — operator-fixed 2026-10-29, used in every pass**, chunk
   4096, batch 2
-- MoE: split 360 provisional (was tuned for the deleted 2.05bpw; T10 re-founds, ladder up),
+- MoE: **split 400** (not 360 — 360/372 do not load the 3.68 model; 392 dies at the 65536 band),
   16 threads, `EXL3_MOE_MEMOPS=0` (T5 re-decides), `EXL3_MOE_CPU_PIN=1`, `EXL3_MOE_CPU_SWIZZLE=1`
+- host RAM / determinism: `EXL3_HOST_MEM_RESERVE_MB=0` (the watcher holds the floor) and
+  `EXL3_MOE_ARENA_HUGEPAGE=0` (page backing must not vary between runs); watcher floors
+  **100 MB VRAM / 1200 MB RAM** (operator 2026-10-29)
+- **measurement length 131072**; 262144 runs but is not reproducible (coin flip on VRAM), so it
+  is a single final confirmation only
 - drafting: MTP draft block 3 provisional; T6/T7 settle `DRAFT_WINNER` (stock MTP / HermiHg
   sidecar / DFlash2), then every tg row carries it
 - NGRAM: table present (ng8), `ngram_ram` off (T12 tests), vision: off
 
 ## Frozen winners (fill as tasks complete)
 
-- MEMOPS_WINNER: — (T5)
+- **Arm A reference (T4, 2026-10-29):** 3.68bpw, split 400, 131072, Q2, no drafting,
+  guard 0, huge pages off. A1 PP 1637.69@4096 / 1632.40@131072; A2 1602.18 / 1642.92.
+  **Acceptance threshold (A2/A1): pp +-2 % at 4096–131072 (small bands +-5–10 %), tg +-11 % worst
+  band (65536), typically +-5 %.** Report `T04-armA.md`; ratios in `artifacts/analysis/`.
+- MEMOPS_WINNER: — (T5, ABBA running)
 - MTP_WINNER (readback/dnt/sdh/hdt/dds): — (T6)
 - DRAFT_WINNER (stock / sidecar-2.6 / DFlash2 + window + sdh): — (T7)
 - CODE_WINNER (stock vs win-perf): — (T8)
@@ -126,7 +135,9 @@ the RAM floor is the component shrunk instead.
 See `wiki/plans/2026-10-29-v165-retune.md` (T0–T13). T0 done 2026-10-29
 (`wiki/plans/v165-reports/T00-preconditions.md`); harness commit `09923498`.
 T1 done 2026-10-29 (`wiki/plans/v165-reports/T01-codebase.md`) — pass, with the
-`EXL3_NO_BATCH_READBACK` flag for T6. Next: T2 (steps 4–5, GPU).
+`EXL3_NO_BATCH_READBACK` flag for T6. T2 done (`T02-models.md`), T3 done (`T03-build.md`),
+**T4 done (`T04-armA.md`)** — reference arm + acceptance thresholds frozen. Next: T5 (MEMOPS
+ABBA at 131072), then T6 (MTP knobs), T7 (drafter), T8 (code delta), T9–T13.
 
 ## Non-GPU prep done 2026-10-29
 
