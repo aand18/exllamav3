@@ -62,7 +62,9 @@ main `-mcs`** (model_init shares one `Config` under `use_mtp`; only the *offload
 draft-specific twin, `-dmcl`, which does not apply to the split path). So drafting adds ~0.9 GB
 of pinned arena on top of the body's 43 GB.
 
-Ruling: the drafting series runs at **`-Split 384` + `-cs 65536`** (`-cs 32768` is too small:
+Ruling: the drafting series runs at **`-Split 392` + `-cs 65536`** (384 freed enough host
+RAM — 2872 MB — but the two 64k caches plus the head ran VRAM to 17 MB; 392 buys 0.86 GB of VRAM
+for 0.86 GB of RAM, and the RAM floor still has room) (`-cs 32768` is too small:
 `Job requires 139 pages (only 128 available)` — a 1024-token generation over a prompt needs
 ≥35584 tokens of cache) — 16 fewer body experts on the
 CPU (≈1.7 GB host RAM back, ≈1.7 GB more VRAM) and a 64k cache instead of 262144 (≈1.5 GB more
