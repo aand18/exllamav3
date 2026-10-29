@@ -33,9 +33,9 @@ Owner of the box: none yet — ask the operator before the first GPU task. Rollb
   30.2 GB, its ng3 table NOT downloaded; the ng8 table is NTFS-hardlinked in). Fast loads,
   more experts in VRAM — screening ratios only, never absolute tok/s; placement/cache/drafter-
   VRAM arms and all confirmations run on the production model.
-- **T2 status 2026-10-29: steps 1–3 done** — both downloads complete (3.68 dir 107 GB incl.
-  ng8; 1.66 dir 29 GB; hardlink verified, link count 2). Steps 4 (load smoke, GPU) and 5
-  (delete `2.05bpw` 59 GB + `3.05bpw` 80 GB) pending. Disk after downloads: ~37 GB free.
+- **T2 status 2026-10-29: steps 1–3, 5 done** — both downloads complete (3.68 dir 107 GB incl.
+  ng8; 1.66 dir 29 GB; hardlink verified, link count 2); step 5 deletions done 2026-10-29
+  (`2.05bpw` + `3.05bpw` deleted, D: 171 GB free). Step 4 (load smoke, GPU) pending.
 - Rollback: 1.5.4 wheel on disk (path above) AND the 1.6.4 wheel at
   `C:\Users\yoho\Downloads\exl3-build-164\src\dist\exllamav3-1.6.4-cp312-cp312-win_amd64.whl`
   (earlier "not on disk" was wrong — checked the wrong dist dir).
@@ -112,8 +112,8 @@ T1 done 2026-10-29 (`wiki/plans/v165-reports/T01-codebase.md`) — pass, with th
   ABBA over `generator._NO_BATCH_READBACK` in one process (T6 step 1). The stock-worktree
   copy (unpatched, sha `2902dec0…`) is superseded.
 - **T7 prep:** `D:\llms\Qwen3.8-Flash-Next-DFlash2\` (config.json + 1.206 GB model.safetensors +
-  patches, assets excluded) downloaded. The T7 step-2 base-dir copy can **hardlink the 51.8 GB ng8
-  table** (same volume) → only ~55 GB of real copies; do it after the T2 step-5 deletions.
+  patches, assets excluded) downloaded. **Step-2 dir copy superseded by a no-copy path** (see
+  sidecar prep below): `-or` override YAML shadows the head from one file, base dir untouched.
 - **T7 sidecar prep DONE 2026-10-29 (non-GPU):** all four HermiHg checkpoints staged at
   `D:\llms\mtp-sidecars\`, sha256-verified against the HF repo LFS oids — 1.8bpw `3614dd45…`,
   2.3bpw `3a962ea0…`, 2.6bpw `998f5de2…`, 3.1bpw `f701abeb…`. Header-only load check vs the
@@ -124,8 +124,16 @@ T1 done 2026-10-29 (`wiki/plans/v165-reports/T01-codebase.md`) — pass, with th
   `ngram_embedding`. **Confounder to record in T07-drafter:** the sidecar shadows 14 small
   norm/hyper-connection/router tensors with BF16 copies where the base checkpoint holds F16
   (sidecar copied bf16-exact from the BF16 source) — a small numeric delta beyond the
-  requantized linears. Step-2 dir copy still blocked on disk (36 GB free, ~55 GB needed):
-  needs the T2 step-5 deletions, or a full `cp -al` hardlink copy (operator call).
+  requantized linears. **No-copy arm path (2026-10-29):** the existing `-or/--override` YAML
+  mechanism routes every `mtp*` key to a sidecar stc (`VariantSafetensorsCollection.find_stc`;
+  `SafetensorsCollection` accepts a single `.safetensors` path) — specs at
+  `bench/windows/mtp-sidecar-{2.3,2.6,3.1}bpw.yaml`, deployed by `deploy.sh`; base dir stays
+  untouched, no 55 GB copy. Needs the one-line `model_init.py` assert relaxation on this branch
+  (`-or` + `-mtp` was blocked by the separate-draft-model guard; with `--mtp` the draft config
+  IS the model config, so the override covers the MTP component). NOT in the `build-winperf`
+  wheel compiling at prep time — rebuild after the patch lands, or fall back to the dir-copy
+  path on the unpatched wheel. tabbyAPI forwards no `-or`: production deployment of a winning
+  sidecar is the dir-copy (or strip-MTP) path, decided at T13.
 - **T8 build staged:** `C:\Users\yoho\Downloads\exl3-build-165-winperf\src` = worktree at
   `f85274c2` (tag `win-perf-1.6.5`; engine code identical to branch tip) + fixed `_build.bat`.
   Build AFTER the stock build finishes (run_build aborts on a concurrent `bdist_wheel`).

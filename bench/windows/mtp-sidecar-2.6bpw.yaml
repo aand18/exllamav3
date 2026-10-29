@@ -1,0 +1,12 @@
+# T7 sidecar arm: shadow the built-in MTP head with the HermiHg optimized head (2.6 bpw)
+# without touching the base model directory. Run with -mtp and -or <this file>; the loader
+# routes every key matching mtp* to the sidecar file (VariantSafetensorsCollection.find_stc).
+# Verified 2026-10-29: sidecar key set identical to the 3.68bpw base's 6203 mtp.* tensors;
+# file sha256 998f5de2d1fc65617111f9092017062eda67f09b3acc74adae38932e22cb55ad = HF LFS oid.
+# Load log must show " -- Overriding from: ...mtp-2.6bpw.safetensors" — no line, no shadow.
+sources:
+  - id: mtpopt
+    model_dir: D:\llms\mtp-sidecars\mtp-2.6bpw.safetensors
+overrides:
+  - key: mtp*
+    source: mtpopt
