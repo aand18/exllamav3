@@ -164,6 +164,12 @@ T1 done 2026-10-29 (`wiki/plans/v165-reports/T01-codebase.md`) — pass, with th
   the built wheel). Sidecar YAMLs deployed to `_agent/v165/` (2.6bpw sha `dbd1a6ac…`, matches
   repo). Trap: `deploy.sh` checks out CRLF (`core.autocrlf=true`) and dies with
   `/usr/bin/env: 'bash\r'` — strip CRs (`sed -i 's/\r$//'`) before running it from WSL.
+- **T13 upstream check 2026-10-29:** local tabbyAPI = `theroyallab/tabbyAPI` @ `be74bf0`
+  (2026-09-28, clean tree). Upstream HEAD `564f8fbb` (2026-10-23): sampler step-order fix,
+  `max_model_len` API guard, UI, **deps bumped to exllamav3 ≥1.6.2** — but **no commits touch
+  `backends/exllamav3/model.py` since `be74bf0`**, so updating does NOT close the
+  `-sdh`/`-hdt`/`draft_max_rows` gap. Update is optional (pure-Python pull, low risk, aligns
+  deps with the 1.6.x line); decide at T13, not mid-benchmark.
 - **T13 step 2 pre-researched (tabbyAPI `be74bf0`, `backends/exllamav3/model.py:1014`):**
   the `AsyncGenerator(...)` call forwards `num_draft_tokens`, `dynamic_draft_tokens`,
   `ngram_match_min` + checkpoint kwargs. NOT forwarded: `sparse_draft_head` (-sdh),
