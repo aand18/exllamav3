@@ -34,9 +34,43 @@ Owner of the box: none yet — ask the operator before the first GPU task. Rollb
   30.2 GB, its ng3 table NOT downloaded; the ng8 table is NTFS-hardlinked in). Fast loads,
   more experts in VRAM — screening ratios only, never absolute tok/s; placement/cache/drafter-
   VRAM arms and all confirmations run on the production model.
-- **T2 status 2026-10-29: steps 1–3, 5 done** — both downloads complete (3.68 dir 107 GB incl.
-  ng8; 1.66 dir 29 GB; hardlink verified, link count 2); step 5 deletions done 2026-10-29
-  (`2.05bpw` + `3.05bpw` deleted, D: 171 GB free). Step 4 (load smoke, GPU) pending.
+- **T2 status 2026-10-29: COMPLETE (steps 1–5)** — both downloads complete (3.68 dir 107 GB
+  incl. ng8; 1.66 dir 29 GB; hardlink verified, link count 2); step 5 deletions done 2026-10-29
+  (`2.05bpw` + `3.05bpw` deleted, D: ~179 GB free). **Step 4 load smokes DONE** (report
+  `T02-models.md`): both models load and generate — `smoke368-4k` PP 1535 t/s @4k / TG 27–36 t/s,
+  `smoke166-4k` PP 2254 / TG 37–55, breach=0 both.
+  **Ruling — Arm A split = 400, not 360:** the regime default `-mcs 360` is a leftover from the
+  deleted 2.05bpw model and does **not** load the 3.68 model (`Insufficient VRAM in split for
+  model and cache`; `-lv` shows `layers.43` missing by 912 MiB at 360, `layers.45` at 372).
+  At 400 it loads with 2216 MiB free after load. Cost if wrong: Arm A's absolute tok/s reflects a
+  slightly more CPU-heavy split than optimal; every arm shares the split, so ratios stay valid,
+  and T10's ladder searches 376…400 (not upward) to recover it.
+  **RAM consequence:** at split 400 the CPU MoE arena is **43.02 GB locked**; total RAM 63.6 GB,
+  and this box's resident `unbiased-strata.exe` normally holds 36–41 GB — the tuned config and
+  that server cannot both be resident. Carry into T13.
+  **Harness quirk:** a `-SkipPrefill -SkipGen` smoke always ends `status=fail` (the harness
+  treats zero PP/TG rows as failure); judge load smokes by the log, and prefer a real 4096 pass.
+  **Ngram check:** the loader prints nothing about the table (host-side, `prefer_cpu`); the
+  hardlink is proven by the table file carrying the `head_offsets`/`head_vocab_sizes`/
+  `layer_multipliers`/`head_bias` tensors that `_load_aux` requires with `optional=False` — the
+  1.66 dir has no other copy, and it loaded. Table streams from disk (never in RSS).
+- **Fit on this box, measured 2026-10-29 (the campaign's hard constraint):** the 3.68bpw model
+  at 262144/Q2 sits on a knife edge in both resources, pulling opposite ways — `-mcs` 372 → VRAM
+  OoM (layer 45); 392 → loads but VRAM free 211 MB (floor 200) and RAM free 2088 MB (floor 2048);
+  400 → host-RAM guard aborts by ~50–100 MB (43.02 GB arena vs 63.6 GB total, with the agent's
+  own WSL VM holding ~5 GB). Two rulings follow: (1) production regime carries
+  `EXL3_HOST_MEM_RESERVE_MB=1024` (single enforced margin; the watcher keeps the 2 GB floor);
+  (2) **`-sd` costs ~1.1 GB VRAM** (a second draft cache sized like the main one), so 262144 with
+  drafting on does not fit at any split — **Arm A runs `-NoSpecDec`** and drafting arms screen at
+  131072 (the plan's own screening length). The arena lives in the engine's CPU-MoE *worker*, so
+  `peak_proc_ws_mb` (the perf.py process) never shows it — read free RAM, not process RAM.
+  Deployment consequence for T13: the tuned config needs ~43 GB of host RAM, so it cannot share
+  the box with a resident 36–41 GB inference server.
+- **Log durability (operator requirement 2026-10-29, commit `94f4c305`):** every run now gets
+  `runId = <Tag>-<UTC yyyymmdd-HHmmss>` in its log/err/watcher filenames and refuses to
+  overwrite; CSVs carry `run_id` (+ the log filename in `passes.csv`);
+  `bench/windows/archive_logs.sh` copies logs/CSVs/BREACH into
+  `wiki/plans/v165-reports/artifacts/` (git-tracked) with stamped CSV snapshots.
 - Rollback: 1.5.4 wheel on disk (path above) AND the 1.6.4 wheel at
   `C:\Users\yoho\Downloads\exl3-build-164\src\dist\exllamav3-1.6.4-cp312-cp312-win_amd64.whl`
   (earlier "not on disk" was wrong — checked the wrong dist dir).

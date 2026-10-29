@@ -112,7 +112,8 @@ $harnessHash = (Get-FileHash -Path $PSCommandPath -Algorithm SHA256).Hash
 # --- Regimes -----------------------------------------------------------------------------------
 # production = the deployed regime of 2026-10-24, expressed for v1.6.4: model 2.05 bpw, split mode
 # with the tail 360 of 512 experts on the CPU, 16 worker threads, 262144 cache in FP16, chunk 4096,
-# batch 2. Environment: only the three knobs production actually relies on. EXL3_MOE_MEMOPS=0 is the
+# batch 2. Environment: only the three knobs production actually relies on plus the host-memory
+# guard. EXL3_MOE_MEMOPS=0 is the
 # DEPLOYED value, not the engine default (1.6.4 defaults to 1); Task 5 of the plan decides it.
 # Deliberately NOT set: EXL3_MOE_STREAM_T and EXL3_MOE_STREAM_BATCH_EXPERTS. Production's
 # start_tuned.ps1 carries the v1.4.9 values (6 / 48), which are no longer the defaults (per-device /
@@ -125,6 +126,13 @@ $REGIMES = @{
             EXL3_MOE_MEMOPS      = "0"
             EXL3_MOE_CPU_PIN     = "1"
             EXL3_MOE_CPU_SWIZZLE = "1"
+            # Host-memory guard, not a perf knob. The 3.68bpw model at split 400 offloads a 43.02 GB
+            # expert arena to a separate worker process, which leaves ~3.0 GB of host RAM available
+            # at the last chunk; the engine's default reserve (2048 MB) asks for 3072 MB and aborts
+            # by ~100 MB (armA-1, 2026-10-29). The watcher independently enforces a 2 GB free-RAM
+            # floor and kills the tree on breach, so the two defaults double-count the same margin:
+            # 1024 MB keeps a single, still-enforced margin instead of two.
+            EXL3_HOST_MEM_RESERVE_MB = "1024"
         }
     }
 }
