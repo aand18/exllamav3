@@ -252,7 +252,12 @@ if (Test-Path $wCsv) {
         if ($ws -gt $peakWs) { $peakWs = $ws }
     }
 }
-$breach = Test-Path (Join-Path $RES ("BREACH-" + $Tag + ".txt"))
+$breach = Test-Path (Join-Path $RES ("BREACH-" + $runId + ".txt"))
+# Belt and braces: a killed pass must never read as ok. If the watcher's floor was crossed at all
+# (it writes BREACH and kills the tree), or the sampled minimum sits under a floor, this is a
+# breach even when the BREACH file is missing for any reason.
+if (-not $breach -and ($minVram -ge 0 -and $minVram -lt $MinFreeVramMB)) { $breach = $true }
+if (-not $breach -and ($minRam -ge 0 -and $minRam -lt $MinFreeRamMB)) { $breach = $true }
 
 # --- Parse -------------------------------------------------------------------------------------
 $ppRows = New-Object System.Collections.ArrayList

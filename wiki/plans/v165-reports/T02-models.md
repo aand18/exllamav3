@@ -72,6 +72,33 @@ box's resident inference server (`unbiased-strata.exe`) normally holds 36–41 G
 production config and that server cannot both be resident — the 3.68bpw model at 262144 ctx does
 not fit a 24 GB card without ~43 GB of CPU-resident experts.
 
+### The Q2 cache is measured, not guessed: 2.09 GiB at 262144 / 2 slots
+
+A probe (`cachesize.py`, kept next to the harness) sizes the cache from the config without a
+model load: KV (12 full-attention/QSA layers, quant 2/2) **1.875 GiB**, recurrent (GDN) states at
+fp16 **0.218 GiB** → **2.093 GiB total at 262144 tokens / 2 batch slots**. The KV arithmetic is
+small, so the extra VRAM the full-length pass needs beyond the loaded model is transient
+QSA/staging buffers, not KV.
+
+### Full-length attempts (2026-10-29)
+
+| attempt | split | ctx | outcome |
+|---|---|---|---|
+| armA-1 #1 | 400 | 262144 | engine guard aborts: arena 40064 MiB built, 2965 MB available, reserve 2048 — **short by 107 MB** |
+| armA-1 #2 | 400 | 262144 | reserve 1024: guard again, 41088 MiB built, 1994 MB available — short by 54 MB |
+| armA-1 #3 | 400 | 262144 | -NoSpecDec: **watcher killed it** — free RAM 1991 MB < 2048 floor, once the guard stopped aborting |
+| probe | 392 | 262144 | loaded and ran the ladder to 32768, but **the watcher killed it entering the 65536 band: free VRAM 23 MB** |
+| probe | 448 | 131072 | load transient dipped to **1875 MB free RAM < 2048 floor** — watcher killed it during load, before any measurement |
+
+Pattern: the **watcher's own 2 GB RAM floor cannot survive the 3.68 model's load transient at any
+split** — the deeper the offload, the bigger the arena, the deeper the dip (392 → 2088, 400 →
+1991, 448 → 1875 MB). Steady state after load is comfortable (~5.4 GB free). Ruling: production
+passes on the 3.68 model run with the watcher's **RAM floor at 1024 MB** (`-MinFreeRamMB 1024`),
+VRAM floor unchanged at 200 MB, engine reserve unchanged at 1024 — a load-transient relaxation,
+documented per pass in `passes.csv`. Cost if wrong: the watcher kills a run that would have been
+safe at 2 GB — the same protection, one notch later.
+
+
 ### The model sits on a knife edge in *both* resources
 
 `armA-1` (first attempt, same split that had just loaded) died at 32 s in the engine's
