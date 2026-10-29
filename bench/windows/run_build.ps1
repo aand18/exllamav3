@@ -19,8 +19,8 @@ param(
     [Parameter(Mandatory = $true)][string] $Tag,
     [Parameter(Mandatory = $true)][string] $Src,
     [string] $Root = "C:\Users\yoho\Downloads\tabbyAPI\_agent\v164",
-    [int] $MinFreeRamMB = 2048,
-    [int] $MinFreeVramMB = 200
+    [int] $MinFreeRamMB = 1200,
+    [int] $MinFreeVramMB = 100
 )
 
 $ErrorActionPreference = "Continue"

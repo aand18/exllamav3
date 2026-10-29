@@ -60,8 +60,8 @@ param(
     [switch] $SkipGen,
     [switch] $SkipWarmup,
     [switch] $Prof,
-    [int] $MinFreeVramMB = 200,
-    [int] $MinFreeRamMB = 2048
+    [int] $MinFreeVramMB = 100,
+    [int] $MinFreeRamMB = 1200
 )
 
 $ErrorActionPreference = "Continue"

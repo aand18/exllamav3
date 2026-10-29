@@ -1,7 +1,8 @@
 # v1.6.4 retune - resource watcher and floor enforcer.
 #
 # WHY THIS EXISTS: every run on this box (measurement, build, boot, deployment smoke test) must
-# hold two floors at every sample, not just at the start: 200 MB free VRAM and 2048 MB free system
+# hold two floors at every sample, not just at the start: 100 MB free VRAM and 1200 MB free system
+# RAM (operator decision 2026-10-29: the 3.68bpw load transient cannot survive tighter floors
 # RAM. This script is the only sanctioned way to hold them, so that no run can quietly swap the
 # machine into a stall and make the numbers look like a config effect.
 #
