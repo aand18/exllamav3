@@ -35,7 +35,8 @@ override to `run_pass.ps1`. `perf.py` unchanged v1.6.4→v1.6.5, sha256
 
 ## Regime (production baseline, 3.68bpw model)
 
-- cache: 262144, FP16 provisional (Arm A may force quantized), chunk 4096, batch 2
+- cache: 262144, **Q2 (`-cq 2,2`) — operator-fixed 2026-10-29, used in every pass**, chunk
+  4096, batch 2
 - MoE: split 360 provisional (was tuned for the deleted 2.05bpw; T10 re-founds, ladder up),
   16 threads, `EXL3_MOE_MEMOPS=0` (T5 re-decides), `EXL3_MOE_CPU_PIN=1`, `EXL3_MOE_CPU_SWIZZLE=1`
 - drafting: MTP draft block 3 provisional; T6/T7 settle `DRAFT_WINNER` (stock MTP / HermiHg
@@ -50,7 +51,8 @@ override to `run_pass.ps1`. `perf.py` unchanged v1.6.4→v1.6.5, sha256
 - CODE_WINNER (stock vs win-perf): — (T8)
 - THREADS/HOST_CORES: — (T9)
 - SPLIT: — (T10)
-- CACHE_MODE + STAGING_PAGES: — (T11)
+- CACHE_MODE: **Q2 (2,2) — operator decision, frozen**
+- STAGING_PAGES: — (T11)
 - PLE/GDN: — (T12)
 
 ## Advise-only (do not change without a task)
