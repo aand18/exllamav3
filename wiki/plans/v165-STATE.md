@@ -12,9 +12,10 @@ Owner of the box: none yet — ask the operator before the first GPU task. Rollb
   v1.6.5; the four knobs (`EXL3_MOE_TIMER_RES/_THREAD_PRIO/_BLOCKING_SYNC/_CPU_PIN_OFFSET`) are
   wired in the rewritten pool code. Build worktree: `/home/dev/exllamav3/.worktrees/v165-win-perf`
   (detached at the tag).
-- installed engine (verified T0, 2026-10-29): **1.6.4** — not the expected 1.5.4 (a 1.6.4 wheel
-  is already installed; torch 2.11.0+cu130). The 1.5.4 wheel path above is the only 1.5.4
-  artifact; T3 installs stock 1.6.5 from source regardless.
+- installed engine (verified T3, 2026-10-29): **1.6.5 stock** — built from the `v165-stock`
+  worktree (wheel `exl3-build-165\src\dist\exllamav3-1.6.5-cp312-cp312-win_amd64.whl`, sha256
+  `5337b620…`), installed via Windows `uv.exe`, verified from a Windows cwd (package + `.pyd`
+  from venv site-packages). Report `wiki/plans/v165-reports/T03-build.md`.
 - **T1 verified 2026-10-29** (`wiki/plans/v165-reports/T01-codebase.md`): tag
   `win-perf-1.6.5` = `d0f55f71` is NOT the branch tip — `165-win-perf` = `5835bb6b`, 3
   commits ahead (harness fix `09923498` + plan commits; bench/wiki only, engine code
@@ -96,11 +97,12 @@ T1 done 2026-10-29 (`wiki/plans/v165-reports/T01-codebase.md`) — pass, with th
 
 ## Non-GPU prep done 2026-10-29
 
-- **T3 build: DEFERRED — machine has no RAM headroom.** Two attempts under the watcher
-  (`build-stock` MAX_JOBS=4: breach at 368 s, free RAM 1999; `build-stock2` MAX_JOBS=2: breach
-  at 96 s, free RAM 1713 — the operator's workload holds ~62/65 GB RAM + 23.5 GB VRAM right
-  now). The watcher killed both cleanly; nothing of the operator's was touched. Build both
-  wheels when the operator frees the machine (stock first, then winperf — builds serialize).
+- **T3 build: DONE 2026-10-29** (`wiki/plans/v165-reports/T03-build.md`). Six watcher-gated
+  attempts: five RAM-floor breaches (build peak ~4 GB at MAX_JOBS=2, ~3.5 GB at 1; the RAM
+  holder was `unbiased-strata.exe` 41.5 GB — the server serving this session), then
+  `build-stock6` OK at 2199 s (MAX_JOBS=2) after the operator restarted it (8.6 GB free).
+  Harness quirk: `exit=-1` is the cmd-exit-code-read-empty trap — trust `WHEEL-EXIT 0` in
+  `build_wheel.log` + the `BUILD_WHEEL` line.
   Src staged: `C:\Users\yoho\Downloads\exl3-build-165\src` (v165-stock copy) and
   `exl3-build-165-winperf\src`; recipes fixed (`SCRATCH=…\src`, MAX_JOBS=2).
   Install when built: Windows-side `uv.exe` (`C:\Users\yoho\.local\bin\uv.exe`) — the WSL uv
