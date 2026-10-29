@@ -1,0 +1,115 @@
+tag,run_id,category,arm,tok_s,ratio,acc,draft
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Agentic; code,Baseline,33.84,0,-1,-1
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Agentic; code,MTP (greedy),38.53,1.14,1.87,4.00
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Agentic; curl,Baseline,33.57,0,-1,-1
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Agentic; curl,MTP (greedy),41.41,1.23,1.78,4.00
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Coding,Baseline,32.02,0,-1,-1
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Coding,MTP (greedy),41.34,1.29,2.21,4.00
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Creative,Baseline,28.95,0,-1,-1
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Creative,MTP (greedy),49.74,1.72,1.19,4.00
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Creative (reasoning),Baseline,6.99,0,-1,-1
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Creative (reasoning),MTP (greedy),49.58,7.09,1.33,4.00
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Translation,Baseline,31.27,0,-1,-1
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Translation,MTP (greedy),43.77,1.40,1.64,4.00
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Translation (reasoning),Baseline,37.00,0,-1,-1
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Translation (reasoning),MTP (greedy),46.99,1.27,1.52,4.00
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Trivial repetition,Baseline,33.62,0,-1,-1
+mtp-dnt3-368-20261029,mtp-dnt3-368-20261029-214242,Trivial repetition,MTP (greedy),43.02,1.28,2.40,4.00
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Agentic; code,Baseline,37.08,0,-1,-1
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Agentic; code,MTP (greedy),51.25,1.38,1.49,2.00
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Agentic; curl,Baseline,35.95,0,-1,-1
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Agentic; curl,MTP (greedy),50.95,1.42,1.39,2.00
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Coding,Baseline,38.09,0,-1,-1
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Coding,MTP (greedy),58.63,1.54,1.55,2.00
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Creative,Baseline,37.22,0,-1,-1
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Creative,MTP (greedy),44.15,1.19,1.01,2.00
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Creative (reasoning),Baseline,35.50,0,-1,-1
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Creative (reasoning),MTP (greedy),44.48,1.25,1.03,2.00
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Translation,Baseline,36.24,0,-1,-1
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Translation,MTP (greedy),51.43,1.42,1.33,2.00
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Translation (reasoning),Baseline,36.45,0,-1,-1
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Translation (reasoning),MTP (greedy),51.24,1.41,1.31,2.00
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Trivial repetition,Baseline,33.41,0,-1,-1
+mtp-ndt2-318-20261029,mtp-ndt2-318-20261029-223446,Trivial repetition,MTP (greedy),48.95,1.46,1.68,2.00
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Agentic; code,Baseline,36.99,0,-1,-1
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Agentic; code,MTP (greedy),36.81,0.99,1.98,6.00
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Agentic; curl,Baseline,34.99,0,-1,-1
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Agentic; curl,MTP (greedy),36.94,1.06,1.97,6.00
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Coding,Baseline,39.62,0,-1,-1
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Coding,MTP (greedy),45.86,1.16,2.23,6.00
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Creative,Baseline,42.15,0,-1,-1
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Creative,MTP (greedy),34.67,0.82,1.12,6.00
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Creative (reasoning),Baseline,40.39,0,-1,-1
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Creative (reasoning),MTP (greedy),35.24,0.87,1.14,6.00
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Translation,Baseline,41.26,0,-1,-1
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Translation,MTP (greedy),39.35,0.95,1.50,6.00
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Translation (reasoning),Baseline,40.48,0,-1,-1
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Translation (reasoning),MTP (greedy),38.47,0.95,1.43,6.00
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Trivial repetition,Baseline,34.23,0,-1,-1
+mtp-ndt6-318-20261029,mtp-ndt6-318-20261029-224555,Trivial repetition,MTP (greedy),36.21,1.06,2.41,6.00
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Agentic; code,Baseline,31.99,0,-1,-1
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Agentic; code,MTP (greedy),37.89,1.18,1.85,4.00
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Agentic; curl,Baseline,32.14,0,-1,-1
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Agentic; curl,MTP (greedy),35.73,1.11,1.63,4.00
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Coding,Baseline,32.68,0,-1,-1
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Coding,MTP (greedy),40.71,1.25,1.99,4.00
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Creative,Baseline,40.18,0,-1,-1
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Creative,MTP (greedy),40.31,1.00,1.14,4.00
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Creative (reasoning),Baseline,40.26,0,-1,-1
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Creative (reasoning),MTP (greedy),40.77,1.01,1.17,4.00
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Translation,Baseline,35.89,0,-1,-1
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Translation,MTP (greedy),39.26,1.09,1.58,4.00
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Translation (reasoning),Baseline,36.78,0,-1,-1
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Translation (reasoning),MTP (greedy),39.90,1.08,1.43,4.00
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Trivial repetition,Baseline,31.26,0,-1,-1
+mtp-ref-318-20261029,mtp-ref-318-20261029-222244,Trivial repetition,MTP (greedy),37.85,1.21,2.01,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202014,Agentic; code,Baseline,49.47,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202014,Agentic; curl,Baseline,53.87,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202014,Coding,Baseline,48.09,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202014,Creative,Baseline,45.85,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202014,Creative (reasoning),Baseline,43.45,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202014,Translation,Baseline,46.33,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202014,Translation (reasoning),Baseline,50.72,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202014,Trivial repetition,Baseline,54.31,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Agentic; code,Baseline,47.05,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Agentic; code,MTP (rb=batched r1; greedy),50.25,1.07,1.74,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Agentic; code,MTP (rb=serial r1; greedy),52.42,1.11,1.84,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Agentic; code,MTP (rb=serial r2; greedy),51.79,1.10,1.82,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Agentic; code,MTP (rb=batched r2; greedy),53.00,1.13,1.92,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Agentic; curl,Baseline,46.54,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Agentic; curl,MTP (rb=batched r1; greedy),48.19,1.04,1.69,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Agentic; curl,MTP (rb=serial r1; greedy),45.39,0.98,1.59,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Agentic; curl,MTP (rb=serial r2; greedy),44.01,0.95,1.49,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Agentic; curl,MTP (rb=batched r2; greedy),46.37,1.00,1.66,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Coding,Baseline,52.31,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Coding,MTP (rb=batched r1; greedy),60.91,1.16,2.03,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Coding,MTP (rb=serial r1; greedy),63.02,1.20,2.21,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Coding,MTP (rb=serial r2; greedy),63.36,1.21,2.14,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Coding,MTP (rb=batched r2; greedy),62.30,1.19,2.01,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Creative,Baseline,45.85,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Creative,MTP (rb=batched r1; greedy),38.85,0.85,1.31,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Creative,MTP (rb=serial r1; greedy),41.89,0.91,1.20,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Creative,MTP (rb=serial r2; greedy),44.65,0.97,1.22,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Creative,MTP (rb=batched r2; greedy),46.03,1.00,1.31,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Creative (reasoning),Baseline,43.85,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Creative (reasoning),MTP (rb=batched r1; greedy),38.83,0.89,1.06,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Creative (reasoning),MTP (rb=serial r1; greedy),37.18,0.85,0.94,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Creative (reasoning),MTP (rb=serial r2; greedy),42.62,0.97,1.16,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Creative (reasoning),MTP (rb=batched r2; greedy),38.47,0.88,0.93,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Translation,Baseline,44.31,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Translation,MTP (rb=batched r1; greedy),46.16,1.04,1.62,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Translation,MTP (rb=serial r1; greedy),49.10,1.11,1.64,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Translation,MTP (rb=serial r2; greedy),51.93,1.17,1.64,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Translation,MTP (rb=batched r2; greedy),51.30,1.16,1.65,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Translation (reasoning),Baseline,43.62,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Translation (reasoning),MTP (rb=batched r1; greedy),45.42,1.04,1.40,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Translation (reasoning),MTP (rb=serial r1; greedy),51.67,1.18,1.67,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Translation (reasoning),MTP (rb=serial r2; greedy),47.02,1.08,1.40,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Translation (reasoning),MTP (rb=batched r2; greedy),49.03,1.12,1.51,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Trivial repetition,Baseline,42.56,0,-1,-1
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Trivial repetition,MTP (rb=batched r1; greedy),23.90,0.56,2.25,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Trivial repetition,MTP (rb=serial r1; greedy),41.87,0.98,1.51,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Trivial repetition,MTP (rb=serial r2; greedy),40.91,0.96,1.32,4.00
+rb-ab-166-20261029,rb-ab-166-20261029-202655,Trivial repetition,MTP (rb=batched r2; greedy),51.03,1.20,1.78,4.00
+val-spec,val-spec-20261029-233352,Coding,Baseline,45.14,0.000,-1.00,-1.00
+val-spec,val-spec-20261029-233352,Coding,MTP (greedy),52.50,1.160,1.74,4.00

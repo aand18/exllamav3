@@ -1,0 +1,166 @@
+ -- Loading D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8
+ -- CPU split experts (worker, dynamic): mtp.layers.0.mlp [136..512) of 512, placement from saved profile
+
+ -- CPU MoE worker started: 1 layers, avx512-vbmi, 16 threads
+ -- CPU MoE host affinity: host on LPs [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31]
+ -- Loading D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8
+ -- CPU split experts (worker, dynamic): model.language_model.layers.0.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.1.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.2.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.3.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.4.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.5.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.6.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.7.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.8.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.9.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.10.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.11.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.12.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.13.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.14.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.15.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.16.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.17.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.18.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.19.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.20.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.21.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.22.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.23.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.24.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.25.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.26.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.27.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.28.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.29.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.30.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.31.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.32.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.33.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.34.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.35.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.36.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.37.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.38.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.39.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.40.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.41.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.42.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.43.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.44.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.45.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.46.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.47.mlp [136..512) of 512, placement from saved profile
+
+ -- CPU MoE worker started: 48 layers, avx512-vbmi, 16 threads
+ -- Warming up...
+
+ -- Loading tokenizer...
+Prefill: 76 / 76...
+Here is a Python script that draws a cute, stylized cartoon kitten using `matplotlib`. It uses basic geometric shapes (circles, ellipses, and polygons) to construct the face, ears, eyes, and whiskers.
+
+### Prerequisites
+You need `matplotlib` and `numpy` installed. If you don't have them, install them via:
+```bash
+pip install matplotlib numpy
+```
+
+### Python Script
+
+```python
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import numpy as np
+
+def draw_cute_kitten():
+    # Create a figure and axis
+    fig
+--------
+Prefill: 68 / 68...
+Here is a complete, single-file HTML5 Snake game. You can copy and paste this code into a file named `index.html` and open it in any modern web browser.
+
+### Features:
+- **Classic Gameplay**: Eat food to grow, avoid walls and yourself.
+- **Responsive Controls**: Arrow keys or WASD.
+- **Score Tracking**: Displays current score and high score (stored in `localStorage`).
+- **Game States**: Start screen, Game Over screen, and Pause functionality.
+- **Clean UI**: Modern styling with CSS.
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+--------
+Prefill: 128 / 128...
+To implement a GEMM kernel with a fused SiLU-gated activation using Tensor Cores, we must address a fundamental constraint: **Standard CUDA Tensor Core instructions (like `mma.sync`) do not support custom epilogues like SiLU or element-wise multiplication directly within the tensor core pipeline.**
+
+Therefore, the standard high-performance approach is:
+1.  **GEMM Phase:** Use Tensor Cores to compute the matrix multiplication $C = A \times B$.
+2.  **Epilogue Phase:** After the GEMM result is written to registers/shared memory, apply the SiLU gating logic in a separate
+--------
+ARM baseline tok_s=45.14 acc=0.00/0.00 rounds=1
+Prefill: 76 / 76...
+```python
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import numpy as np
+
+def draw_cute_kitten():
+    """Draw a cute cartoon-style kitten using matplotlib."""
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 10)
+    ax.set_aspect('equal')
+    ax.axis('off')
+    
+    # Background
+    ax.set_facecolor('#f0f8ff')
+    fig.patch.set_facecolor('#f0f8ff')
+    
+
+--------
+Prefill: 68 / 68...
+Here is a complete, self-contained HTML5 Snake game. You can save this code as an `.html` file (e.g., `snake.html`) and open it in any modern web browser.
+
+### Features:
+- **Classic Gameplay**: Eat food to grow, avoid walls and yourself.
+- **Controls**: Arrow keys or WASD.
+- **Score Tracking**: Current score and high score (stored in `localStorage`).
+- **Game States**: Start screen, Game Over screen, and Pause functionality.
+- **Responsive Design**: Works on desktop and mobile (with on-screen buttons for mobile).
+
+```html
+
+--------
+Prefill: 128 / 128...
+Here is a CUDA kernel implementation for a Gated FFN (Feed-Forward Network) using Tensor Cores.
+
+### Key Concepts
+1.  **Fused Input**: The input matrix $X$ is assumed to be of shape $[M, 2K]$, where the first $K$ columns are the "Gate" weights and the next $K$ columns are the "Up" weights. Alternatively, and more commonly in optimized libraries, we treat the weight matrix $W$ as $[2K, N]$ or split the computation into two GEMMs.
+    *   *Note*: For maximum
+--------
+ARM draft tok_s=52.50 acc=1.74/4.00 rounds=1
+
+| [33;1mCategory[0m   |   [33;1mBaseline[0m |                          [33;1mMTP (greedy)[0m |
+|:-----------|-----------:|--------------------------------------:|
+| Coding     |  [35;1m45.14[0m t/s | [35;1m52.50[0m t/s, [32;1m1.16[0mx, [34;1m1.74[0m/[34;1m4.00[0m acc/draft |
+
+remark: triton_paged.py:1504:0: 5041 instructions in function
+
+=== pass     : val-spec
+=== run id   : val-spec-20261029-233352
+=== regime   : production
+=== engine   : 1.6.5
+=== package  : C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\__init__.py
+=== extension: C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3_ext.cp312-win_amd64.pyd
+=== torch    : 2.11.0+cu130 / cuda 13.0
+=== gpu      : NVIDIA GeForce RTX 4090, 24564 MiB, 596.36
+=== free vram at start (MiB): 24138
+=== harness  : 8DFD8B0A45772393219B6754131D9C8434E93F2D80CE8C8E181CAD13AED4CE17
+=== args     : 
+-m D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8 -cs 131072 -chunk_size 4096 -ambs 2 -cq 2,2 -mcs 376 -mct 16 -mtp -cs 40960 -tokens 128 -single Coding
+=== env      : 
+EXL3_HOST_MEM_RESERVE_MB=0 EXL3_MOE_ARENA_HUGEPAGE=0 EXL3_MOE_CPU_PIN=1 EXL3_MOE_CPU_SWIZZLE=1 EXL3_MOE_MEMOPS=0 FROZEN_STATE=master->active PYTHONUTF8=1 XDG_CACHE_HOME=C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\engine-state\active
+=== started  : 
+2026-10-30T00:33:52
+=== elapsed s: 76

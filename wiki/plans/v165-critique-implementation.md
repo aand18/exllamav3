@@ -74,11 +74,12 @@ All of it is reproducible from the repo; nothing below is an assertion.
 | deploy defaults | `deploy.sh`, `run_pass.ps1`, `run_build.ps1`, `watch.ps1` all default to `_agent\v165`; no `v164` left except a historical plan reference |
 | PowerShell syntax | `run_pass.ps1`, `watch.ps1`, `run_build.ps1` parse clean after every edit |
 
+| drafting path end to end (`val-spec`, one workload, 128 tokens) | `ARM baseline tok_s=45.14 acc=0.00/0.00` and `ARM draft tok_s=52.50 acc=1.74/4.00` in `results/arms.csv`; `results/spec_decode.csv` holds `Coding, Baseline 45.14` and `Coding, MTP (greedy) 52.50, 1.16x, 1.74/4.00`; `ratios.py` reads the table back |
+
 ## Not exercised yet (deliberately)
 
-- The `ARM ...` lines and `reset_arm()` are validated by `val-spec` (a short single-workload
-  drafting run); a *multi-arm* in-process run is the thing they were built for and belongs to the
-  resumed T6 series.
+- A *multi-arm* in-process drafting run (the thing `reset_arm()` and the shared Generator were
+  built for) belongs to the resumed T6 series; the single-arm path is proven above.
 - T9's `EXL3_SPLIT_PROF=1` gate is a protocol change (plan text), not code: the tool (`-Prof` on the
   harness, which sets `EXL3_SPLIT_PROF`/`EXL3_MOE_CPU_PROF`/`EXL3_MOE_SUBMIT_PROF`) already existed.
 - T10's ladder is rewritten but unrun; it needs the frozen-profile re-measurement that C2 demands.

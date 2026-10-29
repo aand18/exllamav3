@@ -1,0 +1,3 @@
+tag,run_id,arm,tok_s,acc,draft,rounds
+val-spec,val-spec-20261029-233352,baseline,45.14,0.00,0.00,1
+val-spec,val-spec-20261029-233352,draft,52.50,1.74,4.00,1
