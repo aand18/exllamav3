@@ -98,6 +98,21 @@ VRAM floor unchanged at 200 MB, engine reserve unchanged at 1024 — a load-tran
 documented per pass in `passes.csv`. Cost if wrong: the watcher kills a run that would have been
 safe at 2 GB — the same protection, one notch later.
 
+### RESOLVED 2026-10-29: the operator's floors make the transient survivable
+
+The operator set the floors to **100 MB free VRAM / 1200 MB free sys RAM** (harness defaults as of
+`cc83e6ef`), and with the engine guard at 0 (`EXL3_HOST_MEM_RESERVE_MB=0`, the watcher holds the
+margin) split **400 loads and runs full length**:
+
+| pass | ctx | status | PP @4096 / @top | TG (S=1) | min VRAM | min RAM |
+|---|---|---|---|---|---|---|
+| `probe400` | 131072 | **ok** | 1701.50 / 1623.72 @131072 | 43–48 t/s across contexts | 3207 MB | 3491 MB |
+
+So the fit question is settled for 131072, with both resources comfortable (3.2 GB VRAM and
+3.5 GB RAM free at the floor of a full pass). The 262144 confirmation is the remaining question —
+its only difference is the deeper load transient at `max_length = 262144` — and it is being
+measured with the same config.
+
 
 ### The model sits on a knife edge in *both* resources
 
