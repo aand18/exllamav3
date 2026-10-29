@@ -25,6 +25,11 @@ Owner of the box: none yet — ask the operator before the first GPU task. Rollb
   30.2 GB, its ng3 table NOT downloaded; the ng8 table is NTFS-hardlinked in). Fast loads,
   more experts in VRAM — screening ratios only, never absolute tok/s; placement/cache/drafter-
   VRAM arms and all confirmations run on the production model.
+- **T2 status 2026-10-29: steps 1–3 done** — both downloads complete (3.68 dir 107 GB incl.
+  ng8; 1.66 dir 29 GB; hardlink verified, link count 2). Steps 4 (load smoke, GPU) and 5
+  (delete `2.05bpw` 59 GB + `3.05bpw` 80 GB) pending. Disk after downloads: ~37 GB free.
+- Rollback: 1.5.4 wheel on disk (path above); installed engine is 1.6.4 but its wheel is NOT
+  on disk — a 1.6.4 rollback means rebuilding from tag `v1.6.4`.
 
 ## Harness
 
