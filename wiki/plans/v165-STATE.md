@@ -21,8 +21,8 @@ Owner of the box: none yet — ask the operator before the first GPU task. Rollb
   identical at the tag). 13/14 regime defaults confirmed at v1.6.5. **Mismatch:**
   `EXL3_NO_BATCH_READBACK` is not an env knob at v1.6.5 (or v1.6.4/fork) — it is a
   hardcoded test hook `_NO_BATCH_READBACK = False` in `generator/generator.py:32`
-  (batched readback ON by default). T6's env A/B is impossible; needs a source patch
-  or the arm drops — decide before T6.
+  (batched readback ON by default). T6's A/B is an in-process toggle between windows
+  (plan corrected, commit `f85274c2`).
 
 ## Models (operator decision 2026-10-29; T2 downloads, then old 2.05bpw deleted)
 
@@ -93,3 +93,28 @@ See `wiki/plans/2026-10-29-v165-retune.md` (T0–T13). T0 done 2026-10-29
 (`wiki/plans/v165-reports/T00-preconditions.md`); harness commit `09923498`.
 T1 done 2026-10-29 (`wiki/plans/v165-reports/T01-codebase.md`) — pass, with the
 `EXL3_NO_BATCH_READBACK` flag for T6. Next: T2 (steps 4–5, GPU).
+
+## Non-GPU prep done 2026-10-29
+
+- **T3 build:** stock v1.6.5 building under the watcher (`run_build.ps1 -Tag build-stock`,
+  src `C:\Users\yoho\Downloads\exl3-build-165\src` = copy of the v165-stock worktree; the
+  staged `_build.bat` needed `SCRATCH` pointed at `...\src` — the check is `%SCRATCH%\setup.py`).
+  Install when done: Windows-side `uv.exe` (`C:\Users\yoho\.local\bin\uv.exe`) — the WSL uv
+  cannot resolve a Windows venv interpreter (`--python ...\python.exe` → "No virtual
+  environment found"). Verify from a Windows cwd that `exllamav3.__file__` is the venv path.
+- **T6 step 0:** `spec_decode.py` deployed to `_agent/v165/`, sha256
+  `2902dec04ffa97b0addbb8224fc0f77d03443575033e0fec7924bf23e136af2d` (from v165-stock
+  `eval/spec_decode.py`).
+- **T7 prep:** `D:\llms\mtp-sidecars\mtp-2.6bpw.safetensors` (805 MiB) and
+  `D:\llms\Qwen3.8-Flash-Next-DFlash2\` (config.json + 1.206 GB model.safetensors + patches,
+  assets excluded) downloaded. The T7 step-2 base-dir copy can **hardlink the 51.8 GB ng8
+  table** (same volume) → only ~55 GB of real copies; do it after the T2 step-5 deletions.
+- **T8 build staged:** `C:\Users\yoho\Downloads\exl3-build-165-winperf\src` = worktree at
+  `f85274c2` (tag `win-perf-1.6.5`; engine code identical to branch tip) + fixed `_build.bat`.
+  Build AFTER the stock build finishes (run_build aborts on a concurrent `bdist_wheel`).
+- **T13 step 2 pre-researched (tabbyAPI `be74bf0`, `backends/exllamav3/model.py:1014`):**
+  the `AsyncGenerator(...)` call forwards `num_draft_tokens`, `dynamic_draft_tokens`,
+  `ngram_match_min` + checkpoint kwargs. NOT forwarded: `sparse_draft_head` (-sdh),
+  `hybrid_draft_tokens` (-hdt), `draft_max_rows`; the `_NO_BATCH_READBACK` module flag is
+  unreachable without a patch. If `DRAFT_WINNER` uses -sdh/-hdt, deployment needs a 3-kwarg
+  tabbyAPI patch — decide at T13.
