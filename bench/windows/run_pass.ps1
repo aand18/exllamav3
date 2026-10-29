@@ -55,6 +55,7 @@ param(
     [string] $Model = "",
     [string] $Root = "C:\Users\yoho\Downloads\tabbyAPI\_agent\v164",
     [switch] $Short,
+    [string] $Runner = "perf",   # perf.py (pp/tg ladder) or spec_decode.py (drafting arms)
     [switch] $NoSpecDec,
     [switch] $SkipPrefill,
     [switch] $SkipGen,
@@ -71,7 +72,13 @@ $PY    = "C:\Users\yoho\Downloads\tabbyAPI\venv\Scripts\python.exe"
 if ($Model -ne "") { $MODEL = $Model } else { $MODEL = "D:\llms\Qwen3.8-Flash-Next-exl3-2.05bpw" }
 $LOGS  = Join-Path $Root "logs"
 $RES   = Join-Path $Root "results"
-$PERF  = Join-Path $Root "perf.py"
+if ($Runner -eq "spec_decode") {
+    $PERF = Join-Path $Root "spec_decode.py"
+    $MATCH_CMD = "spec_decode\.py"
+} else {
+    $PERF = Join-Path $Root "perf.py"
+    $MATCH_CMD = "perf\.py"
+}
 $WATCH = Join-Path $Root "watch.ps1"
 
 New-Item -ItemType Directory -Force $LOGS, $RES | Out-Null
@@ -153,7 +160,17 @@ if ($Extra -ne "") {
     foreach ($tok in ($Extra -split '\s+')) { if ($tok -ne "") { $argsList += $tok } }
 }
 if ($Short)          { $argsList += "-short" }
-if (-not $NoSpecDec) { $argsList += "-sd" }
+if (-not $NoSpecDec -and $Runner -eq "perf") { $argsList += "-sd" }
+if ($Runner -eq "spec_decode") {
+    # -max_length is perf.py's ladder length; spec_decode.py takes model_init args plus its own
+    # a fixed-size array has no RemoveAt: rebuild without the flag and its value
+    $keep = @()
+    for ($j = 0; $j -lt $argsList.Count; $j++) {
+        if ($argsList[$j] -eq "-max_length") { $j++; continue }
+        $keep += $argsList[$j]
+    }
+    $argsList = $keep
+}
 if ($SkipPrefill)    { $argsList += "-spf" }
 if ($SkipGen)        { $argsList += "-sg" }
 if ($SkipWarmup)     { $argsList += "-swu" }
@@ -221,7 +238,7 @@ $p = Start-Process -FilePath $PY -ArgumentList (@($PERF) + $argsList) -NoNewWind
                    -RedirectStandardOutput $log -RedirectStandardError $err
 $w = Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -PassThru -ArgumentList @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$WATCH`"",
-        "-Tag", $runId, "-TargetPid", $p.Id, "-MatchCmd", "perf\.py",
+        "-Tag", $runId, "-TargetPid", $p.Id, "-MatchCmd", $MATCH_CMD,
         "-MinFreeVramMB", $MinFreeVramMB, "-MinFreeRamMB", $MinFreeRamMB,
         "-OutDir", "`"$RES`"")
 $p.WaitForExit()
@@ -234,14 +251,6 @@ $w.WaitForExit(60000) | Out-Null
 Get-Content $err -ErrorAction SilentlyContinue | Add-Content -Path $log -Encoding ASCII
 $header += @("=== elapsed s: $elapsed")
 $header | Add-Content -Path $log -Encoding ASCII
-
-# Exit code of the venv python is not readable (uv shim; measured 2026-10-24), so the verdict comes
-# from the evidence: metrics parsed, no traceback, floors held.
-$traceback = $false
-$perfPart = $raw
-$marker = [regex]::Match($raw, '\r?\n=== pass     :')
-if ($marker.Success) { $perfPart = $raw.Substring(0, $marker.Index) }
-if ([regex]::IsMatch($perfPart, 'Traceback \(most recent call last\)')) { $traceback = $true }
 
 # --- Floors from the watcher samples -----------------------------------------------------------
 $minVram = -1; $minRam = -1; $peakWs = 0; $samples = 0
@@ -270,6 +279,16 @@ $tgRows = New-Object System.Collections.ArrayList
 $ansi = [char]27 + "\[[0-9;]*[A-Za-z]"
 $raw = (Get-Content $log -Raw -ErrorAction SilentlyContinue)
 if ($null -eq $raw) { $raw = "" }
+
+# Exit code of the venv python is not readable (uv shim; measured 2026-10-24), so the verdict comes
+# from the evidence: metrics parsed, no traceback, floors held. This must run AFTER $raw is loaded:
+# it used to sit above, read $null every time, and let a crashed run report ok whenever the runner
+# produced no pp/tg rows (found 2026-10-29 when a spec_decode run lost its prompts directory).
+$traceback = $false
+$perfPart = $raw
+$marker = [regex]::Match($raw, '\r?\n=== pass     :')
+if ($marker.Success) { $perfPart = $raw.Substring(0, $marker.Index) }
+if ([regex]::IsMatch($perfPart, 'Traceback \(most recent call last\)')) { $traceback = $true }
 foreach ($rawLine in (($raw -replace "`r", "`n") -split "`n")) {
     $l = $rawLine -replace $ansi, ""
     if ($l -match 'Length\s+(\d+):\s+([0-9.]+)\s+tokens/s') {
@@ -295,21 +314,22 @@ $tgRows = @($tgRows | Where-Object { $_[1][1] -gt 0 })
 # --- Verdict -----------------------------------------------------------------------------------
 $status = "ok"
 if ($breach) { $status = "breach" }
-elseif ($traceback -or ($ppRows.Count -eq 0 -and $tgRows.Count -eq 0)) { $status = "fail" }
+elseif ($traceback) { $status = "fail" }
+elseif ($Runner -eq "perf" -and $ppRows.Count -eq 0 -and $tgRows.Count -eq 0) { $status = "fail" }
 
 # --- Persist -----------------------------------------------------------------------------------
 $passesCsv = Join-Path $RES "passes.csv"
 if (-not (Test-Path $passesCsv)) {
-    Set-Content -Path $passesCsv -Value "tag,run_id,finished_utc,regime,status,engine,ext,elapsed_s,max_length,min_free_vram_mb,min_free_ram_mb,peak_proc_ws_mb,samples,breach,env,split,threads,args,harness_sha256,log" -Encoding ASCII
+    Set-Content -Path $passesCsv -Value "tag,run_id,finished_utc,regime,status,engine,ext,elapsed_s,max_length,min_free_vram_mb,min_free_ram_mb,peak_proc_ws_mb,samples,breach,env,split,threads,args,harness_sha256,log,runner" -Encoding ASCII
 }
 $envStr = (($envApplied.Keys | Sort-Object | ForEach-Object { "$_=$($envApplied[$_])" }) -join " ")
 $argStr = (($argsList -join " ") -replace ",", ";")
 $breachInt = 0
 if ($breach) { $breachInt = 1 }
-$row = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19}" -f `
+$row = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19},{20}" -f `
     $Tag, $runId, (Get-Date).ToString("s"), $Regime, $status, $engine, $extName, $elapsed, $MaxLength, `
     $minVram, $minRam, $peakWs, $samples, $breachInt, $envStr, $Split, $Threads, $argStr, $harnessHash, `
-    ("perf-" + $runId + ".log")
+    ("perf-" + $runId + ".log"), $Runner
 Add-Content -Path $passesCsv -Value $row -Encoding ASCII
 
 $ppCsv = Join-Path $RES "pp.csv"

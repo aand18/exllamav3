@@ -28,6 +28,12 @@ install -m 0666 "$HERE/run_build.ps1"  "$DEST/run_build.ps1"
 install -m 0666 "$REPO/eval/perf.py"   "$DEST/perf.py"
 # T7 drafter arms: -or override specs that shadow the MTP head from a sidecar file, no base-dir copy.
 install -m 0666 "$HERE"/mtp-sidecar-*.yaml "$DEST"/
+# T6/T7 drafting arms run through run_pass.ps1 -Runner spec_decode; the script reads its prompt
+# corpus from ./prompts next to itself, so both travel together or every run dies at the first
+# workload (measured 2026-10-29).
+install -m 0666 "$REPO/eval/spec_decode.py" "$DEST/spec_decode.py"
+mkdir -p "$DEST/prompts"
+cp -f "$REPO"/eval/prompts/*.json "$DEST/prompts/"
 
 echo "deployed to $DEST"
 sha256sum "$DEST"/*.ps1 "$DEST"/perf.py
