@@ -159,6 +159,11 @@ T1 done 2026-10-29 (`wiki/plans/v165-reports/T01-codebase.md`) — pass, with th
   from shard 8; with a stripped base a missing sidecar fails the load instead of silently
   falling back). `-or` stays benchmark-only. Only patch still possible: the 3-kwarg drafting
   forward (`-sdh`/`-hdt`/`draft_max_rows`), and only if T6/T7 freeze a winner using them.
+- **Merge + deploy 2026-10-29:** `optimized-mtp-heads` merged into `165-win-perf` (`1479e6ae`),
+  tag `win-perf-1.6.5` moved to the merge tip (the tag source now includes `1385306e`, matching
+  the built wheel). Sidecar YAMLs deployed to `_agent/v165/` (2.6bpw sha `dbd1a6ac…`, matches
+  repo). Trap: `deploy.sh` checks out CRLF (`core.autocrlf=true`) and dies with
+  `/usr/bin/env: 'bash\r'` — strip CRs (`sed -i 's/\r$//'`) before running it from WSL.
 - **T13 step 2 pre-researched (tabbyAPI `be74bf0`, `backends/exllamav3/model.py:1014`):**
   the `AsyncGenerator(...)` call forwards `num_draft_tokens`, `dynamic_draft_tokens`,
   `ngram_match_min` + checkpoint kwargs. NOT forwarded: `sparse_draft_head` (-sdh),
