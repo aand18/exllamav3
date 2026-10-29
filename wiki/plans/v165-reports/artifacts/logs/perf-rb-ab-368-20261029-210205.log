@@ -1,0 +1,487 @@
+ -- Loading D:\llms\Qwen3.8-Flash-Next-exl3-3.68bpw_h6_ng8
+ -- CPU split experts (worker, dynamic): mtp.layers.0.mlp [128..512) of 512
+
+ -- CPU MoE worker started: 1 layers, avx512-vbmi, 16 threads
+ -- CPU MoE host affinity: host on LPs [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31]
+ -- Loading D:\llms\Qwen3.8-Flash-Next-exl3-3.68bpw_h6_ng8
+ -- CPU split experts (worker, dynamic): model.language_model.layers.0.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.1.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.2.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.3.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.4.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.5.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.6.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.7.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.8.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.9.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.10.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.11.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.12.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.13.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.14.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.15.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.16.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.17.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.18.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.19.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.20.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.21.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.22.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.23.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.24.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.25.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.26.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.27.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.28.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.29.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.30.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.31.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.32.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.33.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.34.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.35.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.36.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.37.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.38.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.39.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.40.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.41.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.42.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.43.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.44.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.45.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.46.mlp [128..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.47.mlp [128..512) of 512, placement from saved profile
+
+ -- CPU MoE worker started: 48 layers, avx512-vbmi, 16 threads
+ -- Warming up...
+
+ -- Loading tokenizer...
+Prefill: 61 / 61...
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+All work and no play makes Jack a dull boy
+--------
+Prefill: 4,096 / 11,020...
+Prefill: 8,192 / 11,020...
+Prefill: 11,008 / 11,020...
+Prefill: 11,020 / 11,020...
+The user wants me to look at a Python script in the current directory. Let me first list the files in the current directory to find the Python script.
+</think>
+
+<tool_call>
+<function=glob>
+<parameter=pattern>
+**/*.py
+</parameter>
+</function>
+</tool_call>
+--------
+Prefill: 15,104 / 16,356...
+Prefill: 16,128 / 16,356...
+Prefill: 16,356 / 16,356...
+Let me run the script to see the actual error on Python 3.13.
+</think>
+
+<tool_call>
+<function=bash>
+<parameter=command>
+python3 pipeline_validator.py 2>&1
+</parameter>
+<parameter=description>
+Run script to see error
+</parameter>
+</function>
+</tool_call>
+--------
+Prefill: 17,664 / 17,829...
+Prefill: 17,829 / 17,829...
+The LSP error is a pre-existing type annotation issue, not related to my changes. Let me continue adding comments to the rest of the file.
+</think>
+
+<tool_call>
+<function=edit>
+<parameter=filePath>
+/mnt/str/temp/opencode/test4/pipeline_validator.py
+</parameter>
+<parameter=newString>
+# ---------------------------------------------------------------------------
+# Domain enums & value objects
+# ---------------------------------------------------------------------------
+
+class StageStatus(Enum):
+    """Tracks the lifecycle state of a pipeline stage during execution."""
+    PENDING = auto()   # Not yet started
+    RUNNING = auto()   # Currently executing
+    SUCCESS = auto()   # Completed successfully
+    FAILED = auto()    # Failed after exhausting retries
+    SKIPPED = auto()   # Skipped (e.g., during dry-run)
+
+
+class ResourceKind(Enum):
+    """Types of computational resources that can be requested by a stage."""
+    GPU = "gpu"        # GPU devices (e.g., NVIDIA GPUs)
+    CPU = "cpu"        # CPU cores
+    MEMORY = "memory"  # System memory (RAM)
+    DISK = "disk"      # Disk storage
+
+
+@dataclass(frozen=True)
+class ResourceRequest:
+    """
+    Immutable specification of a resource requirement.
+    
+    Attributes:
+        kind: The type of resource (GPU, CPU, MEMORY, DISK)
+        amount: How much of the resource is needed
+        unit: Unit of measurement (e.g., "GiB", "cores", "devices")
+    """
+    kind: ResourceKind
+    amount: float
+    unit: str = "GiB"
+
+    def scale(self, factor: float) -> ResourceRequest:
+        """
+        Create a new ResourceRequest with the amount scaled by a factor.
+        Useful for scaling resource requirements up/down based on data size.
+        """
+        return ResourceRequest(
+            kind=self.kind,
+            amount=round(self.amount * factor, 2),
+            unit=self.unit,
+        )
+
+
+@dataclass
+class CheckpointPolicy:
+    """
+    Configuration for checkpointing behavior during long-running stages.
+    
+    Checkpoints allow resuming from a saved state if a stage fails,
+    avoiding the need to restart from the beginning.
+    
+    Attributes:
+        enabled: Whether checkpointing is enabled for this stage
+        interval_seconds: How often to save checkpoints (in seconds)
+        max_kept: Maximum number of checkpoints to retain (older ones are deleted)
+        base_dir: Root directory where checkpoints are stored
+    """
+    enabled: bool = True
+    interval_seconds: int = 300
+    max_kept: int = 5
+    base_dir: Path = field(default_factory=lambda: Path("/tmp/checkpoints"))
+
+    def resolve_path(self, stage_name: str, epoch: int) -> Path:
+        """
+        Generate the filesystem path for a specific checkpoint.
+        
+        Args:
+            stage_name: Name of the pipeline stage
+            epoch: The epoch/iteration number for this checkpoint
+            
+        Returns:
+            Path where the checkpoint file should be saved
+        """
+        slug = stage_name.lower().replace(" ", "_")
+        return self.base_dir / slug / f"epoch_{epoch:04d}.pt"
+</parameter>
+<parameter=oldString>
+# ---------------------------------------------------------------------------
+# Domain enums & value objects
+# ---------------------------------------------------------------------------
+
+class StageStatus(Enum):
+    PENDING = auto()
+    RUNNING = auto()
+    SUCCESS = auto()
+    FAILED = auto()
+    SKIPPED = auto()
+
+
+class ResourceKind(Enum):
+    GPU = "gpu"
+    CPU = "cpu"
+    MEMORY = "memory"
+    DISK = "disk"
+
+
+@dataclass(frozen=True)
+class ResourceRequest:
+    kind: ResourceKind
+    amount: float
+    unit: str = "GiB"
+
+    def scale(self, factor: float) -> ResourceRequest:
+        return ResourceRequest(
+            kind=self.kind,
+            amount=round(self.amount * factor, 2),
+            unit=self.unit,
+        )
+
+
+@dataclass
+class CheckpointPolicy:
+    enabled: bool = True
+    interval_seconds: int = 300
+    max_kept: int = 5
+    base_dir: Path = field(default_factory=lambda: Path("/tmp/checkpoints"))
+
+    def resolve_path(self, stage_name: str, epoch: int) -> Path:
+        slug = stage_name.lower().replace(" ", "_")
+        return self.base_dir / slug / f"epoch_{epoch:04d}.pt"
+</parameter>
+</function>
+</tool_call>
+--------
+Prefill: 21,760 / 25,587...
+Prefill: 25,344 / 25,587...
+Prefill: 25,587 / 25,587...
+Let me continue adding comments to the reporting and CLI sections.
+</think>
+
+<tool_call>
+<function=edit>
+<parameter=filePath>
+/mnt/str/temp/opencode/test4/pipeline_validator.py
+</parameter>
+<parameter=newString>
+    # -- reporting ----------------------------------------------------------
+    # Provides summary information about pipeline state
+
+    def summary(self) -> dict[str, Any]:
+        """
+        Returns a summary of the pipeline state for logging/debugging.
+        
+        Returns:
+            Dict with pipeline name, stage count, status per stage, and metadata
+        """
+        return {
+            "pipeline": self.name,
+            "total_stages": len(self.stages),
+            "status": {k: v.name for k, v in self._status.items()},
+            "metadata": dict(self.metadata),
+        }
+
+
+# ---------------------------------------------------------------------------
+# CLI entry-point
+# ---------------------------------------------------------------------------
+# Demonstrates pipeline usage with a demo ML training workflow
+
+def _build_demo_pipeline() -> tuple[Pipeline, ResourceBudget]:
+    """
+    Creates a demo pipeline with 5 stages representing a typical ML workflow:
+    1. data-ingest: Load raw data
+    2. tokenize: Preprocess/tokenize the data
+    3. train: Train the model (intentionally has bad config for validation demo)
+    4. evaluate: Evaluate model performance
+    5. export-onnx: Export to ONNX format for deployment
+    
+    Returns:
+        Tuple of (Pipeline, ResourceBudget)
+    """
+    # Define cluster resource limits
+    budget = ResourceBudget(
+        {
+            ResourceKind.GPU: 8.0,      # 8 GPU devices available
+            ResourceKind.CPU: 64.0,     # 64 CPU cores
+            ResourceKind.MEMORY: 256.0, # 256 GiB RAM
+            ResourceKind.DISK: 1024.0,  # 1 TiB disk space
+        }
+    )
+
+    # Build pipeline using fluent builder pattern
+    pipe = (
+        Pipeline("training-v2")
+        .set_metadata("owner", "ml-platform")
+        .set_metadata("experiment", "bert-finetune-2025q4")
+        .add(
+            "data-ingest",
+            timeout=120,
+            resources=[
+                ResourceRequest(ResourceKind.CPU, 4.0, "cores"),
+                ResourceRequest(ResourceKind.DISK, 200.0),
+            ],
+            tags={"tier": "bronze"},
+        )
+        .add(
+            "tokenize",
+            timeout=300,
+            depends_on=["data-ingest"],
+            resources=[
+                ResourceRequest(ResourceKind.CPU, 8.0, "cores"),
+                ResourceRequest(ResourceKind.MEMORY, 32.0),
+            ],
+        )
+        .add(
+            "train",
+            timeout=-1,          # intentional bad value for validation demo
+            retries=2,
+            depends_on=["tokenize"],
+            resources=[
+                ResourceRequest(ResourceKind.GPU, 4.0, "devices"),
+                ResourceRequest(ResourceKind.MEMORY, 128.0),
+            ],
+            tags={"tier": "gold", "framework": "pytorch"},
+        )
+        .add(
+            "evaluate",
+            timeout=600,
+            depends_on=["train"],
+            resources=[
+                ResourceRequest(ResourceKind.GPU, 1.0, "devices"),
+                ResourceRequest(ResourceKind.MEMORY, 16.0),
+            ],
+        )
+        .add(
+            "export-onnx",
+            timeout=180,
+            depends_on=["evaluate"],
+            resources=[
+                ResourceRequest(ResourceKind.CPU, 2.0, "cores"),
+                ResourceRequest(ResourceKind.MEMORY, 8.0),
+            ],
+        )
+    )
+
+    return pipe, budget
+
+
+def main() -> None:
+    """
+    CLI entry point that demonstrates pipeline validation and dry-run execution.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    pipe, budget = _build_demo_pipeline()
+
+    print(f"Pipeline: {pipe.name}")
+    print(f"Stages:   {len(pipe.stages)}")
+    print(f"Budget utilisation: {budget.utilisation()}")
+    print()
+
+    # Validate all stages
+    report = pipe.validate(budget)
+
+    # Print validation results with
+--------
+Prefill: 29,440 / 30,095...
+Prefill: 29,952 / 30,095...
+Prefill: 30,095 / 30,095...
+The script runs correctly and the LSP error should be resolved now. The fix was:
+1. Changed `metadata: OrderedDict[str, str]` to `metadata: dict[str, str]`
+2. Removed the unused `OrderedDict` import from TYPE_CHECKING block
+</think>
+
+Fixed. The issue was that `metadata` was declared as `OrderedDict[str, str]` but initialized with `{}` (a plain `dict`). I changed the annotation to `dict[str, str]` and removed the unused `OrderedDict` import. The LSP error should be gone now.
+--------
+Prefill: 4,096 / 13,702...
+Prefill: 8,192 / 13,702...
+Prefill: 12,288 / 13,702...
+Prefill: 13,568 / 13,702...
+Prefill: 13,702 / 13,702...
+The repo is at turboderp-org/exllamav3. Let me fetch the releases.
+</think>
+
+<tool_call>
+<function=terminal>
+<parameter=command>
+curl -s https://api.github.com/repos/turboderp-org/exllamav3/releases | python3 -c "
+import json,sys
+data=json.load(sys.stdin)
+for r in data[:5]:
+    print('TAG:', r['tag_name'], '| NAME:', r['name'], '| PUBLISHED:', r['published_at'])
+    print('BODY:')
+    print(r['body'])
+    print('='*60)
+"
+</parameter>
+</function>
+</tool_call>
+--------
+remark: dsa_triton.py:668:0: 259 instructions in function
+Traceback (most recent call last):
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 373, in <module>
+    main(_args)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\torch\utils\_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 216, in main
+    result_baseline = measure(generator, tokenizer, GreedySampler(), args.max_new_tokens)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 74, in measure
+    generator.enqueue(job)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\generator\generator.py", line 637, in enqueue
+    job.prepare_for_queue(self, self.job_serial)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\generator\job.py", line 1342, in prepare_for_queue
+    assert total_pages <= max_pages, \
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Job requires 139 pages (only 128 available) and cannot be enqueued. Total cache allocated is 128 * 256 = 32768 tokens
+
+=== pass     : rb-ab-368
+=== run id   : rb-ab-368-20261029-210205
+=== regime   : production
+=== engine   : 1.6.5
+=== package  : C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\__init__.py
+=== extension: C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3_ext.cp312-win_amd64.pyd
+=== torch    : 2.11.0+cu130 / cuda 13.0
+=== gpu      : NVIDIA GeForce RTX 4090, 24564 MiB, 596.36
+=== free vram at start (MiB): 24138
+=== harness  : 9497874BF27C3CD939AD5636F0FC45378F6C022C7EB008E15BC7DA2B7B8546D0
+=== args     : 
+-m D:\llms\Qwen3.8-Flash-Next-exl3-3.68bpw_h6_ng8 -cs 262144 -chunk_size 4096 -ambs 2 -cq 2,2 -mcs 384 -mct 16 -rb_ab -mtp -cs 32768
+=== env      : 
+EXL3_HOST_MEM_RESERVE_MB=0 EXL3_MOE_ARENA_HUGEPAGE=0 EXL3_MOE_CPU_PIN=1 EXL3_MOE_CPU_SWIZZLE=1 EXL3_MOE_MEMOPS=0 PYTHONUTF8=1
+=== started  : 
+2026-10-29T22:02:05
+=== elapsed s: 189

@@ -91,3 +91,32 @@ measures the baseline and one arm, and the verdict is the in-process in-run rati
 same constants (`-Split 388`, `-cs 40960`), ~6–8 min per arm instead of 30. Cost if wrong: the
 readback A/B stays unmeasured (default kept, which the plan expects anyway), and cross-arm
 comparisons rely on each arm's own baseline instead of one shared baseline.
+
+## Drafting works on the production model: +35 % median (3.68, measured 2026-10-29)
+
+Two-arm run (`mtp-dnt3-368`, baseline + MTP `dnt 3`, split 388, `-cs 40960`, 1457 s, floors clean:
+min VRAM 2573 MB, min RAM 2139 MB):
+
+| category | baseline | MTP | ratio | acceptance |
+|---|---|---|---|---|
+| Agentic, code | 33.84 | 38.53 | 1.14× | 1.87/4 |
+| Agentic, curl | 33.57 | 41.41 | 1.23× | 1.78/4 |
+| Coding | 32.02 | 41.34 | 1.29× | 2.21/4 |
+| Creative | 28.95 | 49.74 | 1.72× | 1.19/4 |
+| Creative (reasoning) | **6.99** | 49.58 | **7.09×** | 1.33/4 |
+| Translation | 31.27 | 43.77 | 1.40× | 1.64/4 |
+| Translation (reasoning) | 37.00 | 46.99 | 1.27× | 1.52/4 |
+| Trivial repetition | 33.62 | 43.02 | 1.28× | 2.40/4 |
+
+- **Median ratio 1.35×** (+35 % tg). Acceptance 1.2–2.4 of 4 — modest per draft, but the window is
+  cheap enough to pay.
+- **Outlier flagged, not used:** "Creative (reasoning)" baseline ran at 6.99 t/s where every other
+  baseline sits at 29–37 t/s, so its 7.09× is a baseline pathology (the drafting arm was normal at
+  49.58). Excluding it, mean baseline 32.9 → MTP 43.6 t/s = **+33 %**, consistent with the median.
+- This is the opposite verdict from the screening model (break-even there, 1.91 bpw body), which is
+  why the drafting series moved to the production model. The 1.66 result stands as the reason, not
+  as a measurement of the knobs.
+
+**The series continues on the swapped-in 3.18bpw model** (operator decision, same day): the 3.68
+numbers above establish that drafting is worth measuring; the knob verdicts must come from the
+model that will be deployed.

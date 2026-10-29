@@ -1,0 +1,18 @@
+remark: dsa_triton.py:668:0: 259 instructions in function
+Traceback (most recent call last):
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 373, in <module>
+    main(_args)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\torch\utils\_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 216, in main
+    result_baseline = measure(generator, tokenizer, GreedySampler(), args.max_new_tokens)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 74, in measure
+    generator.enqueue(job)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\generator\generator.py", line 637, in enqueue
+    job.prepare_for_queue(self, self.job_serial)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\generator\job.py", line 1342, in prepare_for_queue
+    assert total_pages <= max_pages, \
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Job requires 139 pages (only 128 available) and cannot be enqueued. Total cache allocated is 128 * 256 = 32768 tokens

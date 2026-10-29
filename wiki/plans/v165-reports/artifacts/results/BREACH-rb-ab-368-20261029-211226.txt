@@ -1,0 +1,5 @@
+BREACH tag=rb-ab-368-20261029-211226 at 2026-10-29T22:41:50
+free_vram_mb=2427 floor=100 low=False
+free_ram_mb=974 floor=1200 low=True
+watched_pid=33724 launcher_pid=5388
+action=killed process tree
