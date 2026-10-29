@@ -28,7 +28,7 @@ are void, not "a bit low".
 ## Deploy
 
 ```bash
-bench/windows/deploy.sh                      # repo -> C:/Users/yoho/Downloads/tabbyAPI/_agent/v164
+bench/windows/deploy.sh                      # repo -> C:/Users/yoho/Downloads/tabbyAPI/_agent/v165
 DEST=/mnt/c/other bench/windows/deploy.sh    # elsewhere
 ```
 

@@ -62,9 +62,27 @@ Owner of the box: none yet — ask the operator before the first GPU task. Rollb
   (23 MB VRAM); 400 killed by the old 2048 MB RAM floor / the engine guard (the load transient
   sits at ~2.0 GB). Q2 cache measured without a load = **2.093 GiB** at 262144/2 slots (KV 1.875
   + GDN states 0.218), so the binding constraint is the pinned arena, not KV.
-  **Deployment consequence for T13:** the tuned config needs ~43 GB of host RAM for the CPU
-  arena, so it cannot share the box with a resident 36–41 GB inference server — and
-  `EXL3_HOST_MEM_RESERVE_MB=0` plus 100/1200 floors must be part of the served configuration.
+  **Correction (2026-10-30):** the earlier claim that "the transient dips ~2 GB deeper for
+  `max_length >= 131072`" was wrong — the loader never sees `max_length`, and same-split traces at
+  4096 vs 131072 dip 8063 vs 8382 MB. The 2 GB difference between `smoke368-4k` and `probe400` was
+  **background host-RAM drift over 90 minutes**, not `max_length`. Floors plus a frozen profile,
+  never a `max_length` theory, are what make runs comparable.
+  **Deployment consequence for T13 (corrected 2026-10-30):** on the **3.18** model at split 376
+  the CPU arena is **32.9 GiB** (not the 43 GB carried over from 3.68), so the box *can* host it
+  alongside more of the system than the old math suggested — still not a resident 36–41 GB
+  inference server. `EXL3_HOST_MEM_RESERVE_MB=0` and the 100/1200 floors stay part of the served
+  configuration.
+  **MTP geometry (critique C10):** the head is **one** full-attention layer with **zero** GDN
+  layers, so its draft cache at 262144/Q2 is **~160 MiB** (1.875 GiB / 12), its arena ~0.7 GiB and
+  its GPU weights ~0.34 GiB — not the 1.1–2.1 GB claimed earlier. `bench/size_check.py` puts
+  262144 + MTP at split 376 at **~20.9 GiB of a 24 GiB card with 1664 MiB free after the
+  autosplit's 2 GiB reserve**: 262144 + drafter **fits** and must be *measured* in T13, not
+  assumed impossible. (`perf.py -sd` allocates no second cache at all; only `spec_decode.py`
+  creates a draft cache, sized by the head's one layer.)
+  **tabbyAPI (critique C11):** `draft_mode: mtp` sets `draft_config = self.config`, so the head
+  inherits the trunk's `moe_cpu_split`; `draft_mode: model` (DFlash2 / a separate drafter) builds a
+  fresh config and does **not** forward `draft_moe_cpu_offload` / `cpu_moe_threads` — a T13 item if
+  a separate drafter wins.
 - **Log durability (operator requirement 2026-10-29, commit `94f4c305`):** every run now gets
   `runId = <Tag>-<UTC yyyymmdd-HHmmss>` in its log/err/watcher filenames and refuses to
   overwrite; CSVs carry `run_id` (+ the log filename in `passes.csv`);
@@ -135,14 +153,20 @@ default) and `-cq 2,2` in the production regime. Deployed `run_pass.ps1` sha256 
   context, medians 0.83–0.93, pp neutral-to-worse; reproduces the 1.4.9 finding). Deployment
   value unchanged; no 262144 confirmation (nothing to deploy changes).
 - **MTP_WINNER (partial, 2026-10-29): `-ndt 2` + batched readback + stock MTP head.** On 3.18 at
-  split 376: ndt2 median **1.42×** tg (acceptance 50–84 % per draft), default (4) 1.10×, ndt6
-  0.98×. Drafting on the production model is worth deploying (+35 % on 3.68 with 3 drafts,
-  +42 % on 3.18 with 2). **Operator cancelled the rest of the series** — `-sdh`, `-hdt`, `-dds`
+  split 376: ndt2 median **1.30× vs the default arm** (arm-to-arm; acceptance 50–84 % per draft),
+  default (4) 1.00× by definition, ndt6 0.97×. (The earlier 1.42×/1.10× figures were
+  drafting÷baseline ratios, i.e. contaminated by the cold-baseline problem — critique C3.) **Operator cancelled the rest of the series** — `-sdh`, `-hdt`, `-dds`
   unmeasured; resume with `-sdh` first (it changes *what* is drafted, not how much).
   **Box cleaned up 2026-10-30:** the `mtp-sdh1-318` arm that survived the cancel (orphaned, parent
   shell gone) was stopped on operator instruction — its log has 378 lines and **0 measurement
   rows** (killed after load, before the table), so it is an aborted run, not a datum. Verified
   after: no `spec_decode`/`perf.py`/`watch.ps1` processes, GPU 0 MiB / 0 %, 50.2 GB RAM free.
+- **Correction (2026-10-30): there is no engine leak and no tabbyAPI per-job caveat (critique C6).**
+  The ~700 MB/arm growth was self-inflicted: our `spec_decode.py` build created a `Generator` per
+  arm and never cleared `recurrent_cache`/`host_pool` (a Generator -> recurrent_cache -> page table
+  reference cycle plus a thread pool; each arm stashed GDN checkpoints). Fixed with `reset_arm()`
+  and one shared Generator. tabbyAPI creates **one** `AsyncGenerator` in `create_generator()` at
+  model load and calls `close()` + `gc.collect()` on its error path — never per job.
 - MTP readback (history): inconclusive on the screening model
   (T06 report) — **default batched (`_NO_BATCH_READBACK=False`) stands**; knobs move to the
   production model, because acceptance is a body/head quality property: 1.66 model = 1.91 bpw
@@ -152,9 +176,13 @@ default) and `-cq 2,2` in the production regime. Deployed `run_pass.ps1` sha256 
 - THREADS/HOST_CORES: — (T9)
 - **SPLIT: 376 on the 3.18bpw model** (T10 ladder pulled forward by the model swap, 2026-10-29).
   At 131072: 400 → 4933/9605 free (VRAM/RAM), 384 → 1777/7059 and tg 43.5 @130816,
-  **376 → 2141/8382 and tg 49.8 @130816**, 368 → does not load (15 MB VRAM). 376 is the lowest
-  split that loads, and it is also the fastest measured — the 8-expert step from 384 to 376 is
-  worth ~15 % tg. T10 still owns the finer ladder (372, 380) and the max-offload corner.
+  **376 → 2141/8382 and tg 49.8 @130816**, 368 → **loads and warms up, then dies in long prefill**
+  (1951 MB free during warmup, the 131072 band's scratch request takes it to 15 MB and the watcher
+  kills it). Correction 2026-10-30: "does not load" was wrong — `split368` is `status=ok` at 4096
+  with 2045 MB free (critique C7). 376 is the fastest measured; the 8-expert step from 384 to 376
+  is worth ~15 % tg but was measured **cold→warm** and is therefore **provisional** until re-run
+  with a frozen profile (critique C2). T10 owns the finer ladder (368/372/380) and the
+  max-offload corner.
 - CACHE_MODE: **Q2 (2,2) — operator decision, frozen**
 - STAGING_PAGES: — (T11)
 - PLE/GDN: — (T12)

@@ -90,6 +90,9 @@ def measure_prefill(args, model, cache, warmup = False):
     max_progress = sum(lengths)
     with (ProgressBar("Warmup" if warmup else "Prefill", max_progress) as pb):
         for length in lengths:
+            # return cached blocks to the driver before the next band: PyTorch holds freed scratch
+            # until a cudaMalloc fails, and the watcher reads driver-free VRAM, not live allocations
+            torch.cuda.empty_cache()
             cuda_sync_active()
             with Timer() as t:
                 start, end = 0, length
@@ -202,6 +205,9 @@ def main(args):
         print(f"{col_yellow}Prefill:{col_default}")
         prefill_results = measure_prefill(args, model, cache)
         print()
+
+    print(f" -- alloc peak allocated={torch.cuda.max_memory_allocated() / 1024**2:.0f} MiB "
+          f"reserved={torch.cuda.max_memory_reserved() / 1024**2:.0f} MiB")
 
     if not args.skip_gen:
         # Test generation

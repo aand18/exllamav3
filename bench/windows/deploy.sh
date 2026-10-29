@@ -2,7 +2,7 @@
 # Deploy the Windows measurement harness from the repo to the directory the box runs it from.
 #
 # The repo is the source of truth: bench/windows/*.ps1 and eval/perf.py. The Windows copy under
-# C:/Users/yoho/Downloads/tabbyAPI/_agent/v164 is a deployed artifact; editing it there is how two
+# C:/Users/yoho/Downloads/tabbyAPI/_agent/v165 is a deployed artifact; editing it there is how two
 # benchmarks end up incomparable.
 #
 # Usage:
@@ -11,14 +11,20 @@
 #
 # Then run a pass (from WSL; PowerShell needs the Windows path):
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File \
-#     "C:\Users\yoho\Downloads\tabbyAPI\_agent\v164\run_pass.ps1" -Tag armA-a -MaxLength 262144
+#     "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\run_pass.ps1" -Tag armA-a
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
-DEST="${DEST:-/mnt/c/Users/yoho/Downloads/tabbyAPI/_agent/v164}"
+DEST="${DEST:-/mnt/c/Users/yoho/Downloads/tabbyAPI/_agent/v165}"
 
 mkdir -p "$DEST/logs" "$DEST/results"
+
+# The active regime lives in state.json; run_pass.ps1 refuses to start without it. Ship the repo's
+# copy only when the destination has none, so a swap recorded on the box is never overwritten.
+if [ ! -f "$DEST/state.json" ]; then
+  install -m 0666 "$HERE/state.json" "$DEST/state.json"
+fi
 
 install -m 0666 "$HERE/watch.ps1"      "$DEST/watch.ps1"
 install -m 0666 "$HERE/run_pass.ps1"   "$DEST/run_pass.ps1"

@@ -23,10 +23,12 @@ watcher floors: 100 MB free VRAM / 1200 MB free sys RAM (operator, 2026-10-29)
 - **`EXL3_HOST_MEM_RESERVE_MB=0`.** The 43.02 GB CPU arena leaves ~2.0 GB host RAM at its deepest
   chunk, so the engine's guard (default 2048, or 1024) aborts the load by ~50–100 MB. The watcher
   holds the operator's 1200 MB floor instead: one enforced margin, charged once.
-- **`-NoSpecDec`.** Spec decode costs ~1.1 GB VRAM (a second draft cache sized like the main one),
-  which 131072 does not have to spare at this split. Drafting is measured in T6/T7; Arm A is the
-  no-drafting reference, and every later tg comparison must use a reference in the same drafting
-  state.
+- **`-NoSpecDec`, for comparability rather than necessity (corrected 2026-10-30, critique C10).**
+  The earlier claim that spec decode costs ~1.1 GB "for a second draft cache sized like the main
+  one" was wrong twice: `perf.py -sd` allocates **no** second cache (it loops verification lengths
+  1..4 on the same cache), and the MTP head's own draft cache in `spec_decode.py` is **~160 MiB**
+  at 262144/Q2 because the head is **one** layer, not 12. Arm A stays the no-drafting reference so
+  that every later tg comparison names its drafting state explicitly — nothing here is a fit limit.
 
 ## The two passes
 

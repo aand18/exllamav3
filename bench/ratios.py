@@ -17,6 +17,9 @@ Usage:
   bench/ratios.py --dir <results> --ref memops0-a --var memops1-a \
                               --ref2 memops0-b --var2 memops1-b
 
+  # drafting arms (spec_decode.csv): per-category tok/s + acceptance for two runs
+  bench/ratios.py --dir <results> --ref mtp-ref2-318 --var mtp-ndt2-318
+
   # what ran, newest first
   bench/ratios.py --dir <results> --list
 
@@ -76,6 +79,21 @@ def tg_bands(tg: list[dict], run_id: str) -> dict[int, float]:
     return out
 
 
+def spec_arms(spec: list[dict], run_id: str) -> dict[str, dict[str, dict]]:
+    """category -> arm -> {tok_s, acc, draft}; the drafting table from spec_decode.py."""
+    out: dict[str, dict[str, dict]] = {}
+    for r in spec:
+        if r.get("run_id") != run_id:
+            continue
+        try:
+            cell = {"tok_s": float(r["tok_s"] or 0), "acc": float(r.get("acc") or -1),
+                    "draft": float(r.get("draft") or -1)}
+        except (TypeError, ValueError):
+            continue
+        out.setdefault(r.get("category", "?"), {})[r.get("arm", "?")] = cell
+    return out
+
+
 def fmt(x: float | None) -> str:
     return "-" if x is None else f"{x:.2f}"
 
@@ -102,16 +120,17 @@ def main(argv: list[str]) -> int:
 
     d = pathlib.Path(args.dir)
     passes, pp, tg = read_csv(d / "passes.csv"), read_csv(d / "pp.csv"), read_csv(d / "tg.csv")
+    spec = read_csv(d / "spec_decode.csv")
     if not passes:
         raise SystemExit(f"no passes.csv in {d}")
 
     if args.list or not args.ref:
-        print("| run_id | tag | status | max_length | split | min_vram | min_ram | args |")
-        print("|---|---|---|---|---|---|---|---|")
+        print("| run_id | tag | status | max_length | split | min_vram | min_ram | runner | args |")
+        print("|---|---|---|---|---|---|---|---|---|")
         for p in runs(passes):
             print(f"| {p['run_id']} | {p['tag']} | {p['status']} | {p.get('max_length','')} | "
                   f"{p.get('split','')} | {p.get('min_free_vram_mb','')} | {p.get('min_free_ram_mb','')} | "
-                  f"`{(p.get('args') or '')[:80]}` |")
+                  f"{p.get('runner','perf')} | `{(p.get('args') or '')[:70]}` |")
         return 0
 
     if not args.var:
@@ -131,6 +150,29 @@ def main(argv: list[str]) -> int:
                   " -- a non-ok pass is not a measurement", file=sys.stderr)
         resolved.append((ref, var))
         print(f"\n### {var['run_id']} vs {ref['run_id']}")
+        sr, sv = spec_arms(spec, ref["run_id"]), spec_arms(spec, var["run_id"])
+        if sr and sv:
+            print("\n| category | reference (t/s) | reference acc | variant (t/s) | variant acc | ratio |")
+            print("|---|---|---|---|---|---|")
+            ratios = []
+            for cat in sorted(set(sr) & set(sv)):
+                # the table labels the reference column "Baseline"; compare any non-baseline arm
+                ar = next((k for k in sr[cat] if not k.strip().lower().startswith("baseline")), None)
+                av = next((k for k in sv[cat] if not k.strip().lower().startswith("baseline")), None)
+                if not (ar and av):
+                    continue
+                a, b = sr[cat][ar], sv[cat][av]
+                if not a["tok_s"]:
+                    continue
+                r = b["tok_s"] / a["tok_s"]
+                ratios.append(r)
+                fa = "-" if a["acc"] < 0 else f"{a['acc']:.2f}"
+                fb = "-" if b["acc"] < 0 else f"{b['acc']:.2f}"
+                print(f"| {cat} | {a['tok_s']:.2f} | {fa} | {b['tok_s']:.2f} | {fb} | {r:.3f} |")
+            if ratios:
+                print(f"\n**median drafting ratio {statistics.median(ratios):.3f}** "
+                      f"(range {min(ratios):.3f}-{max(ratios):.3f}, n={len(ratios)})")
+                continue
         for kind, getter in (("pp", pp_bands), ("tg (S=1)", tg_bands)):
             a, b = getter(pp if kind == "pp" else tg, ref["run_id"]), getter(pp if kind == "pp" else tg, var["run_id"])
             if not a or not b:

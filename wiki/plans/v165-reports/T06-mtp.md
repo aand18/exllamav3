@@ -47,9 +47,11 @@ load times.
 ## Cache sizing for the drafting arms
 
 `spec_decode.py` measures short workloads (KBs of context) but `model_init` sizes the cache from
-`-cs`; the drafting arms therefore run with `-cs 32768` instead of the regime's 262144. Two caches
-exist while drafting (target + draft), so the regime value would cost ~4.2 GB of VRAM for context
-that never appears in a workload. Knob *ratios* stay comparable because every drafting arm uses
+`-cs`. Two caches exist while drafting (target + draft), but the **draft cache is sized by the
+head's one full-attention layer**, so at 262144/Q2 it is only ~160 MiB, not another 2.09 GiB
+(correction 2026-10-30, critique C10). The series used `-cs 40960` because a 1024-token generation
+needs 139 pages = 35584 tokens (measured: `Job requires 139 pages (only 128 available)` at 32768),
+not because 262144 was unaffordable. Knob *ratios* stay comparable because every drafting arm uses
 the same `-cs`. Whether the deployed server can hold 262144 **and** a drafter on the 3.68 model is
 a separate fit question, carried to T13.
 
@@ -72,25 +74,29 @@ VRAM, and the workloads are short). Every drafting arm shares those two constant
 stay comparable; the deployment consequence (a drafter needs ~2 GB more VRAM or a lower split)
 goes to T13.
 
-## Drafting leaks ~700 MB of host RAM per arm in one process (measured)
+## The ~700 MB/arm growth was self-inflicted, not an engine leak (corrected 2026-10-30)
 
-The split-392 attempt died at 32 s (RAM 1165 MB) and the split-388 attempt ran 1765 s before
-dying (RAM 974 MB). The watcher trace from the 29-minute run shows the shape:
+What was measured: over a 29-minute four-arm run free host RAM fell monotonically
+(2517 → 974 MB) while VRAM stayed flat at 2427 MB. What was **misdiagnosed**: "each further
+Generator costs ~0.6–0.8 GB that never comes back… a deployment caveat, verify whether tabbyAPI
+builds a Generator per job."
 
-| phase (min free RAM per eighth of the run) | 2517 | 5346 | 4796 | 3711 | 2756 | 2272 | 1808 | 1229 | 974 |
-|---|---|---|---|---|---|---|---|---|---|
-| free VRAM (same blocks) | 3333 | 2625 | 2431 | 2431 | 2427 | 2427 | 2427 | 2427 | 2427 |
+Both halves were wrong (critique C6):
 
-VRAM is flat; host RAM falls monotonically — every further `Generator` built for another arm
-costs ~0.6–0.8 GB that never comes back. So a four-arm `-rb_ab` run cannot finish on this box at
-the 3.68 model's arena size, and that is a **deployment caveat** too: a long-lived server that
-builds generators repeatedly grows the same way.
+- **Our own `spec_decode.py` build** created a `Generator` **inside** the arm loop and never
+  released it. A Generator owns a `RecurrentCache` whose host pool holds the arm's GDN checkpoints,
+  plus a `ThreadPoolExecutor`, plus a reference cycle
+  (`Generator -> recurrent_cache -> page table -> Generator`). Five Generators = five stashed
+  checkpoint sets.
+- **tabbyAPI does not build a Generator per job.** It creates one `AsyncGenerator` in
+  `create_generator()` during model load and runs `await self.generator.close(); gc.collect()` only
+  on its error path. There is no per-job leak to warn the operator about.
 
-**Protocol change (ruling):** drafting arms run **one arm per process** — no `-rb_ab`, each run
-measures the baseline and one arm, and the verdict is the in-process in-run ratio. Same knobs,
-same constants (`-Split 388`, `-cs 40960`), ~6–8 min per arm instead of 30. Cost if wrong: the
-readback A/B stays unmeasured (default kept, which the plan expects anyway), and cross-arm
-comparisons rely on each arm's own baseline instead of one shared baseline.
+Fixed: `reset_arm()` (`recurrent_cache.clear()`, `host_pool.release()`, `generator.close()`,
+`gc.collect()`, `torch.cuda.empty_cache()`), one shared Generator for the readback toggle (the flag
+is read per verification round, so four instances were never needed), and an untimed warm pass over
+the workload corpus (`-nwarm` to skip). The one-arm-per-process protocol that this bug forced is no
+longer required.
 
 ## Drafting works on the production model: +35 % median (3.68, measured 2026-10-29)
 
@@ -126,11 +132,20 @@ model that will be deployed.
 One arm per process, each with its own in-run baseline (the protocol forced by the per-arm RAM
 growth). Median of the eight per-category ratios:
 
-| arm | median ratio | mean baseline → mean MTP | acceptance |
+| arm | median vs the default arm | mean baseline → mean MTP | acceptance |
 |---|---|---|---|
-| default (`-ndt` unset = 4) | 1.10× | 35.15 → 39.05 t/s | 1.14–2.01 / 4 |
-| **`-ndt 2`** | **1.42×** | 36.24 → 50.14 t/s | 1.01–1.68 / 2 (50–84 % per draft) |
-| `-ndt 6` | 0.98× | 38.76 → 37.94 t/s | 1.12–2.41 / 6 |
+| default (`-ndt` unset = 4) | 1.00× (reference) | 35.15 → 39.05 t/s | 1.14–2.01 / 4 |
+| **`-ndt 2`** | **1.30×** | 36.24 → 50.14 t/s | 1.01–1.68 / 2 (50–84 % per draft) |
+| `-ndt 6` | 0.97× | 38.76 → 37.94 t/s | 1.12–2.41 / 6 |
+
+**Correction (2026-10-30, critiques C1/C3):** these are **arm-to-arm** ratios recomputed from
+`results/spec_decode.csv`. The figures first reported (1.42× / 1.10× / 0.98×) were
+drafting÷baseline ratios, and that baseline is contaminated: it runs first in the process, pays the
+cold PLE disk reads for exactly these prompts, and (before the frozen-profile work) could be a cold
+expert placement. And `mtp-ref-318` itself was a **cold** run — its log line 2 has no
+`placement from saved profile`, while `mtp-ndt2-318` does — so the default arm's number is
+provisional until a warm `mtp-ref2-318` exists. The *ordering* (2 beats 4 beats 6) is stable
+across both ways of computing it and across 8/8 categories.
 
 - **Fewer drafts win**, and the mechanism is visible in acceptance: at 2 drafts the head lands
   50–84 % per draft; at 6 it lands 19–40 %, so most verification work is wasted. Six drafts is a

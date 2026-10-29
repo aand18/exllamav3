@@ -18,7 +18,7 @@
 param(
     [Parameter(Mandatory = $true)][string] $Tag,
     [Parameter(Mandatory = $true)][string] $Src,
-    [string] $Root = "C:\Users\yoho\Downloads\tabbyAPI\_agent\v164",
+    [string] $Root = "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165",
     [int] $MinFreeRamMB = 1200,
     [int] $MinFreeVramMB = 100
 )

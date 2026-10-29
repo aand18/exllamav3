@@ -139,6 +139,78 @@ def measure(generator, tokenizer, sampler, max_new_tokens, stats_sink = None):
     return aggregated
 
 
+def reset_arm(generator):
+    """Release everything one arm allocated before the next arm starts.
+
+    A Generator owns a RecurrentCache whose host pool holds the GDN checkpoints for the arm's
+    speculative passes, plus a thread pool and a reference cycle (Generator -> recurrent_cache ->
+    page table -> Generator). Building a second Generator without clearing the first kept ~700 MB
+    of host RAM alive per arm - the growth this session first misread as an engine leak
+    (critique C6). Closing and collecting restores the process to its pre-arm footprint.
+    """
+    import gc
+    if generator is None:
+        return
+    try:
+        rc = getattr(generator, "recurrent_cache", None)
+        if rc is not None and hasattr(rc, "clear"):
+            rc.clear()
+    except Exception:
+        pass
+    try:
+        from exllamav3.cache.recurrent import host_pool
+        host_pool.release()
+    except Exception:
+        pass
+    try:
+        generator.close()
+    except Exception:
+        pass
+    gc.collect()
+    try:
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def warm_corpus(generator, tokenizer, tokens = 64):
+    """Touch every workload once before timing.
+
+    The PLE ngram table is streamed from disk when `ngram_ram` is off, so whoever runs first pays
+    the cold reads for exactly these prompt/generation streams. Timing that run as a baseline is
+    what produced the 6.99 t/s outlier in `mtp-dnt3-368` (critique C3). 64 tokens per workload is
+    enough to fault the rows in; nothing here is measured.
+    """
+    for category, filename, think in prompt_files:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", filename), "r") as f:
+            data = json.load(f)
+        prompt_ids = tokenizer.hf_chat_template(
+            messages = data["messages"], add_generation_prompt = True,
+            functions = data.get("functions"), tools = data.get("tools"),
+            enable_thinking = think,
+        )
+        job = Job(input_ids = prompt_ids, max_new_tokens = tokens,
+                  stop_conditions = generator.model.config.eos_token_id_list,
+                  sampler = GreedySampler())
+        generator.enqueue(job)
+        while generator.num_remaining_jobs():
+            for result in generator.iterate():
+                if result["stage"] == "error":
+                    raise result["error"]
+
+
+def arm_line(label, aggregated):
+    """One machine-readable line per arm: the harness parses these into results/arms.csv."""
+    tps = [v["tps"] for v in aggregated.values() if v.get("tps")]
+    accs = [v["acc_len"] for v in aggregated.values() if v.get("acc_len") is not None]
+    drafts = [v["draft_len"] for v in aggregated.values() if v.get("draft_len") is not None]
+    if not tps:
+        return
+    acc = sum(accs) / len(accs) if accs else 0.0
+    draft = sum(drafts) / len(drafts) if drafts else 0.0
+    print(f"ARM {label} tok_s={sum(tps) / len(tps):.2f} acc={acc:.2f}/{draft:.2f} rounds={len(tps)}")
+
+
 def plot_stats(stats_sink):
     """
     Show accepted draft tokens per verification round vs generation position, with the chosen window
@@ -204,6 +276,14 @@ def main(args):
 
     stats_sink = [] if (args.draft_stats or args.plot_stats or args.print_stats) else None
 
+    # Warm-up: pay the cold ngram/disk and expert-placement cost outside any measurement
+    if not args.no_warmup_corpus:
+        wg = Generator(model = model, cache = cache, tokenizer = tokenizer,
+                       max_chunk_size = args.chunk_size)
+        warm_corpus(wg, tokenizer)
+        reset_arm(wg)
+        del wg
+
     # Baseline
     result_baseline = None
     if not args.no_baseline:
@@ -214,6 +294,9 @@ def main(args):
             max_chunk_size = args.chunk_size,
         )
         result_baseline = measure(generator, tokenizer, GreedySampler(), args.max_new_tokens)
+        arm_line("baseline", result_baseline)
+        reset_arm(generator)
+        del generator
 
     # N-gram draft
     result_ngram = None
@@ -246,24 +329,28 @@ def main(args):
     if args.draft_model_dir:
         rb_arms = [("", None)] if not args.readback_ab else \
                   [("batched", False), ("serial", True), ("serial", True), ("batched", False)]
+        # One Generator for the whole arm set: the readback flag is read per verification round
+        # (generator.py), so toggling it between measure() windows is a clean in-process A/B and
+        # four Generator instances were never needed (critique C6 - they cost ~700 MB each).
+        generator = Generator(
+            model = model,
+            cache = cache,
+            draft_model = draft_model,
+            draft_cache = draft_cache,
+            tokenizer = tokenizer,
+            num_draft_tokens = args.num_draft_tokens,
+            sparse_draft_head = getattr(args, 'sparse_draft_head', 0),
+            hybrid_draft_tokens = args.hybrid_draft_tokens,
+            draft_confidence = args.draft_confidence,
+            dynamic_draft_tokens = args.dynamic_draft,
+            record_draft_stats = stats_sink is not None,
+            max_chunk_size = args.chunk_size,
+        )
         for rb_i, (rb_label, rb_flag) in enumerate(rb_arms):
             if rb_flag is not None:
                 exl_gen._NO_BATCH_READBACK = rb_flag
-            generator = Generator(
-                model = model,
-                cache = cache,
-                draft_model = draft_model,
-                draft_cache = draft_cache,
-                tokenizer = tokenizer,
-                num_draft_tokens = args.num_draft_tokens,
-                sparse_draft_head = getattr(args, 'sparse_draft_head', 0),
-                hybrid_draft_tokens = args.hybrid_draft_tokens,
-                draft_confidence = args.draft_confidence,
-                dynamic_draft_tokens = args.dynamic_draft,
-                record_draft_stats = stats_sink is not None and rb_i == 0,
-                max_chunk_size = args.chunk_size,
-            )
             res_draft = measure(generator, tokenizer, GreedySampler(), args.max_new_tokens, stats_sink if rb_i == 0 else None)
+            arm_line(rb_label if rb_label else "draft", res_draft)
             if generator.sparse_head is not None:
                 st = generator.sparse_head.stats()
                 print(f" -- sparse draft head: {st['active']} columns, mode sparse {st['mode_sparse']} ({st['mode_switches']} switches), "
@@ -275,6 +362,8 @@ def main(args):
                 result_draft = res_draft
                 if args.temperature:
                     result_draft_temp = measure(generator, tokenizer, TopPSampler(0.9, 1), args.max_new_tokens)
+        reset_arm(generator)
+        del generator
         exl_gen._NO_BATCH_READBACK = False
 
     # Print results
@@ -366,6 +455,8 @@ if __name__ == "__main__":
     parser.add_argument("-temp", "--temperature", action = "store_true", help = "Also sample with temperature")
     parser.add_argument("-single", "--single_workload", type = str, help = "Limit to single workload", default = None)
     parser.add_argument("-dstats", "--draft_stats", type = str, help = "Write per-round (position, window, accepted) records to JSON file", default = None)
+    parser.add_argument("-nwarm", "--no_warmup_corpus", action = "store_true",
+                        help = "Skip the untimed warm pass over the workload corpus (keeps the cold-IO bias)")
     parser.add_argument("-rb_ab", "--readback_ab", action = "store_true", help = "Measure the draft-model arm ABBA over generator._NO_BATCH_READBACK (batched vs. serial speculative-window readback) in one process")
     parser.add_argument("-plot", "--plot_stats", action = "store_true", help = "Plot per-round draft stats in a matplotlib window after the run")
     parser.add_argument("-print", "--print_stats", action = "store_true", help = "Print per-round draft stats to the console after the run")

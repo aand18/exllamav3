@@ -24,6 +24,8 @@
 #
 # Outputs (in -OutDir):
 #   watch-<Tag>.csv      t_iso,free_vram_mb,used_vram_mb,free_ram_mb,proc_ws_mb
+#                        (proc_ws_mb is the sum over the watched process AND its descendants:
+#                         the CPU-MoE expert arena lives in a child worker)
 #   BREACH-<Tag>.txt     only on breach: time, measured values, action taken
 #   stop-<Tag>.flag      created by the caller to end the watch
 #   stdout summary       one WATCH line, parseable with a regex
@@ -37,7 +39,7 @@ param(
     [int] $MinFreeRamMB = 2048,
     [int] $MaxSeconds = 0,
     [int] $ResolveTimeoutSec = 60,
-    [string] $OutDir = "C:\Users\yoho\Downloads\tabbyAPI\_agent\v164\results"
+    [string] $OutDir = "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\results"
 )
 
 $ErrorActionPreference = "Continue"
@@ -106,11 +108,36 @@ while ($true)
     }
     catch { }
 
+    # Working set of the WHOLE tree, not just the launcher: the 30-43 GB CPU-MoE expert arena lives
+    # in a child worker process, so watching perf.py alone reported ~3.7 GB for a 45 GB run and hid
+    # every host-side growth (critique/improvement I3c).
     $ws = 0
     if ($watchPid -gt 0)
     {
-        try { $ws = [int]((Get-Process -Id $watchPid -ErrorAction Stop).WorkingSet64 / 1MB) }
+        try {
+            [void](Get-Process -Id $watchPid -ErrorAction Stop)
+        }
         catch { break }   # the watched process exited: a pass is over
+        try {
+            $all = Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, WorkingSetSize -ErrorAction Stop
+            $children = @{}
+            foreach ($pr in $all) {
+                if (-not $children.ContainsKey([int]$pr.ParentProcessId)) { $children[[int]$pr.ParentProcessId] = @() }
+                $children[[int]$pr.ParentProcessId] += $pr
+            }
+            $queue = New-Object System.Collections.Queue
+            $queue.Enqueue($watchPid)
+            $seen = @{}
+            while ($queue.Count -gt 0) {
+                $cur = [int]$queue.Dequeue()
+                if ($seen.ContainsKey($cur)) { continue }
+                $seen[$cur] = $true
+                foreach ($pr in $all) {
+                    if ([int]$pr.ProcessId -eq $cur) { $ws += [int]($pr.WorkingSetSize / 1MB) }
+                }
+                if ($children.ContainsKey($cur)) { foreach ($ch in $children[$cur]) { $queue.Enqueue([int]$ch.ProcessId) } }
+            }
+        } catch { }
     }
 
     $samples++

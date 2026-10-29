@@ -48,12 +48,14 @@ param(
     [string] $Regime = "production",
     [string] $Env = "",
     [string] $Unset = "",
-    [int] $MaxLength = 262144,
-    [int] $Threads = 16,
-    [int] $Split = 360,
+    [int] $MaxLength = 0,      # 0 = take from state.json
+    [int] $Threads = 0,        # 0 = take from state.json
+    [int] $Split = 0,          # 0 = take from state.json
     [string] $Extra = "",
-    [string] $Model = "",
-    [string] $Root = "C:\Users\yoho\Downloads\tabbyAPI\_agent\v164",
+    [string] $Model = "",      # "" = take from state.json
+    [string] $State = "",      # "" = <Root>\state.json
+    [switch] $NoFrozenState,   # do not point XDG_CACHE_HOME at the frozen profile dir
+    [string] $Root = "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165",
     [switch] $Short,
     [string] $Runner = "perf",   # perf.py (pp/tg ladder) or spec_decode.py (drafting arms)
     [switch] $NoSpecDec,
@@ -69,7 +71,28 @@ $ErrorActionPreference = "Continue"
 $inv = [System.Globalization.CultureInfo]::InvariantCulture
 
 $PY    = "C:\Users\yoho\Downloads\tabbyAPI\venv\Scripts\python.exe"
-if ($Model -ne "") { $MODEL = $Model } else { $MODEL = "D:\llms\Qwen3.8-Flash-Next-exl3-2.05bpw" }
+
+# --- State: the one place a regime lives --------------------------------------------------------
+# state.json carried the model/split/threads/cache/env/floors. The parameters are deltas, so an arm
+# passes only what it changes and a model swap edits one file instead of every plan task (critique
+# C13/C15: three stale v164 defaults and a hardcoded -cs outlived two model swaps).
+$statePath = if ($State -ne "") { $State } else { Join-Path $Root "state.json" }
+if (-not (Test-Path $statePath)) {
+    Write-Output ("ABORT: no state.json at " + $statePath + " (pass -State, or deploy with deploy.sh)")
+    exit 2
+}
+$ST = (Get-Content $statePath -Raw | ConvertFrom-Json).active
+if ($null -eq $ST -or $null -eq $ST.model) { Write-Output ("ABORT: " + $statePath + " has no .active.model"); exit 2 }
+
+if ($Model -eq "")   { $Model = [string]$ST.model }
+$MODEL = $Model
+if ($Split -eq 0)    { $Split = [int]$ST.split }
+if ($Threads -eq 0)  { $Threads = [int]$ST.threads }
+if ($MaxLength -eq 0){ $MaxLength = [int]$ST.max_length }
+$CacheSize   = [int]$ST.cache_size
+$CacheQuant  = [string]$ST.cache_quant
+if (-not $PSBoundParameters.ContainsKey("MinFreeVramMB")) { $MinFreeVramMB = [int]$ST.floors.min_free_vram_mb }
+if (-not $PSBoundParameters.ContainsKey("MinFreeRamMB"))  { $MinFreeRamMB  = [int]$ST.floors.min_free_ram_mb }
 $LOGS  = Join-Path $Root "logs"
 $RES   = Join-Path $Root "results"
 if ($Runner -eq "spec_decode") {
@@ -116,50 +139,16 @@ if ($pkg -notmatch '\\venv\\Lib\\site-packages\\exllamav3\\__init__\.py$') {
 }
 $harnessHash = (Get-FileHash -Path $PSCommandPath -Algorithm SHA256).Hash
 
-# --- Regimes -----------------------------------------------------------------------------------
-# production = the deployed regime of 2026-10-24, expressed for v1.6.4: model 2.05 bpw, split mode
-# with the tail 360 of 512 experts on the CPU, 16 worker threads, 262144 cache in FP16, chunk 4096,
-# batch 2. Environment: only the three knobs production actually relies on plus the host-memory
-# guard. EXL3_MOE_MEMOPS=0 is the
-# DEPLOYED value, not the engine default (1.6.4 defaults to 1); Task 5 of the plan decides it.
-# Deliberately NOT set: EXL3_MOE_STREAM_T and EXL3_MOE_STREAM_BATCH_EXPERTS. Production's
-# start_tuned.ps1 carries the v1.4.9 values (6 / 48), which are no longer the defaults (per-device /
-# 24) - Task 6 tests them as knobs instead of baking them in.
-# Profilers are off by default: they cost throughput and the retune wants tok/s, not mechanism.
-$REGIMES = @{
-    "production" = @{
-        Args = @("-m", $MODEL, "-cs", "262144", "-chunk_size", "4096", "-ambs", "2", "-cq", "2,2", "-max_length", "$MaxLength")
-        Env  = [ordered]@{
-            EXL3_MOE_MEMOPS      = "0"
-            EXL3_MOE_CPU_PIN     = "1"
-            EXL3_MOE_CPU_SWIZZLE = "1"
-            # Host-memory guard, not a perf knob. The 3.68bpw model at split 400 offloads a 43.02 GB
-            # expert arena to a separate worker process, leaving ~2.0 GB of host RAM available at
-            # the deepest chunk; the engine's default reserve (2048 MB) aborts the load there, and
-            # so does 1024 MB. The watcher holds the enforced floor (1200 MB, operator 2026-10-29),
-            # so the engine guard is off and one margin is charged once.
-            EXL3_HOST_MEM_RESERVE_MB = "0"
-            # Determinism, not a perf knob. The OS grants a variable slice of the 42.9 GB CPU arena
-            # as large pages (measured 0.87 GB in A1 vs 2.08 GB in A2, same config), and CPU expert
-            # gathers run faster through huge pages - that alone moved tg 12-19 % between two
-            # identical passes. Regular pages for every run make the arms comparable; any loss
-            # against a lucky huge-page run belongs to the measurement, not to the knobs.
-            EXL3_MOE_ARENA_HUGEPAGE = "0"
-            # spec_decode.py prints the generated text; under the Windows default code page
-            # (cp1252) any non-Latin character raises UnicodeEncodeError and kills the run
-            # mid-measurement (measured 2026-10-29). Not a perf knob, just a working stdout.
-            PYTHONUTF8 = "1"
-        }
-    }
-}
-
-if (-not $REGIMES.ContainsKey($Regime)) {
-    Write-Output ("ABORT: unknown regime '" + $Regime + "'. Known: " + (($REGIMES.Keys | Sort-Object) -join ", "))
+# --- Regime ------------------------------------------------------------------------------------
+# Built from state.json. The v1.6.4 hardcoded block (model 2.05bpw, -cs 262144, -mcs 360) is gone:
+# it survived two model swaps and silently disagreed with the plans. "production" is accepted as an
+# alias so older invocations keep working; anything else is an error.
+if ($Regime -ne "production" -and $Regime -ne "state") {
+    Write-Output ("ABORT: unknown regime '" + $Regime + "'. Known: state (alias: production)")
     exit 2
 }
-$R = $REGIMES[$Regime]
-$argsList = @($R.Args)
-$argsList += @("-mcs", "$Split", "-mct", "$Threads")
+$argsList = @("-m", $MODEL, "-cs", "$CacheSize", "-chunk_size", "4096", "-ambs", "2",
+              "-cq", $CacheQuant, "-max_length", "$MaxLength", "-mcs", "$Split", "-mct", "$Threads")
 if ($Extra -ne "") {
     foreach ($tok in ($Extra -split '\s+')) { if ($tok -ne "") { $argsList += $tok } }
 }
@@ -180,9 +169,32 @@ if ($SkipGen)        { $argsList += "-sg" }
 if ($SkipWarmup)     { $argsList += "-swu" }
 
 # --- Environment -------------------------------------------------------------------------------
-foreach ($k in $R.Env.Keys) { Set-Item "env:$k" $R.Env[$k] }
+$baseEnv = [ordered]@{}
+if ($ST.env) { foreach ($pr in $ST.env.PSObject.Properties) { $baseEnv[$pr.Name] = [string]$pr.Value } }
+foreach ($k in $baseEnv.Keys) { Set-Item "env:$k" $baseEnv[$k] }
 $envApplied = [ordered]@{}
-foreach ($k in $R.Env.Keys) { $envApplied[$k] = $R.Env[$k] }
+foreach ($k in $baseEnv.Keys) { $envApplied[$k] = $baseEnv[$k] }
+
+# Frozen hidden state (critique C1/C2, improvement I2): both engine profiles - the routed-expert
+# frequencies and the sparse-head token frequencies - live under XDG_CACHE_HOME. Pointing it at a
+# frozen snapshot makes every arm start from the same placement instead of "whoever ran first pays
+# the cold run and everybody after inherits its profile".
+$frozen = [string]$ST.frozen_state_dir
+$master = [string]$ST.frozen_state_master
+if ($frozen -ne "" -and -not $NoFrozenState) {
+    if ($master -ne "" -and (Test-Path $master)) {
+        # Start every run from the SAME profile: without this, arm N inherits whatever placement the
+        # previous run learned and the arms are not comparable (critique C1/C2, improvement I2).
+        if (Test-Path $frozen) { Remove-Item $frozen -Recurse -Force -ErrorAction SilentlyContinue }
+        New-Item -ItemType Directory -Force $frozen | Out-Null
+        Copy-Item -Path (Join-Path $master "*") -Destination $frozen -Recurse -Force -ErrorAction SilentlyContinue
+        $envApplied["FROZEN_STATE"] = "master->active"
+    } else {
+        New-Item -ItemType Directory -Force $frozen | Out-Null
+    }
+    Set-Item "env:XDG_CACHE_HOME" $frozen
+    $envApplied["XDG_CACHE_HOME"] = $frozen
+}
 if ($Prof) {
     foreach ($k in @("EXL3_MOE_CPU_PROF", "EXL3_MOE_CPU_SWAP_DEBUG", "EXL3_SPLIT_PROF", "EXL3_MOE_SUBMIT_PROF")) {
         Set-Item "env:$k" "1"; $envApplied[$k] = "1"
@@ -315,6 +327,54 @@ foreach ($rawLine in (($raw -replace "`r", "`n") -split "`n")) {
 $ppRows = @($ppRows | Where-Object { $_[1] -gt 0 })
 $tgRows = @($tgRows | Where-Object { $_[1][1] -gt 0 })
 
+# spec_decode.py prints a per-category table; without this every drafting arm lived only in the log
+# and no CSV analysis was possible (critique C13b). Both the rendered table and the machine-readable
+# "ARM ..." lines are captured, so acceptance and latency are separable afterwards (improvement I4).
+$sdRows = New-Object System.Collections.ArrayList
+$armRows = New-Object System.Collections.ArrayList
+$sdHeader = $null
+foreach ($rawLine in (($raw -replace "`r", "`n") -split "`n")) {
+    $l = ($rawLine -replace $ansi, "").Trim()
+    if ($l -match '^ARM\s+(\S+)\s+tok_s=([0-9.]+)(?:\s+acc=([0-9.]+)/([0-9.]+))?(?:\s+rounds=(\d+))?') {
+        [void]$armRows.Add(@($Matches[1], [double]::Parse($Matches[2], $inv),
+                             $(if ($Matches[3] -ne "") { [double]::Parse($Matches[3], $inv) } else { -1.0 }),
+                             $(if ($Matches[4] -ne "") { [double]::Parse($Matches[4], $inv) } else { -1.0 }),
+                             $(if ($Matches[5] -ne "") { [int]$Matches[5] } else { 0 })))
+        continue
+    }
+    if ($l -match '^\|\s*Category\s*\|') {
+        $cells = @($l.Trim('|').Split('|') | ForEach-Object { $_.Trim() })
+        $sdHeader = @($cells[1..($cells.Count - 1)])
+        continue
+    }
+    if ($null -ne $sdHeader -and $l -match '^\|') {
+        $cells = @($l.Trim('|').Split('|') | ForEach-Object { $_.Trim() })
+        if ($cells.Count -ne ($sdHeader.Count + 1)) { continue }
+        if ($cells[1] -match '^-+$' -or $cells[0] -match '^-+$') { continue }
+        for ($c = 1; $c -lt $cells.Count; $c++) {
+            $cell = $cells[$c]
+            if ($cell -notmatch '([0-9.]+)\s+t/s') { continue }
+            $tps = [double]::Parse($Matches[1], $inv)
+            $ratio = 0.0; $acc = -1.0; $draft = -1.0
+            if ($cell -match '([0-9.]+)x') { $ratio = [double]::Parse($Matches[1], $inv) }
+            if ($cell -match '([0-9.]+)/([0-9.]+)\s+acc/draft') {
+                $acc = [double]::Parse($Matches[1], $inv); $draft = [double]::Parse($Matches[2], $inv)
+            }
+            [void]$sdRows.Add(@($cells[0], $sdHeader[$c - 1], $tps, $ratio, $acc, $draft))
+        }
+    }
+}
+
+# torch allocator watermarks (improvement I3b): driver-free VRAM says nothing about how much of the
+# card PyTorch is holding in cached blocks, which is what actually kills runs at the floor
+$peakAlloc = 0.0
+$peakReserved = 0.0
+foreach ($m in [regex]::Matches($raw, 'alloc peak allocated=([0-9.]+) MiB reserved=([0-9.]+) MiB')) {
+    $a = [double]::Parse($m.Groups[1].Value, $inv); $r2 = [double]::Parse($m.Groups[2].Value, $inv)
+    if ($a -gt $peakAlloc) { $peakAlloc = $a }
+    if ($r2 -gt $peakReserved) { $peakReserved = $r2 }
+}
+
 # --- Verdict -----------------------------------------------------------------------------------
 $status = "ok"
 if ($breach) { $status = "breach" }
@@ -324,22 +384,41 @@ elseif ($Runner -eq "perf" -and $ppRows.Count -eq 0 -and $tgRows.Count -eq 0) { 
 # --- Persist -----------------------------------------------------------------------------------
 $passesCsv = Join-Path $RES "passes.csv"
 if (-not (Test-Path $passesCsv)) {
-    Set-Content -Path $passesCsv -Value "tag,run_id,finished_utc,regime,status,engine,ext,elapsed_s,max_length,min_free_vram_mb,min_free_ram_mb,peak_proc_ws_mb,samples,breach,env,split,threads,args,harness_sha256,log,runner" -Encoding ASCII
+    Set-Content -Path $passesCsv -Value "tag,run_id,finished_utc,regime,status,engine,ext,elapsed_s,max_length,min_free_vram_mb,min_free_ram_mb,peak_proc_ws_mb,samples,breach,env,split,threads,args,harness_sha256,log,runner,peak_alloc_mb,peak_reserved_mb" -Encoding ASCII
 }
 $envStr = (($envApplied.Keys | Sort-Object | ForEach-Object { "$_=$($envApplied[$_])" }) -join " ")
 $argStr = (($argsList -join " ") -replace ",", ";")
 $breachInt = 0
 if ($breach) { $breachInt = 1 }
-$row = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19},{20}" -f `
+$row = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19},{20},{21},{22}" -f `
     $Tag, $runId, (Get-Date).ToString("s"), $Regime, $status, $engine, $extName, $elapsed, $MaxLength, `
     $minVram, $minRam, $peakWs, $samples, $breachInt, $envStr, $Split, $Threads, $argStr, $harnessHash, `
-    ("perf-" + $runId + ".log"), $Runner
+    ("perf-" + $runId + ".log"), $Runner, ([string]::Format($inv, "{0:F0}", $peakAlloc)), ([string]::Format($inv, "{0:F0}", $peakReserved))
 Add-Content -Path $passesCsv -Value $row -Encoding ASCII
 
 $ppCsv = Join-Path $RES "pp.csv"
 if (-not (Test-Path $ppCsv)) { Set-Content -Path $ppCsv -Value "tag,run_id,band,pp_tok_s" -Encoding ASCII }
 foreach ($r in $ppRows) {
     Add-Content -Path $ppCsv -Value ("{0},{1},{2},{3}" -f $Tag, $runId, $r[0], ([string]::Format($inv, "{0:F2}", $r[1]))) -Encoding ASCII
+}
+
+$sdCsv = Join-Path $RES "spec_decode.csv"
+if (-not (Test-Path $sdCsv)) {
+    Set-Content -Path $sdCsv -Value "tag,run_id,category,arm,tok_s,ratio,acc,draft" -Encoding ASCII
+}
+foreach ($r in $sdRows) {
+    Add-Content -Path $sdCsv -Value ("{0},{1},{2},{3},{4},{5},{6},{7}" -f $Tag, $runId, ($r[0] -replace ",", ";"), ($r[1] -replace ",", ";"),
+        ([string]::Format($inv, "{0:F2}", $r[2])), ([string]::Format($inv, "{0:F3}", $r[3])),
+        ([string]::Format($inv, "{0:F2}", $r[4])), ([string]::Format($inv, "{0:F2}", $r[5]))) -Encoding ASCII
+}
+$armCsv = Join-Path $RES "arms.csv"
+if (-not (Test-Path $armCsv)) {
+    Set-Content -Path $armCsv -Value "tag,run_id,arm,tok_s,acc,draft,rounds" -Encoding ASCII
+}
+foreach ($r in $armRows) {
+    Add-Content -Path $armCsv -Value ("{0},{1},{2},{3},{4},{5},{6}" -f $Tag, $runId, $r[0],
+        ([string]::Format($inv, "{0:F2}", $r[1])), ([string]::Format($inv, "{0:F2}", $r[2])),
+        ([string]::Format($inv, "{0:F2}", $r[3])), $r[4]) -Encoding ASCII
 }
 
 $tgCsv = Join-Path $RES "tg.csv"
@@ -356,6 +435,8 @@ Write-Output ("HARNESS sha256=$harnessHash")
 Write-Output ("PASS tag=$Tag regime=$Regime status=$status elapsed_s=$elapsed engine=$engine ext=$extName")
 Write-Output ("GPU  $gpu")
 Write-Output ("FLOORS min_free_vram_mb=$minVram min_free_ram_mb=$minRam peak_proc_ws_mb=$peakWs samples=$samples breach=$breachInt")
+if ($peakAlloc -gt 0) { Write-Output ("ALLOC  peak_allocated_mb=" + [string]::Format($inv, "{0:F0}", $peakAlloc) + " peak_reserved_mb=" + [string]::Format($inv, "{0:F0}", $peakReserved)) }
+foreach ($r in $armRows) { Write-Output ("ARM {0} tok_s={1} acc={2}/{3} rounds={4}" -f $r[0], [string]::Format($inv, "{0:F2}", $r[1]), [string]::Format($inv, "{0:F2}", $r[2]), [string]::Format($inv, "{0:F2}", $r[3]), $r[4]) }
 if ($ppRows.Count -gt 0) {
     $parts = @()
     foreach ($r in $ppRows) { $parts += ("{0}={1}" -f $r[0], [string]::Format($inv, "{0:F2}", $r[1])) }
@@ -366,10 +447,10 @@ if ($tgRows.Count -gt 0) {
     foreach ($r in $tgRows) { $parts += ("{0}={1}" -f $r[0], [string]::Format($inv, "{0:F2}", $r[1][1])) }
     Write-Output ("TG_S1 " + ($parts -join " "))
 }
-Write-Output ("CSV  " + $passesCsv + " ; " + $ppCsv + " ; " + $tgCsv + " ; " + $wCsv)
+Write-Output ("CSV  " + $passesCsv + " ; " + $ppCsv + " ; " + $tgCsv + " ; " + $sdCsv + " ; " + $armCsv + " ; " + $wCsv)
 
 if ($status -eq "breach") {
-    Write-Output ("BREACH tag=$Tag floors violated; see " + (Join-Path $RES ("BREACH-" + $Tag + ".txt")))
+    Write-Output ("BREACH tag=$Tag run=$runId floors violated; see " + (Join-Path $RES ("BREACH-" + $runId + ".txt")))
     exit 4
 }
 if ($status -eq "fail") { exit 5 }
