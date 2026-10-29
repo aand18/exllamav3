@@ -26,6 +26,8 @@ install -m 0666 "$HERE/run_build.ps1"  "$DEST/run_build.ps1"
 # perf.py is a verbatim copy of the tree's eval/perf.py (identical in v1.5.4 and v1.6.4); it is
 # copied rather than committed twice. It imports the installed engine, not this tree.
 install -m 0666 "$REPO/eval/perf.py"   "$DEST/perf.py"
+# T7 drafter arms: -or override specs that shadow the MTP head from a sidecar file, no base-dir copy.
+install -m 0666 "$HERE"/mtp-sidecar-*.yaml "$DEST"/
 
 echo "deployed to $DEST"
 sha256sum "$DEST"/*.ps1 "$DEST"/perf.py

@@ -1,0 +1,8 @@
+# T7 sidecar arm variant (3.1 bpw). See mtp-sidecar-2.6bpw.yaml for the mechanism and checks.
+# sha256 f701abeb65440fe5f43adeeb4fb91d8c059d9f329ffd81b421ff785d99c4781d = HF LFS oid.
+sources:
+  - id: mtpopt
+    model_dir: D:\llms\mtp-sidecars\mtp-3.1bpw.safetensors
+overrides:
+  - key: mtp*
+    source: mtpopt

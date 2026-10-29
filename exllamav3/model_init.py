@@ -260,7 +260,9 @@ def init(
 
     # Override tensors
     if args.override:
-        assert not draft_model_dir, "Tensor overrides not supported when loading with draft model"
+        # With --mtp the draft config IS the model config, so the override collection covers the
+        # MTP component too; only a separate draft model dir gets a config that bypasses it
+        assert not (draft_model_dir and not use_mtp), "Tensor overrides not supported with a separate draft model"
         with open(args.override, "r") as f:
             comp = yaml.safe_load(f)
         sources = {s["id"]: s["model_dir"] for s in comp["sources"]}
