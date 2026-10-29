@@ -145,6 +145,10 @@ $REGIMES = @{
             # identical passes. Regular pages for every run make the arms comparable; any loss
             # against a lucky huge-page run belongs to the measurement, not to the knobs.
             EXL3_MOE_ARENA_HUGEPAGE = "0"
+            # spec_decode.py prints the generated text; under the Windows default code page
+            # (cp1252) any non-Latin character raises UnicodeEncodeError and kills the run
+            # mid-measurement (measured 2026-10-29). Not a perf knob, just a working stdout.
+            PYTHONUTF8 = "1"
         }
     }
 }
