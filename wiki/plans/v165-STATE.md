@@ -74,6 +74,25 @@ Owner of the box: none yet — ask the operator before the first GPU task. Rollb
   `C:\Users\yoho\Downloads\exl3-build-164\src\dist\exllamav3-1.6.4-cp312-cp312-win_amd64.whl`
   (earlier "not on disk" was wrong — checked the wrong dist dir).
 
+## Production model swap 2026-10-29 (operator decision)
+
+- **Production model: `3.18bpw_h6_ng8`, not 3.68bpw_h6_ng8.** Operator, 2026-10-29: *"since we're
+  running with no headroom grab 3.18bpw_h6_ng8 (reuse local ngram table), its 8gb lighter. Use
+  that instead of 3.6bpw."*
+- Dir `D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8`: 7 shards, **54.5 GB of weights**
+  (3.68 = 58.1 GB), ngram table **not downloaded** — the existing 51.8 GB `ng8` table is
+  hardlinked in, exactly as for the screening model.
+- Consequences, in order:
+  1. **Arm A must be re-measured** on 3.18 (the acceptance threshold is derived from the model
+     under test; the band spread may differ with a smaller GPU slice).
+  2. **The split ladder re-founds on 3.18** (T10): fewer bits per expert means more experts fit
+     in VRAM at the same split, so the arena can shrink — which is the headroom this swap buys.
+  3. MEMOPS (T5) carries over: it is an engine path, not a per-checkpoint property, and its effect
+     was 8–17 % with tight band spreads.
+  4. The drafting series re-runs on 3.18; the 3.68 acceptance run stays as a data point.
+- 3.68 stays on disk for now (rollback); its weights are ~58 GB and can be deleted once 3.18 is
+  proven, which is an operator call.
+
 ## Harness
 
 Repo source of truth: `bench/windows/` on `165-win-perf`. Deploy target:
