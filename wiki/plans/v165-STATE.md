@@ -106,7 +106,9 @@ default) and `-cq 2,2` in the production regime. Deployed `run_pass.ps1` sha256 
   guard 0, huge pages off. A1 PP 1637.69@4096 / 1632.40@131072; A2 1602.18 / 1642.92.
   **Acceptance threshold (A2/A1): pp +-2 % at 4096–131072 (small bands +-5–10 %), tg +-11 % worst
   band (65536), typically +-5 %.** Report `T04-armA.md`; ratios in `artifacts/analysis/`.
-- MEMOPS_WINNER: — (T5, ABBA running)
+- **MEMOPS_WINNER: 0** (T5, ABBA 2026-10-29: memops=1 is 8–17 % slower on tg at every
+  context, medians 0.83–0.93, pp neutral-to-worse; reproduces the 1.4.9 finding). Deployment
+  value unchanged; no 262144 confirmation (nothing to deploy changes).
 - MTP_WINNER (readback/dnt/sdh/hdt/dds): — (T6)
 - DRAFT_WINNER (stock / sidecar-2.6 / DFlash2 + window + sdh): — (T7)
 - CODE_WINNER (stock vs win-perf): — (T8)
@@ -136,8 +138,8 @@ See `wiki/plans/2026-10-29-v165-retune.md` (T0–T13). T0 done 2026-10-29
 (`wiki/plans/v165-reports/T00-preconditions.md`); harness commit `09923498`.
 T1 done 2026-10-29 (`wiki/plans/v165-reports/T01-codebase.md`) — pass, with the
 `EXL3_NO_BATCH_READBACK` flag for T6. T2 done (`T02-models.md`), T3 done (`T03-build.md`),
-**T4 done (`T04-armA.md`)** — reference arm + acceptance thresholds frozen. Next: T5 (MEMOPS
-ABBA at 131072), then T6 (MTP knobs), T7 (drafter), T8 (code delta), T9–T13.
+**T4 done (`T04-armA.md`)** — reference arm + acceptance thresholds frozen. T5 done (`T05-memops.md`) — MEMOPS_WINNER=0.
+Next: T6 (MTP drafting knobs on the 1.66 screening model), T7 (drafter), T8 (code delta), T9–T13.
 
 ## Non-GPU prep done 2026-10-29
 
