@@ -92,6 +92,12 @@ Owner of the box: none yet — ask the operator before the first GPU task. Rollb
   4. The drafting series re-runs on 3.18; the 3.68 acceptance run stays as a data point.
 - 3.68 stays on disk for now (rollback); its weights are ~58 GB and can be deleted once 3.18 is
   proven, which is an operator call.
+- **Downloaded + staged 2026-10-29:** `hf download` (the `huggingface-cli` shim is deprecated and
+  exits with a warning in this environment) → 7 shards, 54.6 GB, no table; the ng8 table is
+  hardlinked in and now has **3 links** (3.68, 1.66, 3.18 dirs, one 51.84 GB file). D: 121 GB free.
+  Structure verified against 3.68: same arch (`Qwen4ExpForConditionalGeneration`), 48 layers,
+  512 experts, `moe_intermediate_size` 640, **6203 `mtp.*` keys** (same head shape), 6 PLE keys.
+  Load smoke pending (GPU was busy with the last 3.68 drafting arm).
 
 ## Harness
 
