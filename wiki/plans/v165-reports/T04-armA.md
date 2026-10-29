@@ -69,3 +69,43 @@ the next (both printed by the engine) — and CPU expert gathers run faster thro
 production regime now sets `EXL3_MOE_ARENA_HUGEPAGE=0`, which cut the spread to the table above.
 That is a determinism control, not a perf claim: any pass measured before this change is not
 comparable with arms measured after it.
+
+## Re-derived on the swapped-in 3.18bpw model (operator swap, 2026-10-29)
+
+The operator replaced the production checkpoint mid-campaign (3.68 → 3.18bpw_h6_ng8, "no
+headroom, 8 GB lighter"), so the reference arm and its threshold are re-measured on the model that
+will be deployed. The 3.68 numbers above stay as the reason the swap was made.
+
+### Split ladder at 131072 on 3.18 (T10 pulled forward — the swap flips the ladder direction)
+
+| split | min VRAM | min RAM | PP @4096 | PP @131072 | TG @130816 | verdict |
+|---|---|---|---|---|---|---|
+| 400 | 4933 | 9605 | 1711 | — | — | loads with ~5 GB spare (4096 probe) |
+| 384 | 1777 | 7059 | 1774 | 1783 | 43.54 | ok, but 15 % slower on tg |
+| **376** | **2141** | **8382** | **1935** | **1828** | **49.79** | **winner** |
+| 368 | 15 | 8778 | — | — | — | does not load (VRAM) |
+
+376 is the lowest split that loads and also the fastest: the 8-expert step from 384 to 376 is
+worth ~15 % tg (43.5 → 49.8 t/s at 130816) and +2.5 % pp. **Arm A on 3.18 = split 376.**
+
+### The two passes and the new threshold
+
+| pass | run id | PP @4096 | PP @131072 | TG @130816 | min VRAM | min RAM |
+|---|---|---|---|---|---|---|
+| A1 | `split376-131k-20261029-221518` | 1935.22 | 1827.59 | 49.79 | 2141 MB | 8382 MB |
+| A2 | `armA2-318-20261029-221855` | 1786.27 | 1800.29 | 48.87 | 2491 MB | 7774 MB |
+
+| band | pp ratio (A2/A1) | tg ratio |
+|---|---|---|
+| 4096 | 0.92 | 0.97 |
+| 8192 | 0.96 | 1.00 |
+| 16384 | 0.95 | 0.99 |
+| 32768 | 0.98 | 0.93 |
+| 65536 | 0.99 | 0.99 |
+| 131072 / 130816 | 0.99 | 0.98 |
+
+**Acceptance threshold on 3.18 (A2/A1): pp ±5 % at the measurement bands (0.95–0.99), tg ±9 %
+worst band (0.91–1.01).** Tighter than the 3.68 arm (tg 0.97–1.11), and both resources now have
+~2 GB and ~8 GB of slack — the box finally has room to measure.
+
+Ratios: `artifacts/analysis/T04b-armA-318-spread.md`.
