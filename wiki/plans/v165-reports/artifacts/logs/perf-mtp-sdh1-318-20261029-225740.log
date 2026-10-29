@@ -122,3 +122,258 @@ The user wants me to look at a Python script in the current directory. Let me fi
 </tool_call>
 --------
 Prefill: 15,104 / 16,356...
+Prefill: 16,128 / 16,356...
+Prefill: 16,356 / 16,356...
+Python 3.13 is installed. Let me run the script to see the actual error.
+</think>
+
+<tool_call>
+<function=bash>
+<parameter=command>
+python3 /mnt/str/temp/opencode/test4/pipeline_validator.py 2>&1
+</parameter>
+<parameter=description>
+Run script to see error
+</parameter>
+</function>
+</tool_call>
+--------
+Prefill: 17,664 / 17,829...
+Prefill: 17,829 / 17,829...
+Let me continue adding comments to the rest of the file. I'll add comments to explain the key sections.
+</think>
+
+<tool_call>
+<function=edit>
+<parameter=filePath>
+/mnt/str/temp/opencode/test4/pipeline_validator.py
+</parameter>
+<parameter=newString>
+# ---------------------------------------------------------------------------
+# Domain enums & value objects
+# ---------------------------------------------------------------------------
+
+class StageStatus(Enum):
+    """Tracks the lifecycle state of a pipeline stage."""
+    PENDING = auto()    # Not yet started
+    RUNNING = auto()    # Currently executing
+    SUCCESS = auto()    # Completed successfully
+    FAILED = auto()     # Failed after all retries exhausted
+    SKIPPED = auto()    # Skipped (e.g., during dry-run)
+
+
+class ResourceKind(Enum):
+    """Types of compute resources that can be allocated to stages."""
+    GPU = "gpu"         # GPU devices (e.g., NVIDIA A100s)
+    CPU = "cpu"         # CPU cores
+    MEMORY = "memory"   # RAM in GiB
+    DISK = "disk"       # Disk space in GiB
+
+
+@dataclass(frozen=True)
+class ResourceRequest:
+    """
+    Immutable request for a specific amount of a resource type.
+    
+    Attributes:
+        kind: The type of resource (GPU, CPU, MEMORY, DISK)
+        amount: How much of the resource is needed
+        unit: Unit of measurement (defaults to "GiB")
+    """
+    kind: ResourceKind
+    amount: float
+    unit: str = "GiB"
+
+    def scale(self, factor: float) -> ResourceRequest:
+        """Return a new request with the amount scaled by the given factor."""
+        return ResourceRequest(
+            kind=self.kind,
+            amount=round(self.amount * factor, 2),
+            unit=self.unit,
+        )
+
+
+@dataclass
+class CheckpointPolicy:
+    """
+    Configuration for checkpointing behavior during stage execution.
+    
+    Attributes:
+        enabled: Whether checkpointing is enabled
+        interval_seconds: How often to save checkpoints (in seconds)
+        max_kept: Maximum number of checkpoints to retain
+        base_dir: Base directory where checkpoints are stored
+    """
+    enabled: bool = True
+    interval_seconds: int = 300
+    max_kept: int = 5
+--------
+Prefill: 21,760 / 25,587...
+Prefill: 25,344 / 25,587...
+Prefill: 25,587 / 25,587...
+Let me continue adding comments to the reporting section and the CLI entry point.
+</think>
+
+<tool_call>
+<function=edit>
+<parameter=filePath>
+/mnt/str/temp/opencode/test4/pipeline_validator.py
+</parameter>
+<parameter=newString>
+# -- reporting ----------------------------------------------------------
+    # Provides summary information about pipeline state
+
+    def summary(self) -> dict[str, Any]:
+        """
+        Returns a summary of the pipeline's current state.
+        
+        Returns:
+            Dict with pipeline name, stage count, status per stage, and metadata
+        """
+        return {
+            "pipeline": self.name,
+            "total_stages": len(self.stages),
+            "status": {k: v.name for k, v in self._status.items()},
+            "metadata": dict(self.metadata),
+        }
+
+
+# ---------------------------------------------------------------------------
+# CLI entry-point
+# ---------------------------------------------------------------------------
+# Demonstrates pipeline usage with a demo ML training workflow
+
+def _build_demo_pipeline() -> tuple[Pipeline, ResourceBudget]:
+    """
+    Creates a demo pipeline representing a typical ML training workflow.
+    
+    Stages:
+    1. data-ingest: Load raw data (CPU + disk)
+    2. tokenize: Preprocess/tokenize data (CPU + memory)
+    3. train: Train the model (GPU + memory) - NOTE: has intentional bad timeout
+    4. evaluate: Evaluate model performance (GPU + memory)
+    5. export-onnx: Export to ONNX format (CPU + memory)
+    
+    Returns:
+        Tuple of (Pipeline, ResourceBudget)
+    """
+    budget = ResourceBudget(
+        {
+            ResourceKind.GPU: 8.0,
+            ResourceKind.CPU: 64.0,
+            ResourceKind.MEMORY: 256.0,
+            ResourceKind.DISK: 1024.0,
+        }
+    )
+
+    pipe = (
+        Pipeline("training-v2")
+        .set_metadata("owner", "ml-platform")
+        .set_metadata("experiment", "bert-finetune-2025q4")
+        .add(
+            "data-ingest",
+            timeout=120,
+            resources=[
+                ResourceRequest(ResourceKind.CPU, 4.0, "cores"),
+                ResourceRequest(ResourceKind.DIS
+--------
+Prefill: 29,440 / 30,095...
+Prefill: 29,952 / 30,095...
+Prefill: 30,095 / 30,095...
+The script runs correctly and the LSP error should be resolved now. The issue was that `metadata` was declared as `OrderedDict[str, str]` but initialized with a plain `dict`. I changed the annotation to `dict[str, str]` and removed the unused `OrderedDict` import.
+</think>
+
+Fixed. The issue was that `metadata` was declared as `OrderedDict[str, str]` but initialized with `{}` (a plain `dict`). I changed the annotation to `dict[str, str]` and removed the now-unused `OrderedDict` import. The LSP error should be gone now.
+--------
+Prefill: 4,096 / 13,702...
+Prefill: 8,192 / 13,702...
+Prefill: 12,288 / 13,702...
+Prefill: 13,568 / 13,702...
+Prefill: 13,702 / 13,702...
+I found the repo at turboderp-org/exllamav3. Now let me fetch the latest release information.
+</think>
+
+<tool_call>
+<function=terminal>
+<parameter=command>
+curl -s https://api.github.com/repos/turboderp-org/exllamav3/releases/latest
+</parameter>
+</function>
+</tool_call>
+--------
+Prefill: 17,664 / 34,321...
+Prefill: 21,760 / 34,321...
+Prefill: 25,856 / 34,321...
+Prefill: 29,952 / 34,321...
+Prefill: 34,048 / 34,321...
+Prefill: 34,304 / 34,321...
+Prefill: 34,321 / 34,321...
+The user wants me to download the wheel file to the current directory and then inspect what packages/modules it contains. Let me download it and then inspect its contents.
+</think>
+
+<tool_call>
+<function=terminal>
+<parameter=command>
+cd ~ && curl -L -o exllamav3-0.0.30+cu128.torch2.10.0-cp313-cp313-linux_x86_64.whl "https://github.com/turboderp-org/exllamav3/releases/download/v0.0.30/exllamav3-0.0.30%2Bcu128.torch2.10.0-cp313-cp313-linux_x86_64.whl" 2>&1 | tail -5
+</parameter>
+<parameter=timeout>
+120
+</parameter>
+</function>
+</tool_call>
+--------
+Prefill: 38,400 / 40,187...
+Prefill: 39,936 / 40,187...
+Prefill: 40,187 / 40,187...
+Now I have all the information. Let me summarize the wheel contents for the user.
+</think>
+
+Downloaded (160 MB). Here's what's inside:
+
+**Package:** exllamav3 v0.0.30+cu128.torch2.10.0
+
+**Dependencies:**
+- torch >= 2.6.0
+- flash-attn >= 2.7.4.post1
+- tokenizers >= 0.21.1
+- numpy >= 2.1.0
+- rich
+- typing-extensions
+- ninja
+- safetensors >= 0.3.2
+- pyyaml
+- marisa-trie
+- kbnf >= 0.4.2
+- formatron >= 0.5.0
+- pydantic == 2.11.0
+- xformers
+
+**Main components:**
+- `exllamav3_ext.cpython-313-x86_64-linux-gnu.so` (551 MB compiled extension)
+- `exllamav3/` Python package with:
+  - `architecture/` - model support (Gemma 2/3/4, Qwen 2/3/3.5, Llama, Mistral, Mixtral, GLM4, Phi3, etc.)
+  - `cache/` - KV cache implementations (fp16, quantized, recurrent)
+  - `conversion/` - model conversion and quantization tools
+  - CUDA kernels (attention, GEMM, norm, activation, etc.)
+--------
+Prefill: 12,288 / 40,744...
+Prefill: 16,384 / 40,744...
+Prefill: 20,480 / 40,744...
+Prefill: 24,576 / 40,744...
+Prefill: 28,672 / 40,744...
+Prefill: 32,768 / 40,744...
+Prefill: 36,864 / 40,744...
+Prefill: 40,704 / 40,744...
+Prefill: 40,744 / 40,744...
+Let me review the conversation:
+
+1. User asked what's new in the latest exllamav3 release
+2. I searched GitHub API - first tried `turboderp/exllamav3` (404), then found it's `turboderp-org/exllamav3`
+3. Got the latest release info with changelog
+4. User asked which wheel matches their setup
+5. I checked their system (Python 3.13, PyTorch 2.10.0+cu130, Linux) and recommended the right wheel
+6. User asked me to download and inspect the wheel
+7. Downloaded with curl, inspected with `unzip -l` and `unzip -p` for METADATA
+
+Was there anything non-trivial here? The main "trial and error" was:
+- The GitHub repo moved from `turboderp/exllamav3` to `turboderp-org/exllamav3` (org rename

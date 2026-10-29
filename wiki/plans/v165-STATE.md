@@ -139,6 +139,10 @@ default) and `-cq 2,2` in the production regime. Deployed `run_pass.ps1` sha256 
   0.98×. Drafting on the production model is worth deploying (+35 % on 3.68 with 3 drafts,
   +42 % on 3.18 with 2). **Operator cancelled the rest of the series** — `-sdh`, `-hdt`, `-dds`
   unmeasured; resume with `-sdh` first (it changes *what* is drafted, not how much).
+  **Box cleaned up 2026-10-30:** the `mtp-sdh1-318` arm that survived the cancel (orphaned, parent
+  shell gone) was stopped on operator instruction — its log has 378 lines and **0 measurement
+  rows** (killed after load, before the table), so it is an aborted run, not a datum. Verified
+  after: no `spec_decode`/`perf.py`/`watch.ps1` processes, GPU 0 MiB / 0 %, 50.2 GB RAM free.
 - MTP readback (history): inconclusive on the screening model
   (T06 report) — **default batched (`_NO_BATCH_READBACK=False`) stands**; knobs move to the
   production model, because acceptance is a body/head quality property: 1.66 model = 1.91 bpw
