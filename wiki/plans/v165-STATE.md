@@ -137,6 +137,22 @@ T1 done 2026-10-29 (`wiki/plans/v165-reports/T01-codebase.md`) — pass, with th
 - **T8 build staged:** `C:\Users\yoho\Downloads\exl3-build-165-winperf\src` = worktree at
   `f85274c2` (tag `win-perf-1.6.5`; engine code identical to branch tip) + fixed `_build.bat`.
   Build AFTER the stock build finishes (run_build aborts on a concurrent `bdist_wheel`).
+- **T8 wheel BUILT 2026-10-29 (patched):** `build-winperf` ran clean 14:40→15:16 (unpatched),
+  then rebuilt incremental (2 s, C++ untouched) after applying `1385306e` to the staged src
+  (CRLF preserved; baseline verified == `f85274c2`). Wheel
+  `C:\Users\yoho\Downloads\exl3-build-165-winperf\src\dist\exllamav3-1.6.5-cp312-cp312-win_amd64.whl`
+  sha256 `1422a0a1e67eaf88efd6cddfaa200ded32e64a772b32db7509f7128d16b4d60f` — patched assert
+  confirmed inside the wheel. NOT installed (installed engine still 1.6.4; install order is the
+  wider session's call — T3 stock first per plan). Harness quirk: `run_build.ps1` reported
+  `exit=-1` because `Start-Process -PassThru` couldn't read the `cmd.exe` exit code; the
+  recipe's `WHEEL-EXIT 0` in `build_wheel.log` is the authoritative verdict, no BREACH file.
+- **T13 tabbyAPI decision (recommended 2026-10-29, pending operator confirm):** do NOT patch
+  tabbyAPI for `-or` — it builds its own Config/Model (no `model_init` path), and the loader's
+  alphabetical glob already gives production the sidecar for free: deployment = model dir
+  containing `mtp-*.safetensors` (+ optional strip-MTP of the base shards, reclaims ~1.9 GB
+  from shard 8; with a stripped base a missing sidecar fails the load instead of silently
+  falling back). `-or` stays benchmark-only. Only patch still possible: the 3-kwarg drafting
+  forward (`-sdh`/`-hdt`/`draft_max_rows`), and only if T6/T7 freeze a winner using them.
 - **T13 step 2 pre-researched (tabbyAPI `be74bf0`, `backends/exllamav3/model.py:1014`):**
   the `AsyncGenerator(...)` call forwards `num_draft_tokens`, `dynamic_draft_tokens`,
   `ngram_match_min` + checkpoint kwargs. NOT forwarded: `sparse_draft_head` (-sdh),
