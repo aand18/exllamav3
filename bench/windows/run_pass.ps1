@@ -46,6 +46,7 @@ param(
     [int] $Threads = 16,
     [int] $Split = 360,
     [string] $Extra = "",
+    [string] $Model = "",
     [string] $Root = "C:\Users\yoho\Downloads\tabbyAPI\_agent\v164",
     [switch] $Short,
     [switch] $NoSpecDec,
@@ -61,7 +62,7 @@ $ErrorActionPreference = "Continue"
 $inv = [System.Globalization.CultureInfo]::InvariantCulture
 
 $PY    = "C:\Users\yoho\Downloads\tabbyAPI\venv\Scripts\python.exe"
-$MODEL = "D:\llms\Qwen3.8-Flash-Next-exl3-2.05bpw"
+if ($Model -ne "") { $MODEL = $Model } else { $MODEL = "D:\llms\Qwen3.8-Flash-Next-exl3-2.05bpw" }
 $LOGS  = Join-Path $Root "logs"
 $RES   = Join-Path $Root "results"
 $PERF  = Join-Path $Root "perf.py"
@@ -113,7 +114,7 @@ $harnessHash = (Get-FileHash -Path $PSCommandPath -Algorithm SHA256).Hash
 # Profilers are off by default: they cost throughput and the retune wants tok/s, not mechanism.
 $REGIMES = @{
     "production" = @{
-        Args = @("-m", $MODEL, "-cs", "262144", "-chunk_size", "4096", "-ambs", "2", "-max_length", "$MaxLength")
+        Args = @("-m", $MODEL, "-cs", "262144", "-chunk_size", "4096", "-ambs", "2", "-cq", "2,2", "-max_length", "$MaxLength")
         Env  = [ordered]@{
             EXL3_MOE_MEMOPS      = "0"
             EXL3_MOE_CPU_PIN     = "1"
