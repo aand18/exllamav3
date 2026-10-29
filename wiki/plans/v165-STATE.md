@@ -12,7 +12,9 @@ Owner of the box: none yet — ask the operator before the first GPU task. Rollb
   v1.6.5; the four knobs (`EXL3_MOE_TIMER_RES/_THREAD_PRIO/_BLOCKING_SYNC/_CPU_PIN_OFFSET`) are
   wired in the rewritten pool code. Build worktree: `/home/dev/exllamav3/.worktrees/v165-win-perf`
   (detached at the tag).
-- installed engine (expected, confirm in T0): 1.5.4.
+- installed engine (verified T0, 2026-10-29): **1.6.4** — not the expected 1.5.4 (a 1.6.4 wheel
+  is already installed; torch 2.11.0+cu130). The 1.5.4 wheel path above is the only 1.5.4
+  artifact; T3 installs stock 1.6.5 from source regardless.
 
 ## Models (operator decision 2026-10-29; T2 downloads, then old 2.05bpw deleted)
 
@@ -29,8 +31,10 @@ Owner of the box: none yet — ask the operator before the first GPU task. Rollb
 Repo source of truth: `bench/windows/` on `165-win-perf`. Deploy target:
 `C:/Users/yoho/Downloads/tabbyAPI/_agent/v165/` via
 `DEST=/mnt/c/Users/yoho/Downloads/tabbyAPI/_agent/v165 bench/windows/deploy.sh`;
-always pass `-Root "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165"`. T0 adds a `-Model`
-override to `run_pass.ps1`. `perf.py` unchanged v1.6.4→v1.6.5, sha256
+always pass `-Root "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165"`. T0 done 2026-10-29:
+`run_pass.ps1` carries the `-Model` override (commit `09923498`; the plan's literal placement
+was a no-op — `$Model`/`$MODEL` are the same case-insensitive variable — fixed as a conditional
+default) and `-cq 2,2` in the production regime. Deployed `run_pass.ps1` sha256 `01adc66f…`. `perf.py` unchanged v1.6.4→v1.6.5, sha256
 `246e721a62d7c5238de4b7296adb0b26cd9f42a734b9f648436b35b9b6a29e04`.
 
 ## Regime (production baseline, 3.68bpw model)
@@ -71,4 +75,5 @@ the RAM floor is the component shrunk instead.
 
 ## Tasks
 
-See `wiki/plans/2026-10-29-v165-retune.md` (T0–T13). T0 pending.
+See `wiki/plans/2026-10-29-v165-retune.md` (T0–T13). T0 done 2026-10-29
+(`wiki/plans/v165-reports/T00-preconditions.md`); harness commit `09923498`. Next: T1.
