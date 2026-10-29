@@ -141,7 +141,11 @@ default) and `-cq 2,2` in the production regime. Deployed `run_pass.ps1` sha256 
 - DRAFT_WINNER (stock / sidecar-2.6 / DFlash2 + window + sdh): — (T7)
 - CODE_WINNER (stock vs win-perf): — (T8)
 - THREADS/HOST_CORES: — (T9)
-- SPLIT: — (T10)
+- **SPLIT: 376 on the 3.18bpw model** (T10 ladder pulled forward by the model swap, 2026-10-29).
+  At 131072: 400 → 4933/9605 free (VRAM/RAM), 384 → 1777/7059 and tg 43.5 @130816,
+  **376 → 2141/8382 and tg 49.8 @130816**, 368 → does not load (15 MB VRAM). 376 is the lowest
+  split that loads, and it is also the fastest measured — the 8-expert step from 384 to 376 is
+  worth ~15 % tg. T10 still owns the finer ladder (372, 380) and the max-offload corner.
 - CACHE_MODE: **Q2 (2,2) — operator decision, frozen**
 - STAGING_PAGES: — (T11)
 - PLE/GDN: — (T12)
