@@ -36,8 +36,9 @@ Owner of the box: none yet — ask the operator before the first GPU task. Rollb
 - **T2 status 2026-10-29: steps 1–3 done** — both downloads complete (3.68 dir 107 GB incl.
   ng8; 1.66 dir 29 GB; hardlink verified, link count 2). Steps 4 (load smoke, GPU) and 5
   (delete `2.05bpw` 59 GB + `3.05bpw` 80 GB) pending. Disk after downloads: ~37 GB free.
-- Rollback: 1.5.4 wheel on disk (path above); installed engine is 1.6.4 but its wheel is NOT
-  on disk — a 1.6.4 rollback means rebuilding from tag `v1.6.4`.
+- Rollback: 1.5.4 wheel on disk (path above) AND the 1.6.4 wheel at
+  `C:\Users\yoho\Downloads\exl3-build-164\src\dist\exllamav3-1.6.4-cp312-cp312-win_amd64.whl`
+  (earlier "not on disk" was wrong — checked the wrong dist dir).
 
 ## Harness
 
