@@ -62,8 +62,10 @@ main `-mcs`** (model_init shares one `Config` under `use_mtp`; only the *offload
 draft-specific twin, `-dmcl`, which does not apply to the split path). So drafting adds ~0.9 GB
 of pinned arena on top of the body's 43 GB.
 
-Ruling: the drafting series runs at **`-Split 384` + `-cs 32768`** — 16 fewer body experts on the
-CPU (≈1.7 GB host RAM back, ≈1.7 GB more VRAM) and a 32k cache instead of 262144 (≈1.8 GB more
+Ruling: the drafting series runs at **`-Split 384` + `-cs 65536`** (`-cs 32768` is too small:
+`Job requires 139 pages (only 128 available)` — a 1024-token generation over a prompt needs
+≥35584 tokens of cache) — 16 fewer body experts on the
+CPU (≈1.7 GB host RAM back, ≈1.7 GB more VRAM) and a 64k cache instead of 262144 (≈1.5 GB more
 VRAM, and the workloads are short). Every drafting arm shares those two constants, so knob ratios
 stay comparable; the deployment consequence (a drafter needs ~2 GB more VRAM or a lower split)
 goes to T13.
