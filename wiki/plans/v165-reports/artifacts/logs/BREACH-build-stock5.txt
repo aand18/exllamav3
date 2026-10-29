@@ -1,0 +1,5 @@
+BREACH tag=build-stock5 at 2026-10-29T13:48:27
+free_vram_mb=701 floor=200 low=False
+free_ram_mb=1555 floor=2048 low=True
+watched_pid=22160 launcher_pid=22160
+action=killed process tree

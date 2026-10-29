@@ -1,0 +1,4 @@
+tag,finished_utc,src,exit,elapsed_s,wheel,wheel_mb,harness_sha256
+build-stock,2026-10-29T06:30:33,C:\Users\yoho\Downloads\exl3-build-165\src,-1,0,NONE,0,C8B714DFB71983BAF3D548D42E083F3C84A84F5C8D26873AC5736943F5F7F2B6
+build-stock6,2026-10-29T14:38:07,C:\Users\yoho\Downloads\exl3-build-165\src,-1,2199,exllamav3-1.6.5-cp312-cp312-win_amd64.whl,16,C8B714DFB71983BAF3D548D42E083F3C84A84F5C8D26873AC5736943F5F7F2B6
+build-winperf,2026-10-29T15:16:33,C:\Users\yoho\Downloads\exl3-build-165-winperf\src,-1,2152,exllamav3-1.6.5-cp312-cp312-win_amd64.whl,16,C8B714DFB71983BAF3D548D42E083F3C84A84F5C8D26873AC5736943F5F7F2B6

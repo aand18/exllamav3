@@ -1,0 +1,29 @@
+remark: triton_paged.py:902:0: 1964 instructions in function
+remark: triton_paged.py:1060:0: 382 instructions in function
+remark: triton_paged.py:902:0: 2337 instructions in function
+remark: triton_paged.py:1060:0: 389 instructions in function
+remark: qsa_triton.py:147:0: 2244 instructions in function
+remark: triton_paged.py:1060:0: 506 instructions in function
+remark: qsa_triton.py:147:0: 2085 instructions in function
+remark: triton_paged.py:1060:0: 488 instructions in function
+Traceback (most recent call last):
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\perf.py", line 232, in <module>
+    main(_args)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\torch\utils\_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\perf.py", line 189, in main
+    model, config, cache, tokenizer = model_init.init(args)
+                                      ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model_init.py", line 392, in init
+    model.load(
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\torch\utils\_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\model.py", line 765, in load
+    for _ in f: pass
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\model.py", line 670, in load_gen
+    yield from self._load_autosplit(
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\model_ls.py", line 311, in _load_autosplit
+    raise RuntimeError("Insufficient VRAM in split for model and cache")
+RuntimeError: Insufficient VRAM in split for model and cache

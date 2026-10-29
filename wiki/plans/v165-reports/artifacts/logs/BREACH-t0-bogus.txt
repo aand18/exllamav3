@@ -1,0 +1,5 @@
+BREACH tag=t0-bogus at 2026-10-29T05:24:16
+free_vram_mb=61 floor=200 low=True
+free_ram_mb=7303 floor=2048 low=False
+watched_pid=19796 launcher_pid=15564
+action=killed process tree

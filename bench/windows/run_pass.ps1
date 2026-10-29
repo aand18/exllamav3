@@ -30,12 +30,18 @@
 # -Split replace the regime's -mct and -mcs. -Extra appends raw perf.py flags.
 #
 # Outputs (in -OutDir):
-#   logs/perf-<Tag>.log          perf.py stdout + stderr + an identity header appended last
-#   results/passes.csv           one row per pass: tag, status, engine, floors, env, args, harness hash
-#   results/pp.csv               one row per prefill band: tag, band, pp_tok_s
-#   results/tg.csv               one row per generation context: tag, context, s1..s4 it/s
-#   results/watch-<Tag>.csv      watcher samples
+#   logs/perf-<Tag>-<utc>.log    perf.py stdout + stderr + an identity header appended last
+#   logs/perf-<Tag>-<utc>.err.log  raw stderr (kept; the .log has it appended too)
+#   results/passes.csv           one row per pass: tag, run_id, status, engine, floors, env, args,
+#                                harness hash, log file
+#   results/pp.csv               one row per prefill band: tag, run_id, band, pp_tok_s
+#   results/tg.csv               one row per generation context: tag, run_id, context, s1..s4 it/s
+#   results/watch-<Tag>-<utc>.csv  watcher samples
 #   stdout                       HARNESS / PASS / GPU / FLOORS / PP / TG_S1 / CSV lines
+#
+# Every run is stamped with its UTC start time: a repeated tag gets a new run id, so no earlier log
+# or watcher trace is ever overwritten. passes.csv carries the run id and log filename, so a row
+# always points at the evidence that produced it.
 
 param(
     [Parameter(Mandatory = $true)][string] $Tag,
@@ -168,13 +174,22 @@ if ($Env -ne "") {
 }
 
 # --- Run ---------------------------------------------------------------------------------------
-$log = Join-Path $LOGS ("perf-" + $Tag + ".log")
-$err = Join-Path $LOGS ("perf-" + $Tag + ".err.log")
-Remove-Item $log, $err -ErrorAction SilentlyContinue
+# Every run gets its own log file: the UTC start time is part of the name, so a repeated tag never
+# overwrites earlier evidence, and a log can be matched to a passes.csv row by filename. Nothing is
+# deleted here -- logs are the analysis record and outlive the session that made them.
+$stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss")
+$runId = "$Tag-$stamp"
+$log = Join-Path $LOGS ("perf-" + $runId + ".log")
+$err = Join-Path $LOGS ("perf-" + $runId + ".err.log")
+if ((Test-Path $log) -or (Test-Path $err)) {
+    Write-Output ("ABORT: log already exists for run id " + $runId + " -- refusing to overwrite")
+    exit 2
+}
 
 $header = @(
     "",
     "=== pass     : $Tag",
+    "=== run id   : $runId",
     "=== regime   : $Regime",
     "=== engine   : $engine",
     "=== package  : $pkg",
@@ -193,12 +208,12 @@ $p = Start-Process -FilePath $PY -ArgumentList (@($PERF) + $argsList) -NoNewWind
                    -RedirectStandardOutput $log -RedirectStandardError $err
 $w = Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -PassThru -ArgumentList @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$WATCH`"",
-        "-Tag", $Tag, "-TargetPid", $p.Id, "-MatchCmd", "perf\.py",
+        "-Tag", $runId, "-TargetPid", $p.Id, "-MatchCmd", "perf\.py",
         "-MinFreeVramMB", $MinFreeVramMB, "-MinFreeRamMB", $MinFreeRamMB,
         "-OutDir", "`"$RES`"")
 $p.WaitForExit()
 $elapsed = [int]((Get-Date) - $t0).TotalSeconds
-New-Item -ItemType File -Force (Join-Path $RES ("stop-" + $Tag + ".flag")) | Out-Null
+New-Item -ItemType File -Force (Join-Path $RES ("stop-" + $runId + ".flag")) | Out-Null
 $w.WaitForExit(60000) | Out-Null
 
 # perf.py writes progress to stdout and worker profiler output to stderr; the header goes in last
@@ -217,7 +232,7 @@ if ([regex]::IsMatch($perfPart, 'Traceback \(most recent call last\)')) { $trace
 
 # --- Floors from the watcher samples -----------------------------------------------------------
 $minVram = -1; $minRam = -1; $peakWs = 0; $samples = 0
-$wCsv = Join-Path $RES ("watch-" + $Tag + ".csv")
+$wCsv = Join-Path $RES ("watch-" + $runId + ".csv")
 if (Test-Path $wCsv) {
     foreach ($row in (Get-Content $wCsv -ErrorAction SilentlyContinue | Select-Object -Skip 1)) {
         $c = @($row -split ",")
@@ -267,28 +282,29 @@ elseif ($traceback -or ($ppRows.Count -eq 0 -and $tgRows.Count -eq 0)) { $status
 # --- Persist -----------------------------------------------------------------------------------
 $passesCsv = Join-Path $RES "passes.csv"
 if (-not (Test-Path $passesCsv)) {
-    Set-Content -Path $passesCsv -Value "tag,finished_utc,regime,status,engine,ext,elapsed_s,max_length,min_free_vram_mb,min_free_ram_mb,peak_proc_ws_mb,samples,breach,env,split,threads,args,harness_sha256" -Encoding ASCII
+    Set-Content -Path $passesCsv -Value "tag,run_id,finished_utc,regime,status,engine,ext,elapsed_s,max_length,min_free_vram_mb,min_free_ram_mb,peak_proc_ws_mb,samples,breach,env,split,threads,args,harness_sha256,log" -Encoding ASCII
 }
 $envStr = (($envApplied.Keys | Sort-Object | ForEach-Object { "$_=$($envApplied[$_])" }) -join " ")
 $argStr = (($argsList -join " ") -replace ",", ";")
 $breachInt = 0
 if ($breach) { $breachInt = 1 }
-$row = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17}" -f `
-    $Tag, (Get-Date).ToString("s"), $Regime, $status, $engine, $extName, $elapsed, $MaxLength, `
-    $minVram, $minRam, $peakWs, $samples, $breachInt, $envStr, $Split, $Threads, $argStr, $harnessHash
+$row = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19}" -f `
+    $Tag, $runId, (Get-Date).ToString("s"), $Regime, $status, $engine, $extName, $elapsed, $MaxLength, `
+    $minVram, $minRam, $peakWs, $samples, $breachInt, $envStr, $Split, $Threads, $argStr, $harnessHash, `
+    ("perf-" + $runId + ".log")
 Add-Content -Path $passesCsv -Value $row -Encoding ASCII
 
 $ppCsv = Join-Path $RES "pp.csv"
-if (-not (Test-Path $ppCsv)) { Set-Content -Path $ppCsv -Value "tag,band,pp_tok_s" -Encoding ASCII }
+if (-not (Test-Path $ppCsv)) { Set-Content -Path $ppCsv -Value "tag,run_id,band,pp_tok_s" -Encoding ASCII }
 foreach ($r in $ppRows) {
-    Add-Content -Path $ppCsv -Value ("{0},{1},{2}" -f $Tag, $r[0], ([string]::Format($inv, "{0:F2}", $r[1]))) -Encoding ASCII
+    Add-Content -Path $ppCsv -Value ("{0},{1},{2},{3}" -f $Tag, $runId, $r[0], ([string]::Format($inv, "{0:F2}", $r[1]))) -Encoding ASCII
 }
 
 $tgCsv = Join-Path $RES "tg.csv"
-if (-not (Test-Path $tgCsv)) { Set-Content -Path $tgCsv -Value "tag,context,s1,s2,s3,s4" -Encoding ASCII }
+if (-not (Test-Path $tgCsv)) { Set-Content -Path $tgCsv -Value "tag,run_id,context,s1,s2,s3,s4" -Encoding ASCII }
 foreach ($r in $tgRows) {
     $s = $r[1]
-    Add-Content -Path $tgCsv -Value ("{0},{1},{2},{3},{4},{5}" -f $Tag, $r[0],
+    Add-Content -Path $tgCsv -Value ("{0},{1},{2},{3},{4},{5},{6}" -f $Tag, $runId, $r[0],
         [string]::Format($inv, "{0:F2}", $s[1]), [string]::Format($inv, "{0:F2}", $s[2]),
         [string]::Format($inv, "{0:F2}", $s[3]), [string]::Format($inv, "{0:F2}", $s[4])) -Encoding ASCII
 }

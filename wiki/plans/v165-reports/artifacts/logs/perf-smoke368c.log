@@ -1,0 +1,87 @@
+ -- Loading D:\llms\Qwen3.8-Flash-Next-exl3-3.68bpw_h6_ng8
+ -- CPU split experts (worker, dynamic): model.language_model.layers.0.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.1.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.2.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.3.mlp [112..512) of 512
+ !! autosplit: model.language_model.layers.3 left 23 MiB resident during its measuring forward (budgeted as transient too): dsa_stile 16 MiB, qsa_sel_pool 2 MiB
+ -- CPU split experts (worker, dynamic): model.language_model.layers.4.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.5.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.6.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.7.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.8.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.9.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.10.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.11.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.12.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.13.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.14.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.15.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.16.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.17.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.18.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.19.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.20.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.21.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.22.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.23.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.24.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.25.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.26.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.27.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.28.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.29.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.30.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.31.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.32.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.33.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.34.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.35.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.36.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.37.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.38.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.39.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.40.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.41.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.42.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.43.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.44.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.45.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.46.mlp [112..512) of 512
+ -- CPU split experts (worker, dynamic): model.language_model.layers.47.mlp [112..512) of 512
+ -- autosplit: cuda:0 largest measured transient 934 MiB, 2216 MiB free after load
+
+ -- CPU MoE arena: 0.07 GB of 43.02 GB on large pages (locked in RAM, never paged out; set EXL3_MOE_ARENA_HUGEPAGE=0 to use regular pages)
+ -- CPU MoE worker started: 48 layers, avx512-vbmi, 16 threads
+ -- CPU MoE host affinity: host on LPs [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31]
+ -- Warming up...
+
+ -- Warmup: 16/16 passes in 68.17 s
+ -- Loading tokenizer...
+ -- Bitrate: 4.00 bpw / 6.01 bpw (head)
+ -- Chunk size: 4096
+
+remark: triton_paged.py:902:0: 2309 instructions in function
+remark: triton_paged.py:1060:0: 385 instructions in function
+remark: triton_paged.py:902:0: 2323 instructions in function
+remark: triton_paged.py:1060:0: 386 instructions in function
+remark: triton_paged.py:902:0: 2328 instructions in function
+remark: triton_paged.py:1060:0: 390 instructions in function
+remark: triton_paged.py:1504:0: 5005 instructions in function
+remark: triton_paged.py:1060:0: 382 instructions in function
+
+=== pass     : smoke368c
+=== regime   : production
+=== engine   : 1.6.5
+=== package  : C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\__init__.py
+=== extension: C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3_ext.cp312-win_amd64.pyd
+=== torch    : 2.11.0+cu130 / cuda 13.0
+=== gpu      : NVIDIA GeForce RTX 4090, 24564 MiB, 596.36
+=== free vram at start (MiB): 24138
+=== harness  : 01ADC66F5C9D88D184E6F3673191D19EBE5D4A11DE70EC706389E154B3F98CE2
+=== args     : 
+-m D:\llms\Qwen3.8-Flash-Next-exl3-3.68bpw_h6_ng8 -cs 262144 -chunk_size 4096 -ambs 2 -cq 2,2 -max_length 4096 -mcs 400 -mct 16 -lv -spf -sg -swu
+=== env      : 
+EXL3_MOE_CPU_PIN=1 EXL3_MOE_CPU_SWIZZLE=1 EXL3_MOE_MEMOPS=0
+=== started  : 
+2026-10-29T18:59:04
+=== elapsed s: 102

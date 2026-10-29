@@ -1,0 +1,18 @@
+ -- Loading D:\llms\Qwen3.8-Flash-Next-exl3-2.05bpw
+
+=== pass     : t0-bogus
+=== regime   : production
+=== engine   : 1.6.4
+=== package  : C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\__init__.py
+=== extension: C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3_ext.cp312-win_amd64.pyd
+=== torch    : 2.11.0+cu130 / cuda 13.0
+=== gpu      : NVIDIA GeForce RTX 4090, 24564 MiB, 596.36
+=== free vram at start (MiB): 681
+=== harness  : AAB12627583CF730B28C64C20D54A7570E04800AC062CF2CA1C67498D1866EF2
+=== args     : 
+-m D:\llms\Qwen3.8-Flash-Next-exl3-2.05bpw -cs 262144 -chunk_size 4096 -ambs 2 -cq 2,2 -max_length 4096 -mcs 360 -mct 16 -spf -sg -swu
+=== env      : 
+EXL3_MOE_CPU_PIN=1 EXL3_MOE_CPU_SWIZZLE=1 EXL3_MOE_MEMOPS=0
+=== started  : 
+2026-10-29T05:24:12
+=== elapsed s: 5
