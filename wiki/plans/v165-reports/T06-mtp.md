@@ -52,3 +52,18 @@ exist while drafting (target + draft), so the regime value would cost ~4.2 GB of
 that never appears in a workload. Knob *ratios* stay comparable because every drafting arm uses
 the same `-cs`. Whether the deployed server can hold 262144 **and** a drafter on the 3.68 model is
 a separate fit question, carried to T13.
+
+## Drafting on the production model costs a second CPU arena
+
+First attempt (`rb-ab-368`, split 400, `-cs 32768`) breached at 33 s: free RAM fell to **447 MB**
+(floor 1200) during the load. The log shows why — the MTP head is loaded as a second component
+with its own worker: `CPU MoE worker started: 1 layers`, because **the MTP head inherits the
+main `-mcs`** (model_init shares one `Config` under `use_mtp`; only the *offload*-style knob has a
+draft-specific twin, `-dmcl`, which does not apply to the split path). So drafting adds ~0.9 GB
+of pinned arena on top of the body's 43 GB.
+
+Ruling: the drafting series runs at **`-Split 384` + `-cs 32768`** — 16 fewer body experts on the
+CPU (≈1.7 GB host RAM back, ≈1.7 GB more VRAM) and a 32k cache instead of 262144 (≈1.8 GB more
+VRAM, and the workloads are short). Every drafting arm shares those two constants, so knob ratios
+stay comparable; the deployment consequence (a drafter needs ~2 GB more VRAM or a lower split)
+goes to T13.
