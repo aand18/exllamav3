@@ -1,0 +1,5 @@
+BREACH tag=armA-1-20261029-182042 at 2026-10-29T19:21:30
+free_vram_mb=3273 floor=200 low=False
+free_ram_mb=1991 floor=2048 low=True
+watched_pid=25252 launcher_pid=30916
+action=killed process tree
