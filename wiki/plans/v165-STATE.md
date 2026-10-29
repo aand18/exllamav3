@@ -117,9 +117,11 @@ T1 done 2026-10-29 (`wiki/plans/v165-reports/T01-codebase.md`) — pass, with th
   `D:\llms\Qwen3.8-Flash-Next-DFlash2\` (config.json + 1.206 GB model.safetensors + patches,
   assets excluded) downloaded. The T7 step-2 base-dir copy can **hardlink the 51.8 GB ng8
   table** (same volume) → only ~55 GB of real copies; do it after the T2 step-5 deletions.
-- **T8 build staged:** `C:\Users\yoho\Downloads\exl3-build-165-winperf\src` = worktree at
-  `f85274c2` (tag `win-perf-1.6.5`; engine code identical to branch tip) + fixed `_build.bat`.
-  Build AFTER the stock build finishes (run_build aborts on a concurrent `bdist_wheel`).
+- **T8 build staged+DONE (build part):** `build-winperf` OK 2152 s (2026-10-29, `WHEEL-EXIT 0`):
+  `C:\Users\yoho\Downloads\exl3-build-165-winperf\src\dist\exllamav3-1.6.5-cp312-cp312-win_amd64.whl`
+  sha256 `d3eaf6c9737434f8dea0a39802aeba527bdf6af315a71cede9aff10663b7d523` — src = tag
+  `win-perf-1.6.5` (engine = v1.6.5 + four worker knobs). **NOT installed** — stock 1.6.5 stays
+  for Arm A–T7; T8 installs this wheel (same filename as the stock wheel — trust path + sha).
 - **T13 step 2 pre-researched (tabbyAPI `be74bf0`, `backends/exllamav3/model.py:1014`):**
   the `AsyncGenerator(...)` call forwards `num_draft_tokens`, `dynamic_draft_tokens`,
   `ngram_match_min` + checkpoint kwargs. NOT forwarded: `sparse_draft_head` (-sdh),
