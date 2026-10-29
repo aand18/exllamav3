@@ -111,10 +111,21 @@ T1 done 2026-10-29 (`wiki/plans/v165-reports/T01-codebase.md`) — pass, with th
   (`eval/spec_decode.py` on `165-win-perf`) carries a `-rb_ab` patch: measures the draft arm
   ABBA over `generator._NO_BATCH_READBACK` in one process (T6 step 1). The stock-worktree
   copy (unpatched, sha `2902dec0…`) is superseded.
-- **T7 prep:** `D:\llms\mtp-sidecars\mtp-2.6bpw.safetensors` (805 MiB) and
-  `D:\llms\Qwen3.8-Flash-Next-DFlash2\` (config.json + 1.206 GB model.safetensors + patches,
-  assets excluded) downloaded. The T7 step-2 base-dir copy can **hardlink the 51.8 GB ng8
+- **T7 prep:** `D:\llms\Qwen3.8-Flash-Next-DFlash2\` (config.json + 1.206 GB model.safetensors +
+  patches, assets excluded) downloaded. The T7 step-2 base-dir copy can **hardlink the 51.8 GB ng8
   table** (same volume) → only ~55 GB of real copies; do it after the T2 step-5 deletions.
+- **T7 sidecar prep DONE 2026-10-29 (non-GPU):** all four HermiHg checkpoints staged at
+  `D:\llms\mtp-sidecars\`, sha256-verified against the HF repo LFS oids — 1.8bpw `3614dd45…`,
+  2.3bpw `3a962ea0…`, 2.6bpw `998f5de2…`, 3.1bpw `f701abeb…`. Header-only load check vs the
+  3.68 production base: **tensor key sets identical (6203 `mtp.*` each, zero diff)** — the shadow
+  covers the whole head. Loader mechanism verified in code (`safetensors.py:add_tensor_files`:
+  later file wins per key, prints ` !! Overriding <key> …` — that line in the load log IS the
+  step-2 shadow check). NTFS/drvfs glob order verified alphabetical: `model-*` < `mtp-*` <
+  `ngram_embedding`. **Confounder to record in T07-drafter:** the sidecar shadows 14 small
+  norm/hyper-connection/router tensors with BF16 copies where the base checkpoint holds F16
+  (sidecar copied bf16-exact from the BF16 source) — a small numeric delta beyond the
+  requantized linears. Step-2 dir copy still blocked on disk (36 GB free, ~55 GB needed):
+  needs the T2 step-5 deletions, or a full `cp -al` hardlink copy (operator call).
 - **T8 build staged:** `C:\Users\yoho\Downloads\exl3-build-165-winperf\src` = worktree at
   `f85274c2` (tag `win-perf-1.6.5`; engine code identical to branch tip) + fixed `_build.bat`.
   Build AFTER the stock build finishes (run_build aborts on a concurrent `bdist_wheel`).
