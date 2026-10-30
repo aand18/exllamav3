@@ -206,9 +206,6 @@ def main(args):
         prefill_results = measure_prefill(args, model, cache)
         print()
 
-    print(f" -- alloc peak allocated={torch.cuda.max_memory_allocated() / 1024**2:.0f} MiB "
-          f"reserved={torch.cuda.max_memory_reserved() / 1024**2:.0f} MiB")
-
     if not args.skip_gen:
         # Test generation
         if not args.skip_warmup:
@@ -217,6 +214,12 @@ def main(args):
         print(f"{col_yellow}Generation{col_default}")
         generate_results = measure_generate(args, model, cache)
         print()
+
+    # Last line of the run: the harness reads these watermarks into passes.csv as the pass's peak,
+    # and a -spf probe runs generation, so reporting them before measure_generate recorded the
+    # allocation before the phase under test.
+    print(f" -- alloc peak allocated={torch.cuda.max_memory_allocated() / 1024**2:.0f} MiB "
+          f"reserved={torch.cuda.max_memory_reserved() / 1024**2:.0f} MiB")
 
 
 if __name__ == "__main__":

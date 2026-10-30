@@ -41,21 +41,35 @@ prompt_files = [
 ]
 
 
-def measure(generator, tokenizer, sampler, max_new_tokens, stats_sink = None):
+def read_prompt(filename):
+    """Read one workload prompt, with tool-call arguments decoded to dicts.
+
+    The corpus stores `tool_calls[i].function.arguments` as the JSON *string* the API sends, but
+    the chat template renders an object, so the string has to be decoded before tokenizing. Doing
+    it here means the untimed warm pass and the timed pass hand the template the same input: they
+    used to differ, and on the `Agentic, *` workloads warm_corpus() templated a string where
+    measure() templated a dict.
+    """
     path = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(path, "prompts", filename), "r") as f:
+        data = json.load(f)
+
+    for msg in data["messages"]:
+        if msg.get("tool_calls"):
+            for tc in msg["tool_calls"]:
+                func = tc.get("function", {})
+                args = func.get("arguments")
+                if isinstance(args, str):
+                    func["arguments"] = json.loads(args)
+
+    return data
+
+
+def measure(generator, tokenizer, sampler, max_new_tokens, stats_sink = None):
     all_results = {}
 
     for category, filename, think in prompt_files:
-        with open(os.path.join(path, "prompts", filename), "r") as f:
-            data = json.load(f)
-
-        for msg in data["messages"]:
-            if msg.get("tool_calls"):
-                for tc in msg["tool_calls"]:
-                    func = tc.get("function", {})
-                    args = func.get("arguments")
-                    if isinstance(args, str):
-                        func["arguments"] = json.loads(args)
+        data = read_prompt(filename)
 
         prompt_ids = tokenizer.hf_chat_template(
             messages = data["messages"],
@@ -182,8 +196,7 @@ def warm_corpus(generator, tokenizer, tokens = 64):
     enough to fault the rows in; nothing here is measured.
     """
     for category, filename, think in prompt_files:
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", filename), "r") as f:
-            data = json.load(f)
+        data = read_prompt(filename)
         prompt_ids = tokenizer.hf_chat_template(
             messages = data["messages"], add_generation_prompt = True,
             functions = data.get("functions"), tools = data.get("tools"),
@@ -256,6 +269,49 @@ def print_stats(stats_sink):
         print(tabulate(rows, headers = headers, tablefmt = "pipe", colalign = ("right",) * len(headers)))
 
 
+def count_arms(args):
+    """How many arms this run will measure, following the arm blocks in main()."""
+    arms = 0 if args.no_baseline else 1
+    if args.s_ngram_match_min:
+        arms += 1
+    if args.draft_model_dir:
+        arms += 4 if args.readback_ab else 1
+    return arms
+
+
+def dynamic_placement(model, config):
+    """Whether expert placement can move during a generation.
+
+    Placement is decided at load: BlockSparseMLP_CPU.load_cpu_split() sets `_split_dynamic` from
+    EXL3_MOE_CPU_SWAP and registers the module in `config.infer_params.moe_cpu_swap_modules` only
+    when placement is dynamic, so a static split (EXL3_MOE_CPU_SWAP=0) registers nothing. Every
+    attribute is guarded: a run with no CPU split has no registry at all.
+    """
+    reg = getattr(getattr(config, "infer_params", None), "moe_cpu_swap_modules", None) or []
+    return any(getattr(m, "_split_dynamic", False)
+               for m in list(reg) + list(getattr(model, "modules", None) or []))
+
+
+def swap_refusal(arms: int, dynamic: bool) -> str | None:
+    """Why a multi-arm comparison must not run with dynamic expert placement, or None.
+
+    A placement change re-reads experts from the checkpoint mid-stream, and the engine's own note
+    in block_sparse_mlp_cpu.py says it "visibly derails a generation in progress". With it on, the
+    arms do not generate the same tokens from the same prompt - measured in
+    wiki/plans/v165-reports/artifacts/logs/perf-val-spec-20261029-233352.log:61 vs :103, where
+    Baseline and MTP (greedy) produced different greedy text - so the arm-to-arm ratio compares two
+    different workloads. One arm cannot be miscompared, and static placement keeps every arm on the
+    same tokens.
+    """
+    if arms <= 1 or not dynamic:
+        return None
+    return (f"dynamic expert placement is active (EXL3_MOE_CPU_SWAP) and this run compares {arms} "
+            f"arms. Placement moves between arms, so they do not generate the same tokens and the "
+            f"arm-to-arm ratio is meaningless.\n"
+            f"  remedy: re-run with EXL3_MOE_CPU_SWAP=0 for static placement.\n"
+            f"  deliberate exploration only: pass -swap_ok to measure it anyway.")
+
+
 @torch.inference_mode()
 def main(args):
     if args.ngram_corpus and args.s_ngram_match_min <= 0:
@@ -264,6 +320,17 @@ def main(args):
         args,
         min_draft_len = args.s_ngram_draft_length
     )
+
+    # Hard gate: a ratio between arms only means something when every arm generates the same
+    # tokens. Placement is fixed at load, so this is the first moment it can be checked - and
+    # checking it beats reporting a number that measures two different generations.
+    refusal = swap_refusal(count_arms(args), dynamic_placement(model, config))
+    if refusal:
+        if args.swap_ok:
+            print(f"{col_yellow}WARNING: {refusal}{col_default}", file = sys.stderr)
+        else:
+            print(f"{col_red}ERROR: {refusal}{col_default}", file = sys.stderr)
+            sys.exit(2)
 
     # Optionlly limit scope
     if sw := args.single_workload:
@@ -437,6 +504,11 @@ def main(args):
         else:
             print_stats(stats_sink)
 
+    # Last line of the run: the harness reads these watermarks into passes.csv, and generation is
+    # part of their peak, so they can only be reported once every arm has finished.
+    print(f" -- alloc peak allocated={torch.cuda.max_memory_allocated() / 1024**2:.0f} MiB "
+          f"reserved={torch.cuda.max_memory_reserved() / 1024**2:.0f} MiB")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(allow_abbrev = False)
@@ -453,6 +525,8 @@ if __name__ == "__main__":
     parser.add_argument("-ngram_len", "--s_ngram_draft_length", type = int, help = "N-gram draft length, default = 4", default = 4)
     parser.add_argument("-tokens", "--max_new_tokens", type = int, help = "Max sampled tokens per round", default = 1024)
     parser.add_argument("-temp", "--temperature", action = "store_true", help = "Also sample with temperature")
+    parser.add_argument("-swap_ok", "--swap_ok", action = "store_true",
+                        help = "Measure a multi-arm comparison with dynamic expert placement (EXL3_MOE_CPU_SWAP) still on. The arms do not generate the same tokens, so the ratios are exploration only")
     parser.add_argument("-single", "--single_workload", type = str, help = "Limit to single workload", default = None)
     parser.add_argument("-dstats", "--draft_stats", type = str, help = "Write per-round (position, window, accepted) records to JSON file", default = None)
     parser.add_argument("-nwarm", "--no_warmup_corpus", action = "store_true",
