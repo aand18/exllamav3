@@ -222,15 +222,15 @@ Consequence for the campaign: every arm in T7–T13 must be described as a delta
   worse at w4). Report `T07-drafter.md`.
 - CODE_WINNER (stock vs win-perf): — (T8)
 - THREADS/HOST_CORES: — (T9)
-- **SPLIT: 376 on the 3.18bpw model** (T10 ladder pulled forward by the model swap, 2026-10-29).
-  At 131072: 400 → 4933/9605 free (VRAM/RAM), 384 → 1777/7059 and tg 43.5 @130816,
-  **376 → 2141/8382 and tg 49.8 @130816**, 368 → **loads and warms up, then dies in long prefill**
-  (1951 MB free during warmup, the 131072 band's scratch request takes it to 15 MB and the watcher
-  kills it). Correction 2026-10-30: "does not load" was wrong — `split368` is `status=ok` at 4096
-  with 2045 MB free (critique C7). 376 is the fastest measured; the 8-expert step from 384 to 376
-  is worth ~15 % tg but was measured **cold→warm** and is therefore **provisional** until re-run
-  with a frozen profile (critique C2). T10 owns the finer ladder (368/372/380) and the
-  max-offload corner.
+- **SPLIT: 376, confirmed 2026-10-30 on a warm ladder** (T10). Four arms at 131072, all `ok`:
+  380 TG 36.76 / 376 40.38 / 372 39.93 / 368 38.43 at the 130816 band, PP flat (1824–1849).
+  **368 now completes the full pass** — `perf.py`'s `empty_cache()` between bands removed the
+  allocator-scratch death; the "does not load / cannot run long context" claim is closed.
+  The 376 confirm pair spreads 36.30–40.38 (10 % peak-to-peak), so 368/372/376 are **tied on
+  decode** and 380 is unprovable; **376 is chosen on the median plus headroom** (3617 MB free vs
+  3081 at 368, and the winning drafter costs ~1.4 GB). The old "384 → 376 is worth ~15 %" claim does
+  not survive the warm measurement (380 → 376 is 9 % at one pass each, inside the spread).
+  Report `T10-placement.md`. Step 5 (pinned arena / promote-on-miss) not run this session.
 - CACHE_MODE: **Q2 (2,2) — operator decision, frozen**
 - STAGING_PAGES: — (T11)
 - PLE/GDN: — (T12)
