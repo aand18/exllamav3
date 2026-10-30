@@ -1,0 +1,24 @@
+remark: conv1d.py:17:0: 487 instructions in function
+remark: conv1d.py:17:0: 991 instructions in function
+remark: conv1d.py:17:0: 983 instructions in function
+Traceback (most recent call last):
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 538, in <module>
+    main(_args)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\torch\utils\_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 419, in main
+    res_draft = measure(generator, tokenizer, GreedySampler(), args.max_new_tokens, stats_sink if rb_i == 0 else None)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 91, in measure
+    results = generator.iterate()
+              ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\torch\utils\_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\generator\generator.py", line 801, in iterate
+    draft_tokens = self.iterate_draftmodel_dflash_gen(results, draft_window)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\generator\generator.py", line 1387, in iterate_draftmodel_dflash_gen
+    self.draft_ids_pinned[:batch_size, :window].copy_(new_ids[:batch_size, :window])
+RuntimeError: The size of tensor a (8) must match the size of tensor b (7) at non-singleton dimension 1

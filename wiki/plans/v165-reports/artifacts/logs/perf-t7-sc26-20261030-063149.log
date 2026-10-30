@@ -1,0 +1,58 @@
+ -- Overriding from: D:\llms\mtp-sidecars\mtp-2.6bpw.safetensors:
+      mtp*
+ -- Loading D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8
+
+Traceback (most recent call last):
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 538, in <module>
+    main(_args)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\torch\utils\_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\spec_decode.py", line 319, in main
+    model, config, cache, tokenizer, draft_model, draft_config, draft_cache = model_init.init(
+                                                                              ^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model_init.py", line 763, in init
+    draft_model.load(
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\torch\utils\_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\model.py", line 765, in load
+    for _ in f: pass
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\model.py", line 670, in load_gen
+    yield from self._load_autosplit(
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\model\model_ls.py", line 194, in _load_autosplit
+    module.load(load_device, max_chunk_size = max_chunk_size)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\modules\transformer.py", line 84, in load
+    super().load(device, **kwargs)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\modules\module.py", line 70, in load
+    module.load(device, **kwargs)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\modules\block_sparse_mlp.py", line 821, in load
+    self.cpu_maybe_split_load(device, **kwargs)
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\modules\block_sparse_mlp_cpu.py", line 460, in cpu_maybe_split_load
+    if self.load_cpu_split(device, split_k, **kwargs):
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\modules\block_sparse_mlp_cpu.py", line 810, in load_cpu_split
+    checks = [bias_keys(ls) for ls in ([self.gates] if self.gated else []) + [self.ups, self.downs]]
+              ^^^^^^^^^^^^^
+  File "C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\modules\block_sparse_mlp_cpu.py", line 805, in bias_keys
+    has = [(l.key + ".bias") in stc.tensor_file_map for l in ls[first:]]
+                                ^^^^^^^^^^^^^^^^^^^
+AttributeError: 'VariantSafetensorsCollection' object has no attribute 'tensor_file_map'
+
+=== pass     : t7-sc26
+=== run id   : t7-sc26-20261030-063149
+=== regime   : production
+=== engine   : 1.6.5
+=== package  : C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\__init__.py
+=== extension: C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3_ext.cp312-win_amd64.pyd
+=== torch    : 2.11.0+cu130 / cuda 13.0
+=== gpu      : NVIDIA GeForce RTX 4090, 24564 MiB, 596.36
+=== free vram at start (MiB): 24138
+=== harness  : FBA75185565970C8C80A9F954DEA6AA5A3131E05A8E76352111606B7E945D3C0
+=== args     : 
+-m D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8 -cs 40960 -chunk_size 4096 -ambs 2 -cq 2,2 -mcs 376 -mct 16 -mtp -ndt 2 -or mtp-sidecar-2.6bpw.yaml -nbl
+=== env      : 
+EXL3_HOST_MEM_RESERVE_MB=0 EXL3_MOE_ARENA_HUGEPAGE=0 EXL3_MOE_CPU_PIN=1 EXL3_MOE_CPU_SWAP=0 EXL3_MOE_CPU_SWIZZLE=1 EXL3_MOE_MEMOPS=0 FROZEN_STATE=master->active PYTHONUTF8=1 XDG_CACHE_HOME=C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\engine-state\active
+=== started  : 
+2026-10-30T07:31:49
+=== elapsed s: 6

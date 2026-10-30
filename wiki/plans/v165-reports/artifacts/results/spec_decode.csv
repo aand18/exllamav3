@@ -201,3 +201,67 @@ hdt24-dds,hdt24-dds-20261030-053910,Creative (reasoning),MTP + hybrid 24 (greedy
 hdt24-dds,hdt24-dds-20261030-053910,Translation,MTP + hybrid 24 (greedy),43.07,0.000,1.31,1.93
 hdt24-dds,hdt24-dds-20261030-053910,Translation (reasoning),MTP + hybrid 24 (greedy),41.50,0.000,1.26,1.93
 hdt24-dds,hdt24-dds-20261030-053910,Trivial repetition,MTP + hybrid 24 (greedy),76.57,0.000,10.98,11.78
+t7-ref,t7-ref-20261030-062125,Agentic; code,MTP (greedy),52.96,0.000,1.49,2.00
+t7-ref,t7-ref-20261030-062125,Agentic; curl,MTP (greedy),50.53,0.000,1.39,2.00
+t7-ref,t7-ref-20261030-062125,Coding,MTP (greedy),58.98,0.000,1.51,2.00
+t7-ref,t7-ref-20261030-062125,Creative,MTP (greedy),37.22,0.000,1.04,2.00
+t7-ref,t7-ref-20261030-062125,Creative (reasoning),MTP (greedy),38.47,0.000,1.07,2.00
+t7-ref,t7-ref-20261030-062125,Translation,MTP (greedy),42.17,0.000,1.35,2.00
+t7-ref,t7-ref-20261030-062125,Translation (reasoning),MTP (greedy),42.30,0.000,1.30,2.00
+t7-ref,t7-ref-20261030-062125,Trivial repetition,MTP (greedy),49.22,0.000,1.68,2.00
+t7-sc26-dir,t7-sc26-dir-20261030-063352,Agentic; code,MTP (greedy),50.39,0.000,1.44,2.00
+t7-sc26-dir,t7-sc26-dir-20261030-063352,Agentic; curl,MTP (greedy),49.39,0.000,1.42,2.00
+t7-sc26-dir,t7-sc26-dir-20261030-063352,Coding,MTP (greedy),57.51,0.000,1.52,2.00
+t7-sc26-dir,t7-sc26-dir-20261030-063352,Creative,MTP (greedy),36.64,0.000,1.03,2.00
+t7-sc26-dir,t7-sc26-dir-20261030-063352,Creative (reasoning),MTP (greedy),37.80,0.000,1.10,2.00
+t7-sc26-dir,t7-sc26-dir-20261030-063352,Translation,MTP (greedy),41.65,0.000,1.33,2.00
+t7-sc26-dir,t7-sc26-dir-20261030-063352,Translation (reasoning),MTP (greedy),41.66,0.000,1.30,2.00
+t7-sc26-dir,t7-sc26-dir-20261030-063352,Trivial repetition,MTP (greedy),28.15,0.000,1.66,2.00
+t7-sc26-dir-r2,t7-sc26-dir-r2-20261030-064537,Agentic; code,MTP (greedy),50.93,0.000,1.46,2.00
+t7-sc26-dir-r2,t7-sc26-dir-r2-20261030-064537,Agentic; curl,MTP (greedy),48.84,0.000,1.33,2.00
+t7-sc26-dir-r2,t7-sc26-dir-r2-20261030-064537,Coding,MTP (greedy),57.84,0.000,1.56,2.00
+t7-sc26-dir-r2,t7-sc26-dir-r2-20261030-064537,Creative,MTP (greedy),35.83,0.000,1.02,2.00
+t7-sc26-dir-r2,t7-sc26-dir-r2-20261030-064537,Creative (reasoning),MTP (greedy),38.57,0.000,1.12,2.00
+t7-sc26-dir-r2,t7-sc26-dir-r2-20261030-064537,Translation,MTP (greedy),42.00,0.000,1.31,2.00
+t7-sc26-dir-r2,t7-sc26-dir-r2-20261030-064537,Translation (reasoning),MTP (greedy),41.30,0.000,1.29,2.00
+t7-sc26-dir-r2,t7-sc26-dir-r2-20261030-064537,Trivial repetition,MTP (greedy),48.94,0.000,1.76,2.00
+t7-ref-ndt4,t7-ref-ndt4-20261030-065614,Agentic; code,MTP (greedy),46.79,0.000,1.87,4.00
+t7-ref-ndt4,t7-ref-ndt4-20261030-065614,Agentic; curl,MTP (greedy),44.69,0.000,1.75,4.00
+t7-ref-ndt4,t7-ref-ndt4-20261030-065614,Coding,MTP (greedy),54.95,0.000,1.94,4.00
+t7-ref-ndt4,t7-ref-ndt4-20261030-065614,Creative,MTP (greedy),29.17,0.000,1.16,4.00
+t7-ref-ndt4,t7-ref-ndt4-20261030-065614,Creative (reasoning),MTP (greedy),30.19,0.000,1.23,4.00
+t7-ref-ndt4,t7-ref-ndt4-20261030-065614,Translation,MTP (greedy),34.36,0.000,1.59,4.00
+t7-ref-ndt4,t7-ref-ndt4-20261030-065614,Translation (reasoning),MTP (greedy),34.91,0.000,1.54,4.00
+t7-ref-ndt4,t7-ref-ndt4-20261030-065614,Trivial repetition,MTP (greedy),48.56,0.000,2.72,4.00
+t7-sc26-ndt4,t7-sc26-ndt4-20261030-070733,Agentic; code,MTP (greedy),48.67,0.000,2.02,4.00
+t7-sc26-ndt4,t7-sc26-ndt4-20261030-070733,Agentic; curl,MTP (greedy),44.15,0.000,1.77,4.00
+t7-sc26-ndt4,t7-sc26-ndt4-20261030-070733,Coding,MTP (greedy),57.44,0.000,2.11,4.00
+t7-sc26-ndt4,t7-sc26-ndt4-20261030-070733,Creative,MTP (greedy),28.08,0.000,1.08,4.00
+t7-sc26-ndt4,t7-sc26-ndt4-20261030-070733,Creative (reasoning),MTP (greedy),29.55,0.000,1.19,4.00
+t7-sc26-ndt4,t7-sc26-ndt4-20261030-070733,Translation,MTP (greedy),33.88,0.000,1.53,4.00
+t7-sc26-ndt4,t7-sc26-ndt4-20261030-070733,Translation (reasoning),MTP (greedy),33.56,0.000,1.46,4.00
+t7-sc26-ndt4,t7-sc26-ndt4-20261030-070733,Trivial repetition,MTP (greedy),34.00,0.000,2.39,4.00
+t7-dflash2-w4,t7-dflash2-w4-20261030-071928,Agentic; code,DFlash (greedy),73.48,0.000,3.09,4.00
+t7-dflash2-w4,t7-dflash2-w4-20261030-071928,Agentic; curl,DFlash (greedy),66.89,0.000,2.62,4.00
+t7-dflash2-w4,t7-dflash2-w4-20261030-071928,Coding,DFlash (greedy),80.46,0.000,2.82,4.00
+t7-dflash2-w4,t7-dflash2-w4-20261030-071928,Creative,DFlash (greedy),44.37,0.000,1.87,4.00
+t7-dflash2-w4,t7-dflash2-w4-20261030-071928,Creative (reasoning),DFlash (greedy),45.64,0.000,1.88,4.00
+t7-dflash2-w4,t7-dflash2-w4-20261030-071928,Translation,DFlash (greedy),37.89,0.000,1.47,4.00
+t7-dflash2-w4,t7-dflash2-w4-20261030-071928,Translation (reasoning),DFlash (greedy),37.08,0.000,1.47,4.00
+t7-dflash2-w4,t7-dflash2-w4-20261030-071928,Trivial repetition,DFlash (greedy),66.80,0.000,3.99,4.00
+t7-dflash2-w6,t7-dflash2-w6-20261030-072942,Agentic; code,DFlash (greedy),76.31,0.000,4.10,6.00
+t7-dflash2-w6,t7-dflash2-w6-20261030-072942,Agentic; curl,DFlash (greedy),64.45,0.000,3.12,6.00
+t7-dflash2-w6,t7-dflash2-w6-20261030-072942,Coding,DFlash (greedy),81.87,0.000,3.38,6.00
+t7-dflash2-w6,t7-dflash2-w6-20261030-072942,Creative,DFlash (greedy),33.97,0.000,1.72,6.00
+t7-dflash2-w6,t7-dflash2-w6-20261030-072942,Creative (reasoning),DFlash (greedy),37.94,0.000,1.85,6.00
+t7-dflash2-w6,t7-dflash2-w6-20261030-072942,Translation,DFlash (greedy),37.72,0.000,1.92,6.00
+t7-dflash2-w6,t7-dflash2-w6-20261030-072942,Translation (reasoning),DFlash (greedy),32.76,0.000,1.55,6.00
+t7-dflash2-w6,t7-dflash2-w6-20261030-072942,Trivial repetition,DFlash (greedy),78.58,0.000,5.91,6.00
+t13-262k-dflash-s392,t13-262k-dflash-s392-20261030-081052,Agentic; code,DFlash (greedy),71.54,0.000,3.31,4.00
+t13-262k-dflash-s392,t13-262k-dflash-s392-20261030-081052,Agentic; curl,DFlash (greedy),60.98,0.000,2.45,4.00
+t13-262k-dflash-s392,t13-262k-dflash-s392-20261030-081052,Coding,DFlash (greedy),77.03,0.000,2.76,4.00
+t13-262k-dflash-s392,t13-262k-dflash-s392-20261030-081052,Creative,DFlash (greedy),41.16,0.000,1.78,4.00
+t13-262k-dflash-s392,t13-262k-dflash-s392-20261030-081052,Creative (reasoning),DFlash (greedy),37.40,0.000,1.52,4.00
+t13-262k-dflash-s392,t13-262k-dflash-s392-20261030-081052,Translation,DFlash (greedy),36.58,0.000,1.46,4.00
+t13-262k-dflash-s392,t13-262k-dflash-s392-20261030-081052,Translation (reasoning),DFlash (greedy),38.33,0.000,1.52,4.00
+t13-262k-dflash-s392,t13-262k-dflash-s392-20261030-081052,Trivial repetition,DFlash (greedy),71.58,0.000,3.99,4.00

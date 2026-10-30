@@ -291,17 +291,30 @@ T4 (`T04-armA.md` — reference + thresholds), T5 (`T05-memops.md` — MEMOPS_WI
   1.6.5, ABBA `t8-stock-a1` / `t8-fork-b1` / `t8-fork-b2` / `t8-stock-a2` — **null** on pp and tg
   (pp 1.00/0.97, tg 1.04/0.99, inside the ladder's own ±3–5 % jitter). Fork kept (needed for the
   sidecar path, knobs default-off). **T8 step 3 (the four worker knobs) not yet run.**
-- **T7 in flight** (`T07-drafter.md`): reference `t7-ref` 46.48 tok/s / 1.35 accepted; the `-or`
-  sidecar path **crashed** (engine bug: `bias_keys()` read `stc.tensor_file_map`, absent on
+- **T7 done** (`T07-drafter.md`): reference `t7-ref` 46.48 tok/s / 1.35 accepted. The `-or` sidecar
+  path **crashed** (engine bug: `bias_keys()` read `stc.tensor_file_map`, absent on
   `VariantSafetensorsCollection`; fixed in the repo at `330ce0cd`, not in the installed wheel), so
-  the sidecar runs through a hardlink dir copy `…-mtpopt` (the production shape). Sidecar 2.6 bpw:
-  42.90 tok/s, acceptance **identical** (1.35/2.00) while the generated text differs — window-4
-  pair pending to give the head its fair shot.
+  the sidecar ran through a hardlink dir copy `…-mtpopt` (the production shape). Sidecar 2.6 bpw:
+  42.90 / 45.53 tok/s across two runs, acceptance **identical** — closed negative; window 4 made it
+  worse (38.67 vs 40.45, 1.69 vs 1.73 accepted). **DFlash2 BF16 at window 4 wins**: 56.57 tok/s,
+  2.40/4.00, median per-category 1.258 (translation the one regression, 0.88–0.90). Window 8 is out
+  of contract (drafter `block_size` 8, generator asks window+1) and crashed — engine defect #2.
 - Harness: `passes.csv` header repadded to its 23 real columns (55 rows now readable); `ratios.py`
   labels pre-`runner` rows `perf`; `verify_task --post --cites-failure <run_id>` added so a report
   can cite the run that proved a defect without it reading as a measurement.
-- Not started: T9 (inherited defaults/CUDA knobs), T10 (split ladder today), T11 (staging pages,
-  rcs, Q2 sanity), T12 (PLE/GDN), T13 (lock + deploy + verify).
+- **T10 done** (`T10-placement.md`): warm ladder 380/376/372/368 all ok — **368 now completes the
+  full 131072 pass** (`empty_cache()` between bands removed the allocator death); 376 wins on the
+  median (40.38) with 372 (39.93) and 368 (38.43) tied inside a 10 % spread, and 376 chosen for the
+  3617 MB headroom the drafter needs.
+- **T13 measured, deployment not applied** (`T13-deploy.md`): 262144 + DFlash2 does **not** fit at
+  split 376 (`Insufficient VRAM`, 25 s); it fits at **392** and costs 4 % (54.32 vs 56.57). 262144
+  *without* a drafter fits at 376 (PP 1839.54 @262144, TG 39.32 @261888). Huge pages: three passes
+  each, `=1` median 39.57 vs `=0` 40.37 — **no benefit**, the 12–19 % claim is retired. The
+  production `config.yml` is stale (deleted 2.05bpw model, FP16 cache, split 360); the corrected
+  block is written in `T13-deploy.md` as a proposal and **not applied** — restarting the server is
+  the operator's call.
+- Not started: T8 step 3 (the four worker knobs), T9 (inherited defaults/CUDA knobs), T11 (staging
+  pages, rcs, Q2 sanity), T12 (PLE/GDN), T13 steps 3–4 (boot under the watcher, verify).
 
 ## Non-GPU prep done 2026-10-29
 
