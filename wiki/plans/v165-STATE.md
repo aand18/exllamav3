@@ -226,6 +226,33 @@ Consequence for the campaign: every arm in T7–T13 must be described as a delta
 - STAGING_PAGES: — (T11)
 - PLE/GDN: — (T12)
 
+## Session drift 2026-10-30 (why today's absolutes are lower)
+
+The first perf pass of this session (`t8-stock-a1`, 2026-10-30 05:50) measured **TG 38.38 tok/s at
+130816** on the regime the archive used yesterday, against **49.79** for `split376-131k` and 48.87
+for `armA2-318`. PP is unchanged (1825 vs 1828 at 131072), so it is decode-side only.
+
+Isolated, each in its own pass:
+
+| variable changed | TG @130816 |
+|---|---|
+| `t8-stock-a1` (state regime: `-cs 131072`, frozen profile) | 38.38 |
+| `t8-cs262` (archive's `-cs 262144`, frozen profile) | 41.25 |
+| `t8-repro226` (`-cs 262144`, `-NoFrozenState` — yesterday's exact regime) | 37.47 |
+
+So the cache size explains ~7 % and the frozen profile nothing; the remaining ~15 % is not the
+regime. Ruled out while the passes ran: GPU SM 2895–2910 MHz (power 90–240 W of 480, 39–47 °C), CPU
+pinned at 4201 MHz, host load ≤ 83 % during decode and ≤ 3 % idle, no other GPU process, identical
+load banner (48-layer worker, 16 threads, same host affinity LPs), same `perf.py` ladder. The MTP
+head is not in a perf argv (draft args are spec_decode-only), and PP — which exercises the same
+weights — is bit-for-bit at yesterday's level.
+
+**Consequence, and the rule for this session:** every number taken today is compared **only inside
+this session**. Yesterday's absolutes (and the 49.8 that chose split 376) are not a control, per the
+protocol's own rule. Any arm whose verdict rests on a cross-day comparison must be re-measured today.
+The cause is still unknown and is itself a finding: it is recorded here rather than absorbed, and a
+future session that reproduces 49 tok/s must say which of the two levels its arms came from.
+
 ## Advise-only (do not change without a task)
 
 - large pages / `SeLockMemoryPrivilege` (no privilege on this box)
@@ -242,14 +269,30 @@ the RAM floor is the component shrunk instead.
 
 ## Tasks
 
-See `wiki/plans/2026-10-29-v165-retune.md` (T0–T13). T0 done 2026-10-29
-(`wiki/plans/v165-reports/T00-preconditions.md`); harness commit `09923498`.
-T1 done 2026-10-29 (`wiki/plans/v165-reports/T01-codebase.md`) — pass, with the
-`EXL3_NO_BATCH_READBACK` flag for T6. T2 done (`T02-models.md`), T3 done (`T03-build.md`),
-**T4 done (`T04-armA.md`)** — reference arm + acceptance thresholds frozen. T5 done (`T05-memops.md`) — MEMOPS_WINNER=0.
-T6 in flight (`T06-mtp.md`): readback settled as inconclusive (default kept), drafting knobs now
-measured on the 3.68 model with `-cs 32768` (two caches exist while drafting; workloads are
-short). Next: T7 (drafter), T8 (code delta), T9–T13.
+See `wiki/plans/2026-10-29-v165-retune.md` (T0–T13). Done before 2026-10-30: T0
+(`T00-preconditions.md`), T1 (`T01-codebase.md`), T2 (`T02-models.md`), T3 (`T03-build.md`),
+T4 (`T04-armA.md` — reference + thresholds), T5 (`T05-memops.md` — MEMOPS_WINNER=0).
+
+### Progress 2026-10-30 (this session, all on the win-perf wheel unless noted)
+
+- **T6 done** (`T06-mtp.md`): `-sdh` negative (6 % slower, acceptance 1.17 vs 1.34); `-hdt`
+  repetition-only (median per-category 0.99–1.02, mean is one synthetic workload); `-dds`
+  unresolved (+2 % broad, inside the reference's own 0.972–1.014 spread). `MTP_WINNER` frozen.
+- **T8 done for the code delta** (report pending): win-perf wheel `1422a0a1…` installed over stock
+  1.6.5, ABBA `t8-stock-a1` / `t8-fork-b1` / `t8-fork-b2` / `t8-stock-a2` — **null** on pp and tg
+  (pp 1.00/0.97, tg 1.04/0.99, inside the ladder's own ±3–5 % jitter). Fork kept (needed for the
+  sidecar path, knobs default-off). **T8 step 3 (the four worker knobs) not yet run.**
+- **T7 in flight** (`T07-drafter.md`): reference `t7-ref` 46.48 tok/s / 1.35 accepted; the `-or`
+  sidecar path **crashed** (engine bug: `bias_keys()` read `stc.tensor_file_map`, absent on
+  `VariantSafetensorsCollection`; fixed in the repo at `330ce0cd`, not in the installed wheel), so
+  the sidecar runs through a hardlink dir copy `…-mtpopt` (the production shape). Sidecar 2.6 bpw:
+  42.90 tok/s, acceptance **identical** (1.35/2.00) while the generated text differs — window-4
+  pair pending to give the head its fair shot.
+- Harness: `passes.csv` header repadded to its 23 real columns (55 rows now readable); `ratios.py`
+  labels pre-`runner` rows `perf`; `verify_task --post --cites-failure <run_id>` added so a report
+  can cite the run that proved a defect without it reading as a measurement.
+- Not started: T9 (inherited defaults/CUDA knobs), T10 (split ladder today), T11 (staging pages,
+  rcs, Q2 sanity), T12 (PLE/GDN), T13 (lock + deploy + verify).
 
 ## Non-GPU prep done 2026-10-29
 
