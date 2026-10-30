@@ -19,7 +19,7 @@ Legend: ✅ done · 🟡 implemented, GPU validation pending · ⚠️ confirmed
 |---|---|---|---|---|
 | C1 | `mtp-ref-318` was a **cold** run (no saved expert profile); later arms loaded `placement from saved profile`, so the T6 ratios divide warm arms by a cold reference | **Confirmed** — `perf-mtp-ref-318-…log:2` has no `placement from saved profile`; `mtp-ndt2-318:2` does | T6 report demotes `mtp-ref-318` to "cold reference"; the reference must be a **warm** re-run (`mtp-ref2-318`) and the verdict read from the `ARM` lines (tok/s + acceptance), not from `MTP/Baseline` | ✅ (report + protocol) |
 | C2 | The 3.18 split ladder was measured on a cold first load and warm subsequent loads; "8 experts = +15 %" was never ABBA'd | **Confirmed** — `smoke318` was the first 3.18 load; `split376*` show `placement from saved profile` | Ladder result is recorded as **provisional**; warm re-run + ABBA required before SPLIT is frozen; the split gate now runs on a frozen profile (`state_snapshot.sh`) | ✅ (documents) / 🟡 (re-measure) |
-| C3 | The in-run `Baseline` is confounded by (a) dynamic expert swap sweeps between arms and (b) the 51.8 GB ngram table streaming from disk | **Confirmed** as mechanism (`run_pending_swap_sweeps` every 128 steps; PLE streams when `ngram_ram` off); explains the 6.99 t/s baseline outlier | Protocol: never divide by a cold/streaming baseline. Set `EXL3_MOE_CPU_SWAP=0` for knob arms and warm the ngram path before timing; drafting verdicts use `ARM` lines | ✅ (protocol + harness) |
+| C3 | The in-run `Baseline` is confounded by (a) dynamic expert swap sweeps between arms and (b) the 51.8 GB ngram table streaming from disk | **Confirmed** as mechanism (`run_pending_swap_sweeps` every 128 steps; PLE streams when `ngram_ram` off); explains the 6.99 t/s baseline outlier | Protocol: never divide by a cold/streaming baseline. Set `EXL3_MOE_CPU_SWAP=0` for knob arms and warm the ngram path before timing; drafting verdicts use `ARM` lines | ✅ (protocol; the harness half was false until `7c043454` + `8c69b5ec` — see D2/D4) |
 | C4 | The `-sdh` "profile build, discard" plan never measures the discarded size, and the token profile is shared across checkpoints and sizes | **Confirmed** — `token_stats_path` keys on tokenizer+vocab, not on checkpoint or `-sdh`; profile only observed while an `sdh>0` generator runs | Plan text rewritten: profile warm-up run is **not** a measurement of any size; each `-sdh` size gets its own measured run after the profile is warm | ✅ |
 | C5 | T4 spread is misquoted as `pp ±5 % (0.95–0.99)` when the 4096 band is `0.92` (A2 slower everywhere) | **Confirmed** — `T04b` ratio table: pp 0.92 at 4096, every band ≤0.99; tg 0.91–1.01 | T04 and STATE rewritten: the pair is a **one-sided drift** (`A2 = 0.92–0.99 × A1`), so the threshold is an interval, not a symmetric ± | ✅ |
 | C6 | "Drafting leaks ~700 MB per arm" is **self-inflicted**: `spec_decode.py` builds 5 `Generator`s without clearing `recurrent_cache`/`host_pool`; tabbyAPI creates **one** generator at load | **Confirmed** on both counts — Generator is inside the arm loop; tabbyAPI has `create_generator()` + `close()` + `gc.collect()` on its error path | Report corrected (no engine leak, no tabbyAPI "per job" caveat); `spec_decode.py` gains `reset_arm()` and reuses one generator for the readback toggle | ✅ |
@@ -41,8 +41,101 @@ Legend: ✅ done · 🟡 implemented, GPU validation pending · ⚠️ confirmed
 | I2 | Freeze hidden state across arms: expert/token profile snapshots, and a clean multi-arm process | `bench/state_snapshot.sh` (snapshot/restore via `XDG_CACHE_HOME`, which pins both `expert_stats` and `token_stats`); `eval/spec_decode.py` gains `reset_arm()` and one shared generator; protocol: restore the snapshot before every arm, `EXL3_MOE_CPU_SWAP=0` while comparing knobs, warm the prompt corpus first | ✅ |
 | I3 | Watchdog/allocator interaction: flush cached blocks between bands, record allocator watermarks, watch the whole process tree | `perf.py` calls `torch.cuda.empty_cache()` between bands and prints `alloc peak allocated/reserved`; `run_pass.ps1` parses those into `passes.csv`; `watch.ps1` sums the working set of the target PID **and its descendants** (the 43 GB arena lives in the worker) | ✅ |
 | I4 | Mechanism counters first, tok/s second | Protocol + tooling: `EXL3_SPLIT_PROF=1` 60 s probe gates thread/stream knobs (T9/T10); drafting separates deterministic acceptance (1 pass) from step latency (2–3 fixed-length workloads, one process) | ✅ |
-| I5 | Single machine-readable state; no copy-pasted CLI strings | `bench/windows/state.json` is the one source (`run_pass.ps1` reads model/split/threads/cache/env/draft args from it; `-Extra`/`-Env` carry only the delta). Plans express steps as deltas vs that file. `spec_decode` results land in `results/spec_decode.csv`, and `ratios.py` reads it | ✅ |
+| I5 | Single machine-readable state; no copy-pasted CLI strings | `bench/windows/state.json` is the one source (`run_pass.ps1` reads model/split/threads/cache/env/draft args from it; `-Extra`/`-Env` carry only the delta). Plans express steps as deltas vs that file. `spec_decode` results land in `results/spec_decode.csv`, and `ratios.py` reads it | ✅ (draft args and the drafting cache only since `7c043454`/`89f0b787` — see D2) |
 | I6 | Automated pre/post-task gates so a report cannot contradict its own logs | `bench/verify_task.py`: pre-run (wheel sha, profile warm, `state.json` consistency, `size_check` fit) and post-run (every cited `run_id` is `ok`, `breach=0`, profile-warm header present, `ratios.py` table regenerated) | ✅ |
+
+## C. Second review (code + skills)
+
+Second review of this work: session `ses_e762fc6aaffeqwXTkhBgyOdswh`, message
+`msg_18a21ae37001YArivM6a5bJ4zw` ("Qwen3.8-Flash-Next retuning plan critique"), read against the
+implementer's report (`msg_18a04de20001iGNMGh2WCdCcDY`) and its skill proposal
+(`msg_18a123bb3001Zw9IGKxG3M8W98`). Part 1 found six defects the first pass missed and all six are
+fixed on this branch; Part 2 ruled on four skill proposals and those rulings are binding (one skill
+extended, nothing else created). Every commit named below is on `165-win-perf` between `79926691` and
+`1c5b9670`. The sections that follow C ("Conflicts resolved", "Verification performed", "Not
+exercised yet") describe the **first** pass; C records what the second review changed on top.
+
+| # | Defect (the review's claim) | Evidence | Fix | Commit | Status |
+|---|---|---|---|---|---|
+| D1 | `deploy.sh` ships `state.json` only when the destination has none, so a regime change in the repo is not deployed while `verify_task.py --pre` validates the new one | `deploy.sh:25-27` (pre-fix) installs under `if [ ! -f ... ]` | `state.json` installed on every run; `state.json: updated` / `unchanged` printed from a sha256 before/after; the file joins the closing `sha256sum` | `5134738b` | ✅ (four deploys to a scratch `DEST`: updated, unchanged, updated on a regime edit, updated on the revert) |
+| D2 | `run_pass.ps1` never read `state.json`'s `.draft` or `.knob_arms_disable_swap`: a drafting arm ran the engine default 4 draft tokens while the state said 2, and the drafting cache arrived as a **second** `-cs` | `perf-val-spec-20261029-233352.log:160-163` logs `-cs 131072 … -mtp -cs 40960` and `ARM … acc=1.74/4.00`; its env line has no `EXL3_MOE_CPU_SWAP` | `$ST.draft` → `-mtp/-ndt/-sdh/-hdt/-dds` (`spec_decode` only), `-CacheSize` (`draft.spec_decode_cache_size` for the drafting runner), one `-cs`, `EXL3_MOE_CPU_SWAP=0`, `-DryRun`; `-Extra` may not restate a regime flag in any spelling | `7c043454`, `89f0b787`, `8c69b5ec` | ✅ (dry run: `-cs 40960` once, `-mtp -ndt 2`, `EXL3_MOE_CPU_SWAP=0`; a real drafting pass is the T6 resume) |
+| D3 | `warm_corpus()` read the prompts without the `tool_calls[i].function.arguments` decoding `measure()` does, so the warm-up templated a string where the measurement templated a dict | `eval/spec_decode.py:184-191` vs `:52-58` (pre-fix) | one `read_prompt()` for both callers, plus a test that parses every file in `eval/prompts/` and pins both call sites | `c6daa77d` | ✅ |
+| D4 | Dynamic expert placement makes an arm-to-arm ratio meaningless: with `EXL3_MOE_CPU_SWAP` on, the arms do not generate the same tokens | `block_sparse_mlp_cpu.py:830` decides at load and `:955` says a placement change "visibly derails a generation in progress"; `perf-val-spec-…log:61` vs `:103` differ from the same prompt | `swap_refusal(arms, dynamic)` (pure, tested) + `dynamic_placement()` read after `model_init.init`; a multi-arm run with placement on exits 2 unless `-swap_ok`; the harness sets `EXL3_MOE_CPU_SWAP=0` for the drafting runner so the gate should never have to fire; a `spec_decode` run with no `ARM` line and no table row is `fail`, so a refusal cannot land as `ok` | `c6daa77d`, `db1029e3`, `25d7a6e0` | 🟡 (gate, verdict and arm count tested offline; no multi-arm run has loaded a model since) |
+| D5 | `alloc peak` printed before `measure_generate`, so a `-spf` probe reported allocation before generation and `passes.csv` recorded `0,0` for spec_decode | `eval/perf.py:209` (pre-fix); `passes.csv:45` | the print moved to the last statement of `main()` in `eval/perf.py` and added to the end of `eval/spec_decode.py`, same wording (`alloc peak allocated=<n> MiB reserved=<n> MiB`) | `c6daa77d` | 🟡 (the next real pass fills `peak_alloc_mb`/`peak_reserved_mb`; nothing offline can) |
+| D6 | `verify_task.py`'s gates were no-ops: the warm test matched the string anywhere in the log, the percentage gate printed PASS for any `%`, `--pre` called `size_check.py` without `--draft`, and nothing compared the deployed `state.json` with the repo's | `perf-mtp-ref-318-20261029-222244.log` has 49 `CPU split experts` lines, 48 warm, line 2 (`mtp.layers.0.mlp`) cold, and the old substring test returned PASS; `verify_task.py:152-154` (pre-fix) | per-line warm gate naming every cold line, ratio gate that reads the report's own table min/max, `--draft mtp` from the state, `--deployed` split-brain gate, arm-row gate; 34 stdlib tests | `ffec2e50`, `1c5b9670` | ✅ (`--pre` passes on the repo state; `--post` on `T06-mtp.md` fails on that cold line, a `±` band and two misquoted ratio bands, and the report stays as written) |
+
+Two rows in A and B claimed more than the code did at the time. They are true now, and only because
+of the commits above:
+
+- **C3** claimed "protocol **+ harness**" for `EXL3_MOE_CPU_SWAP=0` while `run_pass.ps1` never set it.
+  True since `7c043454` (written into the regime env, before `-Env`/`-Unset`) and `8c69b5ec` (scoped:
+  automatic for `-Runner spec_decode`, opt-in with `-StaticSwap`, because the 44 archived ladder rows
+  were measured with placement on).
+- **I5** claimed `run_pass.ps1` read "draft args" from `state.json` while it read neither `.draft`
+  nor the drafting cache. True since `7c043454` (the `.draft` block) and `89f0b787` (draft args are
+  `spec_decode`-only; `-CacheSize` carries `draft.spec_decode_cache_size`).
+
+### The four skill proposals
+
+| # | Proposal | Verdict | Why |
+|---|---|---|---|
+| S1 | new skill `benchmark-harness-integrity` | **not created** | same trigger as `measurement-protocol`, and four of its five bullets were code defects, not agent judgment: they are D1–D6's territory, and a skill cannot make a harness enforce what its code did not do |
+| S2 | new skill `fit-before-measure` | **folded into `measurement-protocol`** as one section, "The fit comes before the pass" | same trigger branch, and a second model-invoked skill for one workflow adds permanent context load for a rule that fits in a section |
+| S3 | extend `measurement-protocol` instead | **extended** — the only skill change made | that skill already owns this workflow, and the review's instruction was to extend it and create nothing |
+| S4 | new skill `integrating-external-critique` | **rejected** | duplicates the existing `receiving-code-review` skill, and its pitch contained a false claim about what the critique had said |
+
+### S3 — what the skill now says, and the evidence it was needed
+
+`~/.config/opencode/skills/measurement-protocol/SKILL.md`, 71 → 99 lines; the frontmatter
+`description` is unchanged (the skill already triggers on this workflow). No commit: the skills
+directory is not a git repository, so the file is the record. Three sections:
+
+- **The fit comes before the pass** — `bench/size_check.py` agrees on the configuration before a GPU
+  pass launches; both curves (VRAM and host arena against the same knob) are plotted before an
+  operating point is named; each margin (watchdog floor, `EXL3_HOST_MEM_RESERVE_MB`, the autosplit's
+  reserve) is named and charged once; a "does not fit" verdict names its phase (load, warmup, a
+  prefill band, decode).
+- **The stateful-cache table** in "A recorded number is not a control" — the routed-expert profile
+  (`expert_stats`), the sparse-head token profile (`token_stats`, keyed on the tokenizer hash and the
+  vocab size, so one file spans every quant **and** every `-sdh` size), the 51.8 GB PLE n-gram table
+  streamed from disk, and dynamic placement.
+- **The gates, before and after** — `verify_task.py --pre` before the first pass of a task,
+  `--post --report <file>` before a number is quoted, and exit 1 means the report contradicts its
+  logs, not that the gate needs weakening.
+
+RED/GREEN, five fresh-context samples per arm (one RED sample discarded as contaminated by the
+prompt, so the RED counts are out of four): the old skill had **0/4** naming `size_check.py` and
+**0/4** naming `verify_task.py --pre/--post`, while already freezing the profile and refusing
+recorded baselines 4/4; the new one ran the pre-gate before launching **5/5** and named `--post`
+before quoting **5/5**, with no regression on the state or baseline rules. The sections exist
+because those two behaviours were absent, not because the text was thin.
+
+### Documentation these commits changed, and the spellings that now abort
+
+- `bench/windows/README.md` now describes this harness: `-DryRun`, `-CacheSize`, `-StaticSwap`,
+  `-Model` and `-Runner` documented, the regime moved from "fixed in `run_pass.ps1`" to
+  `state.json` (with the drafting rule and the frozen-profile restore), `-Extra "-cq Q8"` replaced
+  as an example, the `_agent/v164` path corrected, and the outputs and `status` rules brought up to
+  what the parser and the verdict produce. Every command in it was checked against the `param`
+  block, and the examples were run with `-DryRun`.
+- `wiki/plans/v165-reports/T06-mtp.md:10` records `-Extra "-rb_ab -mtp"`, and
+  `wiki/plans/2026-10-29-v165-retune.md:206,511` records `-Extra "-mtp -ndt 2"` and
+  `-Extra "-rb_ab -mtp"`; both abort in the current harness. They are **not** rewritten — they are
+  the record of the runs that produced the numbers. `state.json` carries the draft args
+  (`-mtp -ndt 2`), so the replacement spelling for a readback A/B is `-Extra "-rb_ab"`: `-Extra`
+  carries only the delta.
+
+### Still unrun after this plan (the honest 🟡 boundary)
+
+- **T6 resume** — a multi-arm in-process drafting run: the first real `-Runner spec_decode` pass
+  with `-mtp -ndt 2` at `-cs 40960` (D2), the first run the swap gate can refuse (D4), and the first
+  `peak_alloc_mb`/`peak_reserved_mb` values a drafting pass writes (D5).
+- **T7 sidecars** — after T8, because `-mtp -or` needs the `1385306e` assert relaxation that only the
+  win-perf wheel carries (C12).
+- **T10 ladder** — rewritten and unrun; it is read against the frozen profile, so it needs C2's warm
+  re-measurement first.
+- **T13** — 262144 together with the drafter (`DRAFT_WINNER`), and the hugepage measurements (the
+  12–19 % tg cost of `EXL3_MOE_ARENA_HUGEPAGE=0`), are measured rather than assumed.
 
 ## Conflicts resolved (Improvements prevail)
 
