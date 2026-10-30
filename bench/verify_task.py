@@ -189,6 +189,15 @@ PCT = re.compile(r"\d+(?:\.\d+)?\s*%")
 # a table printed at one decimal is the same claim as "0.92–0.99" and has to be read the same way -
 # the 2-decimal-only pattern matched nothing there, so the report passed with no number examined
 RATIO_INTERVAL = re.compile(r"(?<![\w.])(\d+\.\d+)\s*[–—-]\s*(\d+\.\d+)(?!\w)(?!\.\d)")
+# A range that carries a unit is a measurement, not a ratio band: "0.6–0.8 GB", "35.2–38.8 t/s",
+# "120–140 ms", "0.92–0.99%". The set is enumerated from what this repo's reports print (GB is the
+# live case: T06 "~0.6–0.8 GB") instead of "any following word", because the loose rule would read
+# "was 0.92–0.99 against the table" as unit-bearing and let a real ratio quote through unchecked -
+# the silent pass. This choice takes the other risk: a unit outside this list keeps its range a ratio
+# band, so an exotic unit can FAIL a correct sentence. A loud false contradiction is recoverable and
+# visible; an unchecked quote is what this gate exists to prevent.
+RANGE_UNIT = re.compile(
+    r"\s*(?P<unit>%|GB/s|MB/s|tok/s|it/s|t/s|GiB|MiB|KiB|GB|MB|KB|B|min|ms|µs|μs|us|Hz|W|h|s)(?![\w/])")
 # a ratio cell printed with 1 to 3 decimals; a band, a t/s rate (45.76) or a MiB figure (2141) is
 # not one, which is what keeps an unrelated table from being read as a ratio table
 RATIO_CELL = re.compile(r"[01]\.\d{1,3}")
@@ -350,6 +359,14 @@ def percentage_gate(text: str) -> bool:
 
     for m in RATIO_INTERVAL.finditer(text):
         quoted = m.group(0).strip()
+        unit = RANGE_UNIT.match(text, m.end())
+        if unit:
+            # the span is marked checked so the `%` of "0.92–0.99%" is not reported a second time;
+            # the slice is printed as written, unit and spacing included
+            checked.append(m.span())
+            good &= info(f"`{text[m.start():unit.end()].strip()}` carries a unit - a measurement, "
+                         "not a ratio band; not checked against the ratio table")
+            continue
         lo, hi = float(m.group(1)), float(m.group(2))
         if max(lo, hi) > RATIO_SCALE:
             good &= info(f"`{quoted}` is not a ratio band (an endpoint is above {RATIO_SCALE}) - "

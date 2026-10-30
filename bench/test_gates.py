@@ -437,10 +437,28 @@ class PercentageGate(GatesFixture, unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertIn("matches this report's own ratio table", out)
 
+    def test_a_range_carrying_a_unit_is_a_measurement(self):
+        # T06-mtp.md:81 - "Generator costs ~0.6–0.8 GB" is host memory; once the band reader accepted
+        # one decimal it audited that sentence as a ratio quote and FAILed a correct claim
+        path = self.report("Generator costs ~0.6–0.8 GB that never comes back\n" + RATIO_TABLE, self.RUN)
+        rc, out = self.post(path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("carries a unit", out)
+        self.assertIn("0.6–0.8 GB", out)
+        self.assertNotIn("does not match", out)
+
+    def test_a_percentage_suffixed_range_is_not_a_ratio_band(self):
+        # the same exclusion for `%`, which is a unit with no letters at all
+        path = self.report("pp at the measurement bands: 0.92–0.99%\n" + RATIO_TABLE, self.RUN)
+        rc, out = self.post(path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("carries a unit", out)
+        self.assertNotIn("does not match", out)
+
     def test_one_decimal_quote_outside_the_table_fails(self):
         # both spellings the review reproduced pass unchecked before this: 0.87-1.1 and 0.9-1.1
-        # against a table whose ratios run 0.92-0.99
-        for quoted in ("0.87–1.1", "0.9–1.1"):
+        # against a table whose ratios run 0.92-0.99, and the two-decimal spelling with a table
+        for quoted in ("0.87–1.1", "0.9–1.1", "0.87–1.10"):
             with self.subTest(quoted = quoted):
                 path = self.report(f"pp at the measurement bands: {quoted}\n" + RATIO_TABLE, self.RUN)
                 rc, out = self.post(path)
