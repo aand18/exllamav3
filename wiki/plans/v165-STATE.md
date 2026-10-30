@@ -323,11 +323,17 @@ T4 (`T04-armA.md` — reference + thresholds), T5 (`T05-memops.md` — MEMOPS_WI
   decode, `EXL3_GR_MIX_TILED=0` costs 9 % prefill, `-Threads 15` is +0.8 % decode (inside the spread)
   for 8 % less prefill, `-Threads 14` loses on the wait counter and both metrics; `EXL3_GRAPHS=0`,
   `EXL3_HC_FOLD=1`, `EXL3_SDPA_PREFILL=1` are all inside the reference's spread.
-- **T11 done, one step open** (`T11-cache.md`): `EXL3_QC_STAGING_PAGES` is **inert at `-chunk_size
-  4096`** — it is a cap (`w = min(npps_w, max(_qc_staging_pages, …))`) and the per-call need is 16
-  pages, below every tested value; the allocator watermarks are byte-identical and the two-pass
-  repeat kills the 1 % ordering. `-rs32` costs ~0.7 GB VRAM for nothing. **Step 3 (Q2 retrieval
-  sanity) not run**: `eval/longctx.py` is not a harness runner, so it needs deployment plumbing.
+- **T11 done** (`T11-cache.md`): `EXL3_QC_STAGING_PAGES` is **inert at `-chunk_size 4096`** — it is a
+  cap (`w = min(npps_w, max(_qc_staging_pages, …))`) and the per-call need is 16 pages, below every
+  tested value; the allocator watermarks are byte-identical and the two-pass repeat kills the 1 %
+  ordering. `-rs32` costs ~0.7 GB VRAM for nothing. **Step 3 done, and it required wiring first:**
+  `eval/longctx.py` is now a harness runner (`-Runner longctx`, `results/longctx.csv`, zero
+  `LONGCTX` rows = `fail`, `EXL3_MOE_CPU_SWAP=0`, corpus shipped by `deploy.sh`), scored by
+  `bench/longctx_facts.py` (references stripped, Q&A split per question, context-only facts).
+  **Q2 retrieval holds: 14/14 facts at 36.9 k tokens and 16/16 at 165.5 k**, the decisive one being
+  a verbatim recovery of a single inserted paragraph inside 165 k tokens of Pride & Prejudice.
+  Limit: a Q8/FP16 control at 262144 does not fit this card, so this is "Q2 is fine", not "Q2 equals
+  FP16".
 - **T12 done** (`T12-ple-gdn.md`): `EXL3_PLE_SUB_CHUNK=0` costs ~0.9 GB VRAM and 2 % prefill (default
   1024 and 512 are level); **`ngram_ram` (`-ngr`) is not available** — the 51.8 GB table drove free
   RAM to 637 MB in 27 s and the watcher killed it; `-rs32` costs VRAM for no gain; `EXL3_BC_GDN=0`

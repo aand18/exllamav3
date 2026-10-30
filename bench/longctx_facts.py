@@ -90,6 +90,11 @@ def strip(path, refs=None):
     return text
 
 
+XL_SPLIT = [
+    ("pp_mod", "An unrelated passage has snuck into Pride"),
+    ("pp_chap", "Coming up with a title for each chapter"),
+]
+
 QA_SPLIT = [
     ("vm_q1", "Why do the SRB computers"),
     ("vm_q2", "What does Edward Milsom secretly do"),
@@ -107,11 +112,11 @@ def sections(text):
         "ic_sum": "SUMMARY TEST", "vm_sum": "SUMMARY TEST",
         "ic_french": "FRENCH TEST", "ic_zoomer": "ZOOMER TEST",
         "vm_pony": "CORRUPTION TEST", "vm_char": "NAME EXTRACTION TEST",
-        "pp_mod": "EXTRA LONG TEST", "pp_chap": "EXTRA LONG TEST",
+        "xl": "EXTRA LONG TEST",
         "qa": "Q&A TEST",
     }
     order = ["ic_sum", "ic_french", "ic_zoomer", "vm_sum", "qa", "vm_pony", "vm_char",
-             "pp_mod", "pp_chap"]
+             "xl"]
     raw, cursor = {}, 0
     for i, name in enumerate(order):
         start = text.find(heads[name], cursor)
@@ -126,7 +131,15 @@ def sections(text):
         raw[name] = text[start + len(heads[name]):end]
         cursor = start + len(heads[name])
 
-    out = {k: v for k, v in raw.items() if k != "qa"}
+    out = {k: v for k, v in raw.items() if k not in ("qa", "xl")}
+    block = raw.get("xl")
+    if block:
+        starts = sorted((block.find(q), job) for job, q in XL_SPLIT)
+        for idx, (pos, job) in enumerate(starts):
+            if pos < 0:
+                continue
+            end = starts[idx + 1][0] if idx + 1 < len(starts) and starts[idx + 1][0] > pos else len(block)
+            out[job] = block[pos:end]
     block = raw.get("qa")
     if block:
         starts = []

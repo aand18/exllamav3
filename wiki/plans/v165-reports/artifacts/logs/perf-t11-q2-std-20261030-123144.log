@@ -1,0 +1,347 @@
+ -- Loading D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8
+ -- CPU split experts (worker, static): model.language_model.layers.0.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.1.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.2.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.3.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.4.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.5.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.6.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.7.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.8.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.9.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.10.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.11.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.12.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.13.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.14.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.15.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.16.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.17.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.18.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.19.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.20.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.21.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.22.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.23.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.24.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.25.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.26.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.27.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.28.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.29.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.30.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.31.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.32.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.33.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.34.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.35.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.36.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.37.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.38.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.39.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.40.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.41.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.42.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.43.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.44.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.45.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.46.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.47.mlp [136..512) of 512, placement from saved profile
+
+ -- CPU MoE worker started: 48 layers, avx512-vbmi, 16 threads
+ -- CPU MoE host affinity: host on LPs [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31]
+ -- Warming up...
+
+ -- Loading tokenizer...
+ -- Model: D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8
+ -- Bitrate: 3.48 bpw / 6.01 bpw (head)
+
+
+[32;1m------------[0m
+[32;1mSUMMARY TEST[0m
+[32;1m------------[0m
+[34;1mShort summary of 'The Illustrious Client', 13939 tokens.
+Reference summary:[0m
+[37;1mSherlock Holmes is hired to stop the dangerous Baron Gruner from marrying an innocent woman. With help from an ex-lover of the Baron and a forged identity, Holmes exposes the Baron’s vile past and secures proof of his crimes. The wedding is called off, and Gruner is horribly disfigured in revenge.[0m
+
+We need to answer user's request: "Provide an extremely short summary of the story." Need produce final only. Need maybe very short. Could be one or two sentences. Ensure final concise.
+</think>
+
+Sherlock Holmes, secretly hired by an unnamed royal client, foils a villain’s marriage by exposing his crimes and arranging for a former victim to throw vitriol in his face.
+
+
+[32;1m-----------[0m
+[32;1mFRENCH TEST[0m
+[32;1m-----------[0m
+[34;1mOne paragraph in this story has been translated to a different language. Translate it back.[0m
+
+We need answer user's request. User provided full English text of Conan Doyle story, says "One paragraph in this story has been translated to a different language. Translate it back." We need identify the paragraph translated into a different language. In the story, there is a French paragraph: "Nous apprenons avec regret..." It is a news report in French. Need translate it back to English? The prompt likely expects translating the French paragraph into English. Need provide translation. Need be careful: "One paragraph in this story has been translated to a different language. Translate it back." So output English translation of that French paragraph. Could maybe identify which paragraph? Need maybe give translation. We can include quote and translation. Need likely translate faithfully. Need maybe not translate whole story, just that paragraph. Need maybe note it's the newspaper paragraph. Need produce final answer only translation? Could say: The translated paragraph is the French news report, and here it is in English. Need ensure accurate.
+
+Let's translate French paragraph:
+
+Original:
+Nous apprenons avec regret que M. Sherlock Holmes, le célèbre détective privé, a été victime ce matin d'une agression meurtrière qui l'a laissé dans une situation précaire. Nous ne disposons pas de détails précis, mais l'incident semble s'être produit vers midi à Regent Street, devant le Café Royal. L'attaque a été perpétrée par deux hommes armés de bâtons. M. Holmes a été frappé à la tête et au corps, subissant des blessures que les médecins qualifient de très graves. Il a été transporté à l'hôpital de Charing Cross et a ensuite insisté pour être conduit dans son appartement de Baker Street. Les agresseurs semblent être des hommes honorablement vêtus, qui ont échappé aux passants en traversant le Café Royal et en se dirigeant vers Glasshouse Street, derrière. Ils appartenaient sans doute à cette confrérie criminelle qui a si souvent eu l'occasion de déplorer l'activité et l'ingéniosité de l'homme blessé.
+
+Need translate back. Need style as newspaper. Let's parse:
+"We learn with regret that Mr. Sherlock Holmes, the famous private detective, was this morning the victim of a murderous attack which left him in a precarious condition. We have no precise details, but the incident appears to have occurred around noon in Regent Street, in front of the Café Royal. The attack was carried out by two men armed with sticks/staves/canes? bâtons = sticks/canes/staves. Mr. Holmes was struck on the head and body, suffering injuries that doctors describe as very serious. He was taken to Charing Cross Hospital and subsequently insisted on being taken to his rooms/apartment at Baker Street. The attackers appear to have been respectably/dressily clothed men, who escaped passers-by by crossing the Café Royal and heading toward Glasshouse Street, behind? behind. They belonged no doubt to that criminal gang/fraternity which has so often had occasion to deplore the activity and ingenuity of the injured man."
+
+Need maybe "honorablement vêtus" = respectably dressed. "confrérie criminelle" = criminal brotherhood/fraternity/gang. "déplorer" = deplore/regret. "l'homme blessé" = the injured man. The phrase "qui ont si souvent eu l'occasion de déplorer l'activité et l'ingéniosité de l'homme blessé" = who have so often had occasion to deplore the activity and ingenuity of the wounded man.
+
+Need maybe mention "placard" headline? But translation is paragraph. Could be from French newspaper. Need maybe answer:
+
+The paragraph rendered in French is the newspaper report. Translated back into English:
+
+"We regret to learn that Mr. Sherlock Holmes, the famous private detective, was this morning the victim of a murderous attack which left him in a precarious condition. We have no precise details, but the incident appears to have occurred about noon on Regent Street, in front of the Café Royal. The attack was carried out by two men armed with sticks. Mr. Holmes was struck on the head and body and received injuries which the doctors describe as very serious. He was taken to Charing Cross Hospital, and afterwards insisted on being taken to his rooms in Baker Street. The assailants appear to have been men respectably dressed, who eluded the passers-by by crossing the Café Royal and making for Glasshouse Street behind. They were doubtless members of that criminal gang which has so often had reason to deplore the activity and ingenuity of the wounded man."
+
+Need maybe "Murderous Attack Upon Sherlock Holmes" headline? The paragraph itself is French. Need maybe "Translate it back" means translate the non-English paragraph into English. Could just output translation. Need maybe not include analysis. Need final concise but thorough.
+
+Double-check if there
+
+
+[32;1m-----------[0m
+[32;1mZOOMER TEST[0m
+[32;1m-----------[0m
+[34;1mA zoomer has edited the text. Identify the edited passages.[0m
+
+We need answer user's request. Need identify two paragraphs rewritten in a zoomer slang style. We have provided text of Conan Doyle story with two paragraphs likely altered? Need inspect. User: "THE ILLUSTRIOUS CLIENT ... --- Two paragraphs have been rewritten in a zoomer slang style. Identify them."
+
+We need output answer likely quote the two paragraphs? Need identify them. The text has a passage where original should be formal: "Picture this: a yachting cruise in the Mediterranean. The guest list was limited, but everyone had to pay their own expenses. The organizers had no idea..." Actually in text there is a paragraph with slang: "bougie yacht cruise in the Med. Guest list was tight, but everyone still had to drop their own cash. The organizers clearly didn’t clock the Baron’s villain vibes until way too late. My guy zero-locked on the girl and deployed max-level riz—she’s now head-over-heels, no cap. “She loves him” doesn’t cut it; she’s simping hard-core, full-time stan mode. Outside of him? Whole world = alt-F4. Try to talk smack and she insta-rage-quits. Fam have run every anti-crush patch, soft resets, you name it—still no fix. TL;DR: she’s dead-set on marrying him next month. She’s of legal age and basically a human adamantium wall of willpower, so… stopping this train? Big yikes."
+
+Second: later after Chinese pottery reading: "They say a lawyer who crams hard enough to roast an expert on Monday will have yeeted all that trivia by Saturday. And yeah, I’m not about to pretend I’m the ceramics GOAT. But bro, that whole evening, an almost-all-nighter with a quick power-nap, and the next morning—I was binge-loading facts and speed-running artist names like my brain had unlimited data. I picked up the signature flexes of the OG decorators, the hidden dynasty date hacks, how to spot a legit Hung-wu, vibe-check Yung-lo aesthetics, decode Tang-ying receipts, and stan the early-Sung-and-Yuan glow-up. By the time I rolled up on Holmes the next night, I was stacked with knowledge. The guy was finally out of bed—don’t trust the clickbait reports—and he was posted in his fave armchair, head mega-bandaged, hand propping it up, looking battered but still big-brain AF."
+
+Need identify them maybe by quoting opening phrases. Need be careful: The text has maybe one paragraph in Damery dialogue: "Picture this: ..." The paragraph begins "Picture this: bougie yacht cruise..." It is a paragraph within dialogue. Second paragraph begins "They say a lawyer who crams hard enough to roast an expert on Monday..." It's Watson narrative. Need identify. Could mention they are the paragraph beginning "Picture this: bougie yacht cruise..." and paragraph beginning "They say a lawyer who crams hard enough...". Could also include full paragraphs? User asks identify them. We can answer concise with quotes. Need maybe note original formal style elsewhere. Ensure no other slang? Let's scan entire text for slang.
+
+Paragraphs:
+- "It can't hurt now..." normal
+- "Both Holmes and I..." normal
+- "It may be some fussy..." normal
+- "Sir James..." note normal
+- "I need not say..." normal
+- "Well, I can tell you..." normal
+- "Our?" normal
+- "I shall be honoured." normal
+- "Then you have the hour..." normal
+- "I was living..." normal
+- "Of course, I was prepared..." normal
+- "I have had several opponents..." normal
+- "You mean the Austrian murderer?" normal
+- "It is my business..." normal
+- "No, it is more serious..." normal
+- "Then you will sympathize..." normal
+- "I did not understand..." normal
+- "Mr. Holmes, I must beg..." normal
+- "I am sorry," normal
+- "You hardly realize..." normal
+- "That is understood. In the first place..." normal
+- "De Merville of Khyber fame? Yes..." normal
+- "He has a daughter..." normal
+- "Baron Gruner has some hold..." normal
+- "The strongest of all holds..." normal
+- "But how came such a man..." normal
+- "Picture this: bougie yacht cruise..." slang. Yes.
+- "Does she know..." normal
+- "The cunning devil..." normal
+- "Dear me! But surely..." normal
+- "Our visitor fidgeted..." normal
+- "I could deceive you..." normal
+- "Holmes gave a whimsical smile." normal
+- "I think I may safely promise..." normal
+- "The Carlton Club will find me..." normal
+- "The Baron's present address..." normal
+
+
+[32;1m------------[0m
+[32;1mSUMMARY TEST[0m
+[32;1m------------[0m
+[34;1mShort summary of a version of 'The Variable Man' with some names replaced, 36741 tokens.
+Reference summary:[0m
+[37;1mWar‑bent 22nd‑century Earth relies on giant SRB computers and the unfinished faster‑than‑light “Icarus” bomb to break the Proxima Jorblax Empire’s grip, but when a time‑research accident pulls 1913 handyman Edward Milsom into the future his intuitive, boundary‑less repair genius baffles the computers, panics Security Commissioner Paddington, and ultimately rewires Icarus not to explode but to decelerate safely from FTL speed; Paddington’s attempt to kill Milsom and launch the war backfires, the Terran fleet is defeated, and only after the debacle does physicist Sherikov realize Milsom has solved the fundamental FTL‑re‑entry problem, giving humanity true interstellar travel and rendering the lost war irrelevant—while the burned but alive “variable man,” awaiting return to his own time, is already studying a new device to fix.[0m
+
+We need answer user's request: "Provide an extremely short summary of the story." Need comply. Need final only summary extremely short. Could mention author? Maybe just summary. Need ensure short. User English, so analysis in English. Final concise.
+</think>
+
+In a future interstellar war, a time-displaced “fix-it” man from the past confounds predictive machines by unknowingly perfecting a weapon, transforming it into a safer FTL drive and winning humanity a victory without a battle.
+
+
+[32;1m--------[0m
+[32;1mQ&A TEST[0m
+[32;1m--------[0m
+[34;1mWhy do the SRB computers stop giving reliable war-odds after Edward Milsom arrives in the 22nd century? Reference answer:[0m
+[37;1mMilsom’s behavior is unpredictable to the machines because he comes from a different era and doesn’t fit their statistical patterns, so his presence introduces a “variable” they cannot factor.[0m
+
+We need answer user's question: "Answer in one paragraph: Why do the SRB computers stop giving reliable war-odds after Edward Milsom arrives in the 22nd century?" Need one paragraph. Need analyze story. Need explain SRB machines are statistical prediction machines based on all contemporary known data and predictable patterns. Milsom is a variable man, from early 20th century, un-integrated, unpredictable, intuitive hand-worker, cannot be predicted by machines. His presence/uncaptured status and unknown future actions make variables; when fed data, machines can't factor him and it throws off all other figures. After arrival, they stop reliable because he is an unpredictable variable outside their predictive model, disrupting gestalt. Need maybe mention later sabotage? The question: "Why do the SRB computers stop giving reliable war-odds after Edward Milsom arrives in the 22nd century?" In story, after man from past arrives, machines can't handle him, he is variable factor, no reading, changes odds wildly, then blank. Because he is outside deterministic/predictable social system, his actions can't be predicted, invalidates assumptions; SRB relies on complete known facts, cannot reject true data. Need concise one paragraph. Ensure one paragraph only. Could say: They stop giving reliable odds because Milsom is an unpredictable, anachronistic variable—his skills, motives, and future actions don't fit the SRB machines’ statistical model of 22nd-century society, so the machines cannot integrate his existence into a consistent prediction and all calculations destabilize. Need maybe include "as long as he remains alive/unknown, they can't ignore him because data is real; his influence is unknowable." Final one paragraph.
+</think>
+
+The SRB computers stop giving reliable odds because Edward Milsom is an unpredictable “variable man”: he comes from the past, thinks and acts in ways that do not fit the SRB machines’ model of integrated, specialized 22nd-century society, and his abilities and future choices cannot be predicted from the available data. Since the SRB machines depend on a complete, consistent set of factual data to calculate probabilities, Milsom’s presence corrupts their calculations—he cannot be ignored as false data, yet he cannot be reliably factored into predictions—so their war-odds readings become erratic or blank.
+
+[34;1mWhat does Edward Milsom secretly do to the Icarus bomb’s control turret? Reference answer:[0m
+[37;1mInstead of wiring it to trigger an explosion, he rewires it so the craft can decelerate safely from faster-than-light speed, turning it from a bomb into a workable FTL drive.[0m
+
+We need answer user's question: "What does Edward Milsom secretly do to the Icarus’s control turret?" Need one paragraph. Need infer from text. Need analyze story. The question: "What does Edward Milsom secretly do to the Icarus bomb’s control turret?" Need answer: He secretly rewires/modifies it so that instead of being a bomb that explodes by re-entering space, it becomes a functional faster-than-light spaceship/drive? Let's inspect text.
+
+In story, Gibson asks Milsom to wire control turret. Milsom sees Icarus as incomplete spaceship, not bomb. He secretly changes wiring so that when Icarus re-enters normal space inside star, it doesn't explode but is absorbed harmlessly into gas, and the control turret's design demonstrates a safe FTL re-entry mechanism, enabling FTL travel. Did he "sabotage" the turret? Dixon thinks sabotaged. Gibson later says bomb did reappear, didn't explode; Milsom solved West's problem, brought ftl object back into universe without collision/explosion. "When I showed him the control turret, Milsom understood its purpose. Not my purpose, but the original purpose West had been working toward. Milsom realized Icarus was actually an incomplete spaceship, not a bomb at all. He set out to make Icarus work." So he secretly rewired the control turret to make Icarus a functioning FTL spaceship (safe re-entry) rather than a bomb, causing it to vanish/absorb without explosion and revealing FTL travel. Need be concise one paragraph. Need perhaps mention he "sabotages" the bomb's detonation/control circuit by rewiring it to return the ftl object gently into normal space, effectively turning Icarus into a working faster-than-light drive and making it disappear without detonating Jorblax. The question: "What does Edward Milsom secretly do to the Icarus bomb’s control turret?" Could ask specifically: he changes the wiring in the control turret so that Icarus will not explode but will re-enter space safely as an FTL ship? Need maybe "he re-wires the turret to convert Icarus from a bomb into a spaceship". Need one paragraph. Ensure not too long.
+
+Need final only one paragraph. Need maybe no extra. Ensure answer says secretly rewires it.
+</think>
+
+Edward Milsom secretly rewires Icarus’s control turret so that, instead of functioning as a bomb that violently explodes when it re-enters normal space, it safely returns from faster-than-light flight and is harmlessly absorbed by the star—effectively turning Icarus into a working faster-than-light spaceship rather than a weapon.
+
+[34;1mHow does humanity ultimately benefit from Milsom’s interference, even though Earth loses the war against Jorblax? Reference answer:[0m
+[37;1mMilsom’s solution delivers a practical faster-than-light return method, giving Earth true interstellar travel and opening the entire universe for exploration and colonization, making the war’s outcome irrelevant.[0m
+
+We need answer user's question: "Answer in one paragraph: How does humanity benefit from Milsom’s interference, even though Earth loses the war against Jorblax?" Need summarize from story. Need one paragraph. Need likely include Milsom rewires Icarus control turret not as bomb but as functional FTL drive, causing no explosion but enabling FTL travel, opening universe for exploration, and also Gibson's political gadget maybe direct democracy? Question specifically "How does humanity benefit from Milsom’s interference, even though Earth loses war?" Focus: Milsom sabotages/transforms Icarus from a weapon into an FTL spaceship mechanism; Jorblax not destroyed, war lost, but Terrans learn to build FTL ships, can explore colonize beyond galaxy, escaping containment and obsolescing war with Jorblax. Maybe also Milsom's interference leads to removal of Paddington and democratic reforms? The question singular: benefit from interference, even though loses war. Need one paragraph. Could mention Milsom's hands-on genius solved West's problem: returning an FTL object safely instead of exploding, proving FTL travel possible, giving Terra access to whole universe rather than a rotten empire. Need concise.
+</think>
+
+Humanity benefits because Milsom’s intuitive rewiring of Icarus’s control turret does not sabotage the project into failure so much as it reveals its true purpose: West’s principle is not just a bomb mechanism but a usable faster-than-light drive. Although Icarus does not explode and Terra’s planned war against Jorblax fails, Milsom’s work gives humanity the key to practical FTL travel, allowing it to escape its confinement within the Solar System and move beyond the decaying Jorblaxian Empire into the wider galaxy and universe, turning a military defeat into the opening of an era of exploration and expansion.
+
+
+[32;1m---------------[0m
+[32;1mCORRUPTION TEST[0m
+[32;1m---------------[0m
+[34;1mSome MLP fan fiction has made it into the story. Can we detect it?[0m
+
+We need answer user's request: "A passage from an unrelated story is inserted in the middle of the text. Can you find it?" Need locate inserted passage. Need analyze text. It's a long story (Philip K Dick? Variable Man). There's an inserted unrelated story passage in the middle. Need identify it. We must quote passage? Probably yes. Need find passage unrelated to main text. Scanning text: after section III maybe before IV? I see a paragraph:
+
+"Stop here," Paddington ordered.
+
+Before that: 
+
+"To calm the seed, Pinkie Pie suggested “the most soothing lullaby in all Equestria”—performed on cloud-harp. With Rainbow’s speed and Fluttershy’s guidance, the Pegasi sculpted cirrus strings across the sky. As Pinkie conducted with a peppermint baton, the clouds thrummed, releasing harmonic rain that glittered azure. The seed sprouted mid-air, unfurling into a translucent, glowing vine that climbed toward Canterlot’s distant spires. On each budding leaf appeared tiny cutie-mark glyphs—symbols from ponies long forgotten.
+
+Princess Luna arrived on a moon-beam to explain:
+
+“Long ago, before even my time, there were the Star-Singers. They wove harmony into the night so foals could dream bravely. This comet dust awakens their forgotten lullaby.”
+
+That is clearly unrelated My Little Pony fanfiction inserted between Paddington/Dixon and Gibson scene. Need answer with exact passage. Need maybe state it's the My Little Pony passage. Need maybe provide exact excerpt. The user asks "Can you find it?" so answer: yes, the inserted passage is ... quote it. Ensure no extra? Could mention it appears between Gibson's lab discussion and Paddington's surface car arrival, before "Stop here". Need perhaps note it's unrelated My Little Pony. Final concise but thorough. Final in English.
+</think>
+
+Yes. The unrelated inserted passage is the short My Little Pony–style excerpt beginning:
+
+> To calm the seed, Pinkie Pie suggested “the most soothing lullaby in all Equestria”—performed on cloud-harp. With Rainbow’s speed and Fluttershy’s guidance, the Pegasi sculpted cirrus strings across the sky. As Pinkie conducted with a peppermint baton, the clouds thrummed, releasing harmonic rain that glittered azure. The seed sprouted mid-air, unfurling into a translucent, glowing vine that climbed toward Canterlot’s distant spires. On each budding leaf appeared tiny cutie-mark glyphs—symbols from ponies long forgotten.
+>
+> Princess Luna arrived on a moon-beam to explain:
+>
+> “Long ago, before even my time, there were the Star-Singers. They wove harmony into the night so foals could dream bravely. This comet dust awakens their forgotten lullaby.”
+
+
+[32;1m--------------------[0m
+[32;1mNAME EXTRACTION TEST[0m
+[32;1m--------------------[0m
+[34;1mList all the named characters in the story.
+Reference:[0m
+[37;1m- Security Commissioner Eric Paddington
+- Jeremy – the Council SRB lab organizer
+- Peter Gibson – head of Military Designs
+- Margaret Wheeler – President of the Council
+- E. Fredman – senior official at Histo-Research
+- Goodwin – Fredman’s superior at Histo-Research
+- Director Blackwell – of Federal Stockpile Conservation
+- Steven Hurst – Richard Hurst’s elder son
+- Earl (Hurst) – Steven’s younger brother
+- Jennifer Preston – the children’s friend / neighbor
+- Edward Milsom – “the Variable Man”
+- Richard Hurst – electrical-engineer father of Steven and Earl
+- Fleet Commander Tucker – Terran war-fleet commander
+- Vice-Commander Dickerson – second-in-command of the fleet
+- Joseph Dixon – senior Security officer
+- Douglas West – late physicist who discovered the f-t-l principle[0m
+
+We need answer user's request: "List all the named characters in the story." Need parse provided story and list named characters. Need likely only proper names? Named characters: Eric Paddington? He is Commissioner, referred as Commissioner Paddington; full name maybe Eric Paddington appears? Let's scan text carefully.
+
+We need list all named characters in the story. Could include main and minor named characters. Need identify names (proper names) of characters, not species/systems/planets/companies unless personified? Let's parse.
+
+Text:
+"Security Commissioner Paddington..." So named character: Paddington (Eric Paddington? later "Commissioner, are you sure--" etc. Later "Eric Paddington examined..." yes "Eric Paddington").
+Jeremy, lab organizer. Named: Jeremy.
+Jorblax? Alien system/entity? Jorblax is star/system, not character? It may be alien race? "Jorblax" as enemy, maybe planet/system name. User asks named characters; likely not include planet names unless personified. But "Jorblaxian" adjective.
+Peter Gibson, director. Named.
+Douglas West? scientist dead. Named.
+Fredman? "Fredman dropped the plate..." Named.
+Goodwin? chief official. Named.
+Margaret Wheeler, President of Council. Named.
+Tucker? Fleet Commander Tucker. Named.
+Jeremy again.
+Edward Milsom. Named.
+Steven, Earl, Jennifer Preston? Children. Named.
+Hurst? Richard Hurst? In section III: "Hurst. Richard Hurst." named.
+Dixon? Joseph Dixon? "Joseph Dixon" appears. Named.
+Director Blackwell? "I'm Director Blackwell," official. Named.
+Dickerson? Vice-Commander Dickerson. Named.
+Maybe "Tucker" Fleet Commander. Named.
+"West" Douglas West. Named.
+"Gibson" Peter Gibson.
+"Paddington" Eric Paddington.
+"Margaret Wheeler".
+"Jeremy" only first name.
+"Fredman" only surname.
+"Goodwin" only surname.
+"Steven" and "Earl" and "Jennifer Preston" (Jennifer Preston). "Steven Hurst"? Steven's father is Richard Hurst, so Steven's surname Hurst. But named as Steven, Earl, Jennifer Preston. Could list full names if known: Steven Hurst, Earl Hurst? Earl is brother? Hurst's son? In text: "Hurst. Richard Hurst." "And your son's name?" "Steven." So Steven Hurst. Earl also? "Earl" maybe Steven's brother? "Earl and Steven picked themselves..." Then Hurst says Steven son. Earl maybe also son? Could list Earl (surname Hurst inferred) but not given. Jennifer Preston.
+Milsom's "lady in big green house" not named.
+"the lady" not named.
+"the man in yellow house" not named.
+"Blackwell" named.
+"Goodwin" chief official.
+"Fredman" official.
+"Jeremy" lab organizer.
+"Paddington" Eric.
+"Gibson" Peter.
+"Tucker" Fleet Commander.
+"Wheeler" Margaret.
+"Dixon" Joseph.
+"Dixon" first name Joseph appears "Joseph Dixon, standing on the surface..."
+"Vice-Commander Dickerson" named.
+"Peter Gibson".
+"Douglas West".
+"Edward Milsom".
+"Margaret Wheeler".
+"Eric Paddington".
+Maybe "President Wheeler" refers Margaret Wheeler.
+"President Wheeler" named.
+"Commissioner" title not name.
+"Security Commissioner" etc.
+"Jorblaxian" not character.
+"Armuh? Armun" planet, not character.
+"Terran" etc.
+"Terra" planet, not character.
+"Sol" system.
+Maybe "Icarus" is named weapon, not character? Could be named character? It is a bomb/ship, personified ("he"). User asks named characters in story. Might include Icarus? It's not a person but named object with personification. Need decide. Could list as named non-human entity? The request says "named characters". Usually list all characters with names, including humans and maybe personified objects? Icarus is a named weapon referred as he, maybe considered character? But likely not. Could mention optional: Icarus is a named machine/bomb, not a person. Need maybe list all named characters, including minor named people. Need ensure no missing names.
+
+Let's go through entire story systematically.
+
+Opening:
+"Security Commissioner Paddington" -> Paddington, Eric Paddington.
+"Council guards" no names.
+"central SRB computer" no.
+"Straight gain..."
+
+
+LONGCTX job=ic_sum prompt_tokens=13939 out_chars=369
+LONGCTX job=ic_french prompt_tokens=13992 out_chars=4778
+LONGCTX job=ic_zoomer prompt_tokens=13963 out_chars=4252
+LONGCTX job=vm_sum prompt_tokens=36741 out_chars=487
+LONGCTX job=vm_q1 prompt_tokens=36764 out_chars=2362
+LONGCTX job=vm_q2 prompt_tokens=36755 out_chars=2524
+LONGCTX job=vm_q3 prompt_tokens=36761 out_chars=1837
+LONGCTX job=vm_pony prompt_tokens=36942 out_chars=2643
+LONGCTX job=vm_char prompt_tokens=36741 out_chars=3943
+LONGCTX jobs=9
+remark: dsa_triton.py:668:0: 259 instructions in function
+remark: triton_paged.py:1060:0: 352 instructions in function
+
+=== pass     : t11-q2-std
+=== run id   : t11-q2-std-20261030-123144
+=== regime   : production
+=== engine   : 1.6.5
+=== package  : C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\__init__.py
+=== extension: C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3_ext.cp312-win_amd64.pyd
+=== torch    : 2.11.0+cu130 / cuda 13.0
+=== gpu      : NVIDIA GeForce RTX 4090, 24564 MiB, 596.36
+=== free vram at start (MiB): 24138
+=== harness  : 828E691495A169DCEB68CF2246C528156FBB96D855D8FB3C4E59A9EB5B465EFF
+=== args     : 
+-m D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8 -cs 65536 -chunk_size 4096 -ambs 2 -cq 2,2 -mcs 376 -mct 16
+=== env      : 
+EXL3_HOST_MEM_RESERVE_MB=0 EXL3_MOE_ARENA_HUGEPAGE=0 EXL3_MOE_CPU_PIN=1 EXL3_MOE_CPU_SWAP=0 EXL3_MOE_CPU_SWIZZLE=1 EXL3_MOE_MEMOPS=0 FROZEN_STATE=master->active PYTHONUTF8=1 XDG_CACHE_HOME=C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\engine-state\active
+=== started  : 
+2026-10-30T13:31:44
+=== elapsed s: 293
