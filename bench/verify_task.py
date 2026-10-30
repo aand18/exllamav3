@@ -453,11 +453,19 @@ def post(args) -> bool:
         if r is None:
             good &= bad(f"{run}: cited but absent from passes.csv")
             continue
+        failure_evidence = run in (args.cites_failure or ())
         if r.get("status") != "ok":
-            good &= bad(f"{run}: status={r.get('status')} (only ok runs may be cited as measurements)")
+            if failure_evidence:
+                good &= ok(f"{run}: status={r.get('status')}, cited as failure evidence (not a measurement)")
+            else:
+                good &= bad(f"{run}: status={r.get('status')} (only ok runs may be cited as measurements; "
+                            "a run cited to prove a failure must be named with --cites-failure)")
             continue
         if r.get("breach", "0") != "0":
-            good &= bad(f"{run}: breach flag set")
+            if failure_evidence:
+                good &= ok(f"{run}: breach flag set, cited as failure evidence (not a measurement)")
+            else:
+                good &= bad(f"{run}: breach flag set (name it with --cites-failure if it is the point)")
             continue
         good &= warm_gate(os.path.join(args.logs, f"perf-{run}.log"), run, args.allow_cold)
         if row_runner(r) == "spec_decode":
@@ -481,6 +489,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--logs", default=LOGS_DEFAULT)
     ap.add_argument("--expect-or", action="store_true", help="the task will use -mtp -or")
     ap.add_argument("--allow-cold", action="store_true", help="accept a cold (first) run")
+    ap.add_argument("--cites-failure", action="append", default=[], metavar="RUN_ID",
+                    help="a run the report cites AS EVIDENCE OF A FAILURE, not as a measurement "
+                         "(repeatable); without it, a non-ok run cited in a report is a contradiction")
     args = ap.parse_args(argv)
     if not (args.pre or args.post):
         ap.error("choose --pre or --post")

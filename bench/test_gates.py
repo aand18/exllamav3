@@ -20,6 +20,7 @@ Run with: python3 bench/test_gates.py
 
 import ast
 import contextlib
+import csv
 import glob
 import importlib.util
 import io
@@ -695,6 +696,42 @@ class PassesCsvCells(unittest.TestCase):
         self.assertEqual(len(row), 1, "the passes.csv row formatter is gone")
         self.assertIn("$maxLengthCell", row[0], "the row prints the runner-aware cell")
         self.assertNotIn("$MaxLength", row[0], "the row must not print the state value directly")
+
+
+
+class CitesFailureGate(unittest.TestCase):
+    """A report may cite a failed run when it cites it as the failure, not as a number."""
+
+    def _fixture(self):
+        d = tempfile.mkdtemp(prefix="cites-")
+        res = os.path.join(d, "results"); logs = os.path.join(d, "logs")
+        os.makedirs(res); os.makedirs(logs)
+        with open(os.path.join(res, "passes.csv"), "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["tag","run_id","finished_utc","regime","status","engine","ext","elapsed_s",
+                        "max_length","min_free_vram_mb","min_free_ram_mb","peak_proc_ws_mb","samples",
+                        "breach","env","split","threads","args","harness_sha256","log","runner",
+                        "peak_alloc_mb","peak_reserved_mb"])
+            w.writerow(["bad","bad-20261030-000001","t","production","fail","1.6.5","x.pyd","6","131072",
+                        "2000","5000","100","5","0","","376","16","-m x","hash","perf-bad-20261030-000001.log",
+                        "spec_decode","0","0"])
+        report = os.path.join(d, "r.md")
+        with open(report, "w") as f:
+            f.write("The arm died at load: bad-20261030-000001 (6 s, AttributeError).\n")
+        return d, report
+
+    def test_a_failed_run_is_a_contradiction_by_default(self):
+        d, report = self._fixture()
+        rc = verify_task.main(["--post", "--report", report, "--results", os.path.join(d, "results"),
+                               "--logs", os.path.join(d, "logs"), "--deployed", ""])
+        self.assertEqual(rc, 1)
+
+    def test_a_failed_run_cited_as_failure_passes(self):
+        d, report = self._fixture()
+        rc = verify_task.main(["--post", "--report", report, "--results", os.path.join(d, "results"),
+                               "--logs", os.path.join(d, "logs"), "--deployed", "",
+                               "--cites-failure", "bad-20261030-000001"])
+        self.assertEqual(rc, 0)
 
 
 if __name__ == "__main__":
