@@ -254,6 +254,18 @@ RATIO_TABLE = """
 | 16384 | 0.99 |
 """
 
+# bench/ratios.py's fmt() prints `-` for a missing ratio, so a ratio column can hold a row that is
+# not a ratio row; the column's range is 0.85-0.99, not the fragments either side of the gap
+MISSING_ROW_TABLE = """
+| band | ratio |
+|---|---|
+| 256 | 0.85 |
+| 512 | 0.92 |
+| 1024 | - |
+| 2048 | 0.96 |
+| 4096 | 0.99 |
+"""
+
 
 class GatesFixture:
     """A results/ and logs/ tree in a tempdir: the gates only read, so a fixture is the box."""
@@ -391,6 +403,54 @@ class PercentageGate(GatesFixture, unittest.TestCase):
         self.assertIn("41 %", out)
         self.assertIn("all gates passed", out)
 
+    def test_quote_of_the_whole_range_passes_across_a_missing_ratio(self):
+        # the range a quote must equal is the column's min/max, not the fragment after a `-` row
+        path = self.report("pp at the measurement bands: 0.85–0.99\n" + MISSING_ROW_TABLE, self.RUN)
+        rc, out = self.post(path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("matches this report's own ratio table", out)
+
+    def test_sub_block_range_does_not_pass(self):
+        # 0.96-0.99 is what is left after the `-` row and it is not the column's range: PASSing it
+        # certifies a wrong quote, which is the failure this gate exists to prevent
+        path = self.report("pp at the measurement bands: 0.96–0.99\n" + MISSING_ROW_TABLE, self.RUN)
+        rc, out = self.post(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("does not match", out)
+        self.assertIn("0.85", out)                    # both real endpoints named
+        self.assertIn("0.99", out)
+
+    def test_sentence_final_interval_without_a_table_fails(self):
+        path = self.report("The pp ratio was 0.92–0.99.\n", self.RUN)
+        rc, out = self.post(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("quote without a table", out)
+
+    def test_sentence_final_interval_matching_the_table_passes(self):
+        path = self.report("The pp ratio was 0.92–0.99.\n" + RATIO_TABLE, self.RUN)
+        rc, out = self.post(path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("matches this report's own ratio table", out)
+
+    def test_a_longer_decimal_is_not_truncated_to_a_band(self):
+        # the partial-match guard is what stops a rounded number (0.995) from being read as, and
+        # certified against, a 2-decimal band (0.99)
+        matches = [m.group(0) for m in verify_task.RATIO_INTERVAL.finditer("was 0.92–0.995.")]
+        self.assertEqual(matches, ["0.92–0.995"])
+        path = self.report("The pp ratio was 0.92–0.995.\n" + RATIO_TABLE, self.RUN)
+        rc, out = self.post(path)
+        self.assertNotIn("`0.92–0.99` matches", out)
+        self.assertIn("`0.92–0.995`", out)
+
+    def test_one_decimal_ratio_column_is_recognised(self):
+        # a table printed with one decimal is still a ratio table; dropping it would send the author
+        # to regenerate evidence that is already in the report
+        table = "\n| band | ratio |\n|---|---|\n| 4096 | 0.9 |\n| 131072 | 1.0 |\n"
+        path = self.report("pp at the measurement bands: 0.90–1.00\n" + table, self.RUN)
+        rc, out = self.post(path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("matches this report's own ratio table", out)
+
 
 class ArmRowGate(GatesFixture, unittest.TestCase):
     """A spec_decode run with no arm row died before measuring anything."""
@@ -407,6 +467,13 @@ class ArmRowGate(GatesFixture, unittest.TestCase):
         rc, out = self.post(self.report("# no arm\n", self.RUN))
         self.assertEqual(rc, 1, out)
         self.assertIn("no row for it in arms.csv", out)
+
+    def test_no_arm_table_at_all_fails(self):
+        # neither arms.csv nor spec_decode.csv: the arm evidence a spec_decode run must leave is
+        # absent, so there is nothing to certify the run against
+        rc, out = self.post(self.report("# no tables\n", self.RUN))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("no arms.csv and no spec_decode.csv", out)
 
     def test_run_with_arm_rows_passes(self):
         self.add_arm(self.RUN)

@@ -185,8 +185,10 @@ RATIO_SCALE = 1.2
 RATIO_TOL = 0.005
 SYMMETRIC_PCT = re.compile(r"±\s*\d+(?:\.\d+)?(?:\s*[–—-]\s*\d+(?:\.\d+)?)?\s*%")
 PCT = re.compile(r"\d+(?:\.\d+)?\s*%")
-RATIO_INTERVAL = re.compile(r"(?<![\w.])(\d+\.\d{2,})\s*[–—-]\s*(\d+\.\d{2,})(?![\w.])")
-RATIO_CELL = re.compile(r"[01]\.\d{2,3}")
+RATIO_INTERVAL = re.compile(r"(?<![\w.])(\d+\.\d{2,})\s*[–—-]\s*(\d+\.\d{2,})(?!\w)(?!\.\d)")
+# a ratio cell printed with 1 to 3 decimals; a band, a t/s rate (45.76) or a MiB figure (2141) is
+# not one, which is what keeps an unrelated table from being read as a ratio table
+RATIO_CELL = re.compile(r"[01]\.\d{1,3}")
 
 
 def warm_gate(log: str, label: str, allow_cold: bool = False) -> bool:
@@ -256,37 +258,42 @@ def row_runner(r: dict) -> str:
 
 
 def markdown_cells(line: str) -> list[str]:
-    """Cells of a markdown table row, decoration stripped, or [] for anything else."""
+    """Cells of a markdown table row, decoration stripped, or [] for any other line."""
     s = line.strip()
     if len(s) < 4 or not (s.startswith("|") and s.endswith("|")):
         return []
-    cells = [c.strip().strip("*`").strip().removesuffix("×").strip() for c in s[1:-1].split("|")]
-    if all(re.fullmatch(r":?-{2,}:?", c) for c in cells):
-        return []                                     # the |---|---| separator row
-    return cells
+    return [c.strip().strip("*`").strip().removesuffix("×").strip() for c in s[1:-1].split("|")]
 
 
 def ratio_columns(text: str) -> list[tuple[float, float]]:
     """(min, max) of every ratio column in the report's own ratio tables, at 2 decimals.
 
-    A ratio table is a block of markdown rows whose last cell is a ratio (`0.92`), which is how
-    `bench/ratios.py` prints them. Every such column is a candidate, not just the last: a report
-    that prints two ratio columns (pp and tg) quotes a band from either.
+    A ratio table is a run of markdown rows whose last cell is a ratio (`0.92`), which is how
+    `bench/ratios.py` prints them - its `fmt()` writes `-` for a missing ratio, so a table can hold
+    rows that are not ratio rows. Only a non-table line ends a table: the range is the min/max over
+    that table's ratio rows, never over the fragment between two gaps, or a quote of the survivors
+    after a gap would be certified against the wrong range.
+
+    Every column that is a ratio in every one of those rows is a candidate, not just the last: a
+    report that prints two ratio columns (pp and tg) quotes a band from either. Recognised ratio
+    cells are `0.`- or `1.`-prefixed decimals of 1 to 3 places (`RATIO_CELL`); a t/s rate, a MiB
+    figure or a band number is not a ratio cell.
     """
-    blocks: list[list[list[str]]] = []
-    block: list[list[str]] = []
+    tables: list[list[list[str]]] = []
+    table: list[list[str]] = []
     for line in text.splitlines():
         cells = markdown_cells(line)
-        if cells and RATIO_CELL.fullmatch(cells[-1]):
-            block.append(cells)
-        elif block:
-            blocks.append(block)
-            block = []
-    if block:
-        blocks.append(block)
+        if cells:
+            table.append(cells)                        # separator and header rows included
+        elif table:
+            tables.append(table)
+            table = []
+    if table:
+        tables.append(table)
     out: list[tuple[float, float]] = []
-    for rows in blocks:
-        for i in range(min(len(r) for r in rows)):
+    for table in tables:
+        rows = [r for r in table if RATIO_CELL.fullmatch(r[-1])]
+        for i in range(min((len(r) for r in rows), default=0)):
             if all(RATIO_CELL.fullmatch(r[i]) for r in rows):
                 values = [float(r[i]) for r in rows]
                 out.append((round(min(values), 2), round(max(values), 2)))
