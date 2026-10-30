@@ -313,8 +313,28 @@ T4 (`T04-armA.md` — reference + thresholds), T5 (`T05-memops.md` — MEMOPS_WI
   production `config.yml` is stale (deleted 2.05bpw model, FP16 cache, split 360); the corrected
   block is written in `T13-deploy.md` as a proposal and **not applied** — restarting the server is
   the operator's call.
-- Not started: T8 step 3 (the four worker knobs), T9 (inherited defaults/CUDA knobs), T11 (staging
-  pages, rcs, Q2 sanity), T12 (PLE/GDN), T13 steps 3–4 (boot under the watcher, verify).
+- **T8 step 3 done** (`T08-fork.md`): **`EXL3_MOE_THREAD_PRIO=1` is +11 % decode** (43.68 vs 39.35
+  mean at 130816, two passes within 0.6 % of each other and disjoint from both reference passes,
+  bracketed by two other arms at the reference level) and +2 % prefill — the campaign's largest lever
+  after the drafter. `EXL3_MOE_TIMER_RES=1` and `EXL3_MOE_CPU_PIN_OFFSET=8` are neutral;
+  `EXL3_MOE_BLOCKING_SYNC` stays untested by prior measurement. The fork wheel is kept (null on the
+  code delta, needed for `-or`); **the deployed env gains one line: `EXL3_MOE_THREAD_PRIO=1`.**
+- **T9 done** (`T09-knobs.md`): all CUDA-side defaults stand. `EXL3_MOE_HOST_CORES=0` costs 14–19 %
+  decode, `EXL3_GR_MIX_TILED=0` costs 9 % prefill, `-Threads 15` is +0.8 % decode (inside the spread)
+  for 8 % less prefill, `-Threads 14` loses on the wait counter and both metrics; `EXL3_GRAPHS=0`,
+  `EXL3_HC_FOLD=1`, `EXL3_SDPA_PREFILL=1` are all inside the reference's spread.
+- **T11 done, one step open** (`T11-cache.md`): `EXL3_QC_STAGING_PAGES` is **inert at `-chunk_size
+  4096`** — it is a cap (`w = min(npps_w, max(_qc_staging_pages, …))`) and the per-call need is 16
+  pages, below every tested value; the allocator watermarks are byte-identical and the two-pass
+  repeat kills the 1 % ordering. `-rs32` costs ~0.7 GB VRAM for nothing. **Step 3 (Q2 retrieval
+  sanity) not run**: `eval/longctx.py` is not a harness runner, so it needs deployment plumbing.
+- **T12 done** (`T12-ple-gdn.md`): `EXL3_PLE_SUB_CHUNK=0` costs ~0.9 GB VRAM and 2 % prefill (default
+  1024 and 512 are level); **`ngram_ram` (`-ngr`) is not available** — the 51.8 GB table drove free
+  RAM to 637 MB in 27 s and the watcher killed it; `-rs32` costs VRAM for no gain; `EXL3_BC_GDN=0`
+  costs 15 % decode; `EXL3_GDN_SUB_CHUNK=1024` is 2–4 % down. No lever here — and three load-bearing
+  defaults confirmed.
+- Not started: T13 steps 3–4 (boot under the watcher, verify — operator's call on a production
+  service) and T11 step 3 (Q2 retrieval).
 
 ## Non-GPU prep done 2026-10-29
 

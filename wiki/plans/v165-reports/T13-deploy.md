@@ -95,10 +95,20 @@ draft_model:
   draft_cache_mode: Q2
 ```
 
-plus, in `start_tuned.ps1`, the environment the measurements ran under:
-`EXL3_MOE_MEMOPS=0`, `EXL3_HOST_MEM_RESERVE_MB=0`, `EXL3_MOE_CPU_PIN=1`,
-`EXL3_MOE_CPU_SWIZZLE=1`, `EXL3_MOE_ARENA_HUGEPAGE=0`, and the watcher floors 200 MB VRAM /
-2048 MB RAM.
+plus, in `start_tuned.ps1`:
+
+```
+EXL3_MOE_MEMOPS=0
+EXL3_MOE_THREAD_PRIO=1      # T8: +11 % decode, +2 % prefill, two passes disjoint from the reference
+EXL3_MOE_CPU_PIN=1
+EXL3_MOE_CPU_SWIZZLE=1
+EXL3_HOST_MEM_RESERVE_MB=0
+EXL3_MOE_ARENA_HUGEPAGE=0   # T13 2c: three passes each, no benefit from 1
+```
+
+and the watcher floors 200 MB VRAM / 2048 MB RAM. `EXL3_MOE_TIMER_RES` and
+`EXL3_MOE_CPU_PIN_OFFSET=8` are **not** deployed (both measured neutral); `EXL3_MOE_BLOCKING_SYNC`
+stays off for the reason recorded in T8.
 
 ## Step 3/4 — boot under the watcher, verify
 

@@ -1,0 +1,291 @@
+ -- Loading D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8
+ -- CPU split experts (worker, dynamic): model.language_model.layers.0.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.1.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.2.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.3.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.4.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.5.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.6.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.7.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.8.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.9.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.10.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.11.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.12.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.13.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.14.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.15.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.16.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.17.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.18.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.19.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.20.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.21.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.22.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.23.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.24.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.25.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.26.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.27.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.28.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.29.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.30.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.31.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.32.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.33.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.34.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.35.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.36.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.37.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.38.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.39.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.40.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.41.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.42.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.43.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.44.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.45.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.46.mlp [136..512) of 512, placement from saved profile
+ -- CPU split experts (worker, dynamic): model.language_model.layers.47.mlp [136..512) of 512, placement from saved profile
+
+ -- CPU MoE worker started: 48 layers, avx512-vbmi, 16 threads
+ -- CPU MoE host affinity: host on LPs [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31]
+ -- Warming up...
+ -- submit prof (63 brackets, stream ms): med 6.535 p90 10.809 max 67.944
+ -- submit prof (63 brackets, stream ms): med 9.621 p90 15.400 max 77.565
+ -- submit prof (63 brackets, stream ms): med 10.195 p90 12.507 max 29.655
+ -- moe_cpu prof (512 jobs, us/job): prep_gu 0.0 | gemv_gu 3724.2 (40.9 GB/s) | act+prep_d 0.0 | gemv_d 1645.8 (46.3 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- submit prof (63 brackets, stream ms): med 6.861 p90 23.828 max 29.564
+
+ -- Loading tokenizer...
+ -- Bitrate: 3.48 bpw / 6.01 bpw (head)
+ -- Chunk size: 4096
+
+ -- moe_cpu prof (1024 jobs, us/job): prep_gu 0.0 | gemv_gu 3271.2 (36.7 GB/s) | act+prep_d 0.0 | gemv_d 1449.5 (41.4 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (1536 jobs, us/job): prep_gu 0.0 | gemv_gu 2831.0 (34.2 GB/s) | act+prep_d 0.0 | gemv_d 1263.4 (38.3 GB/s) | tf_d/finish 0.0 | accum 0.0
+
+[33;1mPrefill:[0m
+Length     256: [32;1m    279.05[0m tokens/s
+Length     512: [32;1m    423.22[0m tokens/s
+ -- moe_cpu prof (2048 jobs, us/job): prep_gu 0.0 | gemv_gu 2848.5 (31.2 GB/s) | act+prep_d 0.0 | gemv_d 1233.7 (36.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+Length    1024: [32;1m    713.52[0m tokens/s
+Length    2048: [32;1m   1193.54[0m tokens/s
+Length    4096: [32;1m   1841.46[0m tokens/s
+ -- moe_cpu prof (2560 jobs, us/job): prep_gu 0.0 | gemv_gu 2697.0 (29.8 GB/s) | act+prep_d 0.0 | gemv_d 1144.9 (35.2 GB/s) | tf_d/finish 0.0 | accum 0.0
+Length    8192: [32;1m   1885.15[0m tokens/s
+
+
+ -- moe_cpu prof (3072 jobs, us/job): prep_gu 0.0 | gemv_gu 2376.2 (29.4 GB/s) | act+prep_d 0.0 | gemv_d 990.6 (35.3 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (3584 jobs, us/job): prep_gu 0.0 | gemv_gu 2063.8 (29.8 GB/s) | act+prep_d 0.0 | gemv_d 864.3 (35.6 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (4096 jobs, us/job): prep_gu 0.0 | gemv_gu 1826.4 (30.1 GB/s) | act+prep_d 0.0 | gemv_d 776.8 (35.4 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.046 max 0.942 | worst layers L0:0.070 L3:0.045 L1:0.037 L4:0.029
+ -- split prof [wait] (2048 brackets, stream ms): med 0.202 p90 0.658 max 144.299 | worst layers L11:3.664 L1:3.084 L40:1.658 L3:1.527
+ -- moe_cpu prof (4608 jobs, us/job): prep_gu 0.0 | gemv_gu 1648.8 (30.3 GB/s) | act+prep_d 0.0 | gemv_d 706.5 (35.4 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (5120 jobs, us/job): prep_gu 0.0 | gemv_gu 1498.2 (30.6 GB/s) | act+prep_d 0.0 | gemv_d 642.6 (35.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (5632 jobs, us/job): prep_gu 0.0 | gemv_gu 1384.4 (30.7 GB/s) | act+prep_d 0.0 | gemv_d 590.9 (36.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (6144 jobs, us/job): prep_gu 0.0 | gemv_gu 1286.6 (31.0 GB/s) | act+prep_d 0.0 | gemv_d 549.3 (36.3 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.025 max 0.087 | worst layers L0:0.049 L3:0.044 L1:0.033 L2:0.030
+ -- split prof [wait] (2048 brackets, stream ms): med 0.197 p90 0.264 max 24.431 | worst layers L1:1.064 L12:0.751 L34:0.641 L25:0.321
+ -- moe_cpu prof (6656 jobs, us/job): prep_gu 0.0 | gemv_gu 1201.2 (31.2 GB/s) | act+prep_d 0.0 | gemv_d 515.1 (36.4 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (7168 jobs, us/job): prep_gu 0.0 | gemv_gu 1127.4 (31.5 GB/s) | act+prep_d 0.0 | gemv_d 484.1 (36.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (7680 jobs, us/job): prep_gu 0.0 | gemv_gu 1062.5 (31.8 GB/s) | act+prep_d 0.0 | gemv_d 459.5 (36.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (8192 jobs, us/job): prep_gu 0.0 | gemv_gu 1004.7 (32.0 GB/s) | act+prep_d 0.0 | gemv_d 436.8 (36.8 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.026 max 0.071 | worst layers L0:0.047 L3:0.043 L1:0.035 L4:0.024
+ -- split prof [wait] (2048 brackets, stream ms): med 0.171 p90 0.255 max 24.275 | worst layers L1:0.924 L21:0.743 L11:0.354 L12:0.309
+ -- moe_cpu prof (8704 jobs, us/job): prep_gu 0.0 | gemv_gu 955.6 (32.1 GB/s) | act+prep_d 0.0 | gemv_d 415.3 (37.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (9216 jobs, us/job): prep_gu 0.0 | gemv_gu 911.7 (32.3 GB/s) | act+prep_d 0.0 | gemv_d 398.5 (37.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (9728 jobs, us/job): prep_gu 0.0 | gemv_gu 872.4 (32.6 GB/s) | act+prep_d 0.0 | gemv_d 381.3 (37.2 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (10240 jobs, us/job): prep_gu 0.0 | gemv_gu 836.0 (32.8 GB/s) | act+prep_d 0.0 | gemv_d 365.7 (37.5 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.023 max 0.076 | worst layers L0:0.046 L3:0.040 L1:0.035 L2:0.024
+ -- split prof [wait] (2048 brackets, stream ms): med 0.166 p90 0.234 max 29.582 | worst layers L1:1.235 L9:0.437 L8:0.351 L7:0.259
+ -- moe_cpu prof (10752 jobs, us/job): prep_gu 0.0 | gemv_gu 802.9 (33.0 GB/s) | act+prep_d 0.0 | gemv_d 351.5 (37.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (11264 jobs, us/job): prep_gu 0.0 | gemv_gu 774.7 (33.2 GB/s) | act+prep_d 0.0 | gemv_d 341.5 (37.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (11776 jobs, us/job): prep_gu 0.0 | gemv_gu 749.5 (33.3 GB/s) | act+prep_d 0.0 | gemv_d 331.5 (37.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (12288 jobs, us/job): prep_gu 0.0 | gemv_gu 727.9 (33.4 GB/s) | act+prep_d 0.0 | gemv_d 320.7 (37.9 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.025 max 0.251 | worst layers L0:0.050 L3:0.046 L1:0.033 L4:0.027
+ -- split prof [wait] (2048 brackets, stream ms): med 0.168 p90 0.239 max 25.957 | worst layers L1:1.883 L40:0.858 L36:0.733 L11:0.724
+ -- moe_cpu prof (12800 jobs, us/job): prep_gu 0.0 | gemv_gu 710.8 (33.2 GB/s) | act+prep_d 0.0 | gemv_d 311.4 (37.9 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (13312 jobs, us/job): prep_gu 0.0 | gemv_gu 691.9 (33.4 GB/s) | act+prep_d 0.0 | gemv_d 302.8 (38.2 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (13824 jobs, us/job): prep_gu 0.0 | gemv_gu 674.1 (33.6 GB/s) | act+prep_d 0.0 | gemv_d 295.1 (38.4 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (14336 jobs, us/job): prep_gu 0.0 | gemv_gu 656.2 (33.9 GB/s) | act+prep_d 0.0 | gemv_d 287.6 (38.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.022 max 0.293 | worst layers L3:0.051 L0:0.049 L1:0.035 L2:0.028
+ -- split prof [wait] (2048 brackets, stream ms): med 0.217 p90 0.269 max 24.721 | worst layers L43:0.832 L29:0.746 L2:0.728 L47:0.611
+ -- moe_cpu prof (14848 jobs, us/job): prep_gu 0.0 | gemv_gu 640.6 (34.1 GB/s) | act+prep_d 0.0 | gemv_d 282.4 (38.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (15360 jobs, us/job): prep_gu 0.0 | gemv_gu 625.0 (34.4 GB/s) | act+prep_d 0.0 | gemv_d 275.8 (39.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (15872 jobs, us/job): prep_gu 0.0 | gemv_gu 611.7 (34.6 GB/s) | act+prep_d 0.0 | gemv_d 269.8 (39.2 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (16384 jobs, us/job): prep_gu 0.0 | gemv_gu 598.1 (34.8 GB/s) | act+prep_d 0.0 | gemv_d 265.5 (39.2 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2028 brackets, stream ms): med 0.012 p90 0.026 max 0.288 | worst layers L0:0.051 L3:0.049 L1:0.035 L2:0.029
+ -- split prof [wait] (2027 brackets, stream ms): med 0.222 p90 0.272 max 24.102 | worst layers L9:1.362 L1:0.925 L31:0.467 L37:0.372
+ -- moe_cpu prof (16896 jobs, us/job): prep_gu 0.0 | gemv_gu 588.0 (34.9 GB/s) | act+prep_d 0.0 | gemv_d 262.5 (39.1 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (17408 jobs, us/job): prep_gu 0.0 | gemv_gu 575.5 (35.1 GB/s) | act+prep_d 0.0 | gemv_d 257.0 (39.3 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (17920 jobs, us/job): prep_gu 0.0 | gemv_gu 563.4 (35.3 GB/s) | act+prep_d 0.0 | gemv_d 253.0 (39.3 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (18432 jobs, us/job): prep_gu 0.0 | gemv_gu 553.3 (35.4 GB/s) | act+prep_d 0.0 | gemv_d 248.1 (39.5 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.025 max 0.162 | worst layers L0:0.049 L3:0.041 L1:0.036 L2:0.028
+ -- split prof [wait] (2048 brackets, stream ms): med 0.202 p90 0.267 max 23.794 | worst layers L1:1.055 L0:1.025 L7:0.524 L6:0.315
+ -- moe_cpu prof (18944 jobs, us/job): prep_gu 0.0 | gemv_gu 544.8 (35.5 GB/s) | act+prep_d 0.0 | gemv_d 244.7 (39.5 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (19456 jobs, us/job): prep_gu 0.0 | gemv_gu 535.1 (35.7 GB/s) | act+prep_d 0.0 | gemv_d 240.5 (39.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (19968 jobs, us/job): prep_gu 0.0 | gemv_gu 526.9 (35.9 GB/s) | act+prep_d 0.0 | gemv_d 237.1 (39.8 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (20480 jobs, us/job): prep_gu 0.0 | gemv_gu 521.0 (35.8 GB/s) | act+prep_d 0.0 | gemv_d 234.3 (39.8 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2040 brackets, stream ms): med 0.012 p90 0.020 max 0.095 | worst layers L0:0.053 L3:0.044 L1:0.036 L2:0.030
+ -- split prof [wait] (2048 brackets, stream ms): med 0.213 p90 0.271 max 26.717 | worst layers L1:1.068 L11:0.797 L16:0.761 L30:0.758
+ -- moe_cpu prof (20992 jobs, us/job): prep_gu 0.0 | gemv_gu 513.7 (35.9 GB/s) | act+prep_d 0.0 | gemv_d 230.9 (40.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (21504 jobs, us/job): prep_gu 0.0 | gemv_gu 506.5 (36.1 GB/s) | act+prep_d 0.0 | gemv_d 228.7 (40.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (22016 jobs, us/job): prep_gu 0.0 | gemv_gu 498.7 (36.3 GB/s) | act+prep_d 0.0 | gemv_d 226.3 (40.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (22528 jobs, us/job): prep_gu 0.0 | gemv_gu 493.6 (36.2 GB/s) | act+prep_d 0.0 | gemv_d 223.0 (40.1 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.026 max 0.267 | worst layers L0:0.050 L3:0.039 L1:0.034 L4:0.033
+ -- split prof [wait] (2048 brackets, stream ms): med 0.203 p90 0.267 max 25.779 | worst layers L14:1.817 L15:0.840 L24:0.803 L1:0.739
+ -- moe_cpu prof (23040 jobs, us/job): prep_gu 0.0 | gemv_gu 486.9 (36.3 GB/s) | act+prep_d 0.0 | gemv_d 219.8 (40.2 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (23552 jobs, us/job): prep_gu 0.0 | gemv_gu 481.3 (36.4 GB/s) | act+prep_d 0.0 | gemv_d 217.3 (40.4 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (24064 jobs, us/job): prep_gu 0.0 | gemv_gu 474.5 (36.6 GB/s) | act+prep_d 0.0 | gemv_d 214.4 (40.5 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (24576 jobs, us/job): prep_gu 0.0 | gemv_gu 469.9 (36.7 GB/s) | act+prep_d 0.0 | gemv_d 212.1 (40.6 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.014 max 0.087 | worst layers L0:0.050 L1:0.032 L3:0.030 L2:0.025
+ -- split prof [wait] (2048 brackets, stream ms): med 0.219 p90 0.272 max 26.750 | worst layers L30:0.864 L27:0.805 L25:0.720 L16:0.519
+ -- moe_cpu prof (25088 jobs, us/job): prep_gu 0.0 | gemv_gu 465.8 (36.7 GB/s) | act+prep_d 0.0 | gemv_d 210.0 (40.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (25600 jobs, us/job): prep_gu 0.0 | gemv_gu 460.9 (36.8 GB/s) | act+prep_d 0.0 | gemv_d 207.7 (40.9 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- expert swap sweep: 64 swaps
+ -- moe_cpu prof (26112 jobs, us/job): prep_gu 0.0 | gemv_gu 455.5 (37.0 GB/s) | act+prep_d 0.0 | gemv_d 205.5 (41.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (26624 jobs, us/job): prep_gu 0.0 | gemv_gu 450.8 (37.1 GB/s) | act+prep_d 0.0 | gemv_d 203.5 (41.1 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.014 max 0.087 | worst layers L0:0.050 L1:0.036 L3:0.031 L4:0.026
+ -- split prof [wait] (2048 brackets, stream ms): med 0.222 p90 0.286 max 15.865 | worst layers L1:0.692 L28:0.610 L19:0.581 L2:0.523
+ -- moe_cpu prof (27136 jobs, us/job): prep_gu 0.0 | gemv_gu 445.4 (37.2 GB/s) | act+prep_d 0.0 | gemv_d 201.1 (41.3 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (27648 jobs, us/job): prep_gu 0.0 | gemv_gu 440.8 (37.4 GB/s) | act+prep_d 0.0 | gemv_d 198.9 (41.4 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (28160 jobs, us/job): prep_gu 0.0 | gemv_gu 436.1 (37.5 GB/s) | act+prep_d 0.0 | gemv_d 197.1 (41.5 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (28672 jobs, us/job): prep_gu 0.0 | gemv_gu 431.1 (37.6 GB/s) | act+prep_d 0.0 | gemv_d 194.9 (41.6 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.020 max 0.200 | worst layers L0:0.048 L1:0.035 L4:0.032 L3:0.031
+ -- split prof [wait] (2048 brackets, stream ms): med 0.205 p90 0.269 max 6.990 | worst layers L1:0.783 L28:0.400 L29:0.385 L31:0.285
+ -- moe_cpu prof (29184 jobs, us/job): prep_gu 0.0 | gemv_gu 426.5 (37.8 GB/s) | act+prep_d 0.0 | gemv_d 192.9 (41.8 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (29696 jobs, us/job): prep_gu 0.0 | gemv_gu 422.3 (37.9 GB/s) | act+prep_d 0.0 | gemv_d 191.7 (41.8 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (30208 jobs, us/job): prep_gu 0.0 | gemv_gu 418.1 (38.0 GB/s) | act+prep_d 0.0 | gemv_d 189.8 (41.9 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (30720 jobs, us/job): prep_gu 0.0 | gemv_gu 414.5 (38.1 GB/s) | act+prep_d 0.0 | gemv_d 187.8 (42.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.019 max 0.080 | worst layers L0:0.050 L1:0.037 L4:0.031 L2:0.028
+ -- split prof [wait] (2048 brackets, stream ms): med 0.199 p90 0.264 max 29.799 | worst layers L37:0.904 L29:0.608 L21:0.438 L31:0.352
+ -- moe_cpu prof (31232 jobs, us/job): prep_gu 0.0 | gemv_gu 410.2 (38.2 GB/s) | act+prep_d 0.0 | gemv_d 186.1 (42.1 GB/s) | tf_d/finish 0.0 | accum 0.0
+
+[33;1mGeneration[0m
+ -- moe_cpu prof (31744 jobs, us/job): prep_gu 0.0 | gemv_gu 407.1 (38.2 GB/s) | act+prep_d 0.0 | gemv_d 184.3 (42.2 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (32256 jobs, us/job): prep_gu 0.0 | gemv_gu 403.0 (38.3 GB/s) | act+prep_d 0.0 | gemv_d 182.6 (42.3 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (32768 jobs, us/job): prep_gu 0.0 | gemv_gu 399.3 (38.5 GB/s) | act+prep_d 0.0 | gemv_d 181.0 (42.4 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.025 max 0.095 | worst layers L0:0.048 L3:0.041 L1:0.036 L4:0.031
+ -- split prof [wait] (2048 brackets, stream ms): med 0.173 p90 0.262 max 29.705 | worst layers L32:0.893 L1:0.461 L7:0.338 L35:0.302
+ -- moe_cpu prof (33280 jobs, us/job): prep_gu 0.0 | gemv_gu 395.7 (38.6 GB/s) | act+prep_d 0.0 | gemv_d 179.5 (42.6 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (33792 jobs, us/job): prep_gu 0.0 | gemv_gu 392.4 (38.7 GB/s) | act+prep_d 0.0 | gemv_d 178.4 (42.5 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (34304 jobs, us/job): prep_gu 0.0 | gemv_gu 389.0 (38.8 GB/s) | act+prep_d 0.0 | gemv_d 177.7 (42.5 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (34816 jobs, us/job): prep_gu 0.0 | gemv_gu 386.0 (38.9 GB/s) | act+prep_d 0.0 | gemv_d 177.1 (42.4 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.027 max 0.076 | worst layers L0:0.051 L3:0.045 L1:0.034 L4:0.029
+ -- split prof [wait] (2048 brackets, stream ms): med 0.201 p90 0.268 max 26.159 | worst layers L32:0.910 L27:0.823 L18:0.754 L10:0.532
+ -- moe_cpu prof (35328 jobs, us/job): prep_gu 0.0 | gemv_gu 383.2 (39.0 GB/s) | act+prep_d 0.0 | gemv_d 175.5 (42.6 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (35840 jobs, us/job): prep_gu 0.0 | gemv_gu 380.6 (39.0 GB/s) | act+prep_d 0.0 | gemv_d 174.1 (42.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+Context      0: S=[37;1m1 [32;1m     38.27[0m tokens/s
+ -- moe_cpu prof (36352 jobs, us/job): prep_gu 0.0 | gemv_gu 377.4 (39.1 GB/s) | act+prep_d 0.0 | gemv_d 173.1 (42.6 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (36864 jobs, us/job): prep_gu 0.0 | gemv_gu 374.4 (39.2 GB/s) | act+prep_d 0.0 | gemv_d 171.7 (42.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.029 max 0.100 | worst layers L0:0.048 L3:0.043 L1:0.034 L4:0.032
+ -- split prof [wait] (2048 brackets, stream ms): med 0.172 p90 0.263 max 27.227 | worst layers L1:1.004 L36:0.836 L25:0.245 L35:0.244
+ -- moe_cpu prof (37376 jobs, us/job): prep_gu 0.0 | gemv_gu 371.3 (39.3 GB/s) | act+prep_d 0.0 | gemv_d 170.4 (42.8 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (37888 jobs, us/job): prep_gu 0.0 | gemv_gu 368.6 (39.4 GB/s) | act+prep_d 0.0 | gemv_d 169.2 (43.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (38400 jobs, us/job): prep_gu 0.0 | gemv_gu 365.7 (39.6 GB/s) | act+prep_d 0.0 | gemv_d 167.9 (43.1 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (38912 jobs, us/job): prep_gu 0.0 | gemv_gu 363.7 (39.6 GB/s) | act+prep_d 0.0 | gemv_d 166.8 (43.2 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2009 brackets, stream ms): med 0.012 p90 0.028 max 0.232 | worst layers L0:0.048 L3:0.043 L1:0.038 L4:0.034
+ -- split prof [wait] (2028 brackets, stream ms): med 0.201 p90 0.265 max 25.054 | worst layers L1:1.162 L7:0.344 L8:0.338 L28:0.283
+ -- moe_cpu prof (39424 jobs, us/job): prep_gu 0.0 | gemv_gu 361.6 (39.7 GB/s) | act+prep_d 0.0 | gemv_d 165.7 (43.3 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (39936 jobs, us/job): prep_gu 0.0 | gemv_gu 359.1 (39.8 GB/s) | act+prep_d 0.0 | gemv_d 164.6 (43.4 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (40448 jobs, us/job): prep_gu 0.0 | gemv_gu 356.6 (39.9 GB/s) | act+prep_d 0.0 | gemv_d 163.5 (43.5 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (40960 jobs, us/job): prep_gu 0.0 | gemv_gu 355.4 (39.9 GB/s) | act+prep_d 0.0 | gemv_d 162.5 (43.6 GB/s) | tf_d/finish 0.0 | accum 0.0
+Context    256: S=[37;1m1 [32;1m     35.88[0m tokens/s
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.032 max 0.128 | worst layers L0:0.050 L3:0.045 L1:0.038 L4:0.036
+ -- split prof [wait] (2048 brackets, stream ms): med 0.201 p90 0.267 max 25.182 | worst layers L44:0.799 L29:0.794 L1:0.456 L27:0.301
+ -- moe_cpu prof (41472 jobs, us/job): prep_gu 0.0 | gemv_gu 353.4 (39.9 GB/s) | act+prep_d 0.0 | gemv_d 161.7 (43.6 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (41984 jobs, us/job): prep_gu 0.0 | gemv_gu 351.2 (40.1 GB/s) | act+prep_d 0.0 | gemv_d 160.8 (43.8 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (42496 jobs, us/job): prep_gu 0.0 | gemv_gu 349.5 (40.1 GB/s) | act+prep_d 0.0 | gemv_d 160.5 (43.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (43008 jobs, us/job): prep_gu 0.0 | gemv_gu 347.4 (40.2 GB/s) | act+prep_d 0.0 | gemv_d 159.6 (43.8 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.027 max 0.088 | worst layers L0:0.050 L3:0.045 L1:0.034 L4:0.034
+ -- split prof [wait] (2048 brackets, stream ms): med 0.208 p90 0.269 max 26.078 | worst layers L1:0.893 L30:0.885 L32:0.649 L31:0.502
+ -- moe_cpu prof (43520 jobs, us/job): prep_gu 0.0 | gemv_gu 345.9 (40.3 GB/s) | act+prep_d 0.0 | gemv_d 159.2 (43.8 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (44032 jobs, us/job): prep_gu 0.0 | gemv_gu 343.6 (40.4 GB/s) | act+prep_d 0.0 | gemv_d 158.7 (43.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (44544 jobs, us/job): prep_gu 0.0 | gemv_gu 341.1 (40.4 GB/s) | act+prep_d 0.0 | gemv_d 157.6 (43.8 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (45056 jobs, us/job): prep_gu 0.0 | gemv_gu 339.0 (40.5 GB/s) | act+prep_d 0.0 | gemv_d 156.6 (43.9 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2021 brackets, stream ms): med 0.012 p90 0.029 max 0.115 | worst layers L0:0.048 L3:0.043 L4:0.034 L1:0.033
+ -- split prof [wait] (2030 brackets, stream ms): med 0.170 p90 0.263 max 26.160 | worst layers L34:0.819 L27:0.538 L20:0.434 L23:0.382
+ -- moe_cpu prof (45568 jobs, us/job): prep_gu 0.0 | gemv_gu 337.4 (40.6 GB/s) | act+prep_d 0.0 | gemv_d 156.2 (43.9 GB/s) | tf_d/finish 0.0 | accum 0.0
+Context    512: S=[37;1m1 [32;1m     38.07[0m tokens/s
+ -- moe_cpu prof (46080 jobs, us/job): prep_gu 0.0 | gemv_gu 335.9 (40.6 GB/s) | act+prep_d 0.0 | gemv_d 155.3 (43.9 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (46592 jobs, us/job): prep_gu 0.0 | gemv_gu 333.9 (40.7 GB/s) | act+prep_d 0.0 | gemv_d 154.4 (44.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (47104 jobs, us/job): prep_gu 0.0 | gemv_gu 332.0 (40.8 GB/s) | act+prep_d 0.0 | gemv_d 153.6 (44.1 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.027 max 0.084 | worst layers L0:0.049 L3:0.043 L1:0.034 L2:0.031
+ -- split prof [wait] (2048 brackets, stream ms): med 0.202 p90 0.266 max 21.186 | worst layers L29:0.675 L23:0.645 L1:0.425 L10:0.338
+ -- moe_cpu prof (47616 jobs, us/job): prep_gu 0.0 | gemv_gu 331.5 (40.8 GB/s) | act+prep_d 0.0 | gemv_d 153.0 (44.2 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (48128 jobs, us/job): prep_gu 0.0 | gemv_gu 330.2 (40.8 GB/s) | act+prep_d 0.0 | gemv_d 152.3 (44.3 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (48640 jobs, us/job): prep_gu 0.0 | gemv_gu 328.4 (40.9 GB/s) | act+prep_d 0.0 | gemv_d 151.5 (44.4 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (49152 jobs, us/job): prep_gu 0.0 | gemv_gu 327.0 (41.0 GB/s) | act+prep_d 0.0 | gemv_d 150.8 (44.5 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.028 max 0.099 | worst layers L0:0.050 L3:0.041 L1:0.036 L4:0.033
+ -- split prof [wait] (2048 brackets, stream ms): med 0.203 p90 0.267 max 22.356 | worst layers L26:1.035 L35:0.726 L1:0.587 L25:0.440
+ -- moe_cpu prof (49664 jobs, us/job): prep_gu 0.0 | gemv_gu 326.0 (41.0 GB/s) | act+prep_d 0.0 | gemv_d 150.4 (44.5 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (50176 jobs, us/job): prep_gu 0.0 | gemv_gu 324.3 (41.1 GB/s) | act+prep_d 0.0 | gemv_d 149.7 (44.6 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- expert swap sweep: 64 swaps
+Context   1024: S=[37;1m1 [32;1m     31.26[0m tokens/s
+ -- moe_cpu prof (50688 jobs, us/job): prep_gu 0.0 | gemv_gu 322.7 (41.2 GB/s) | act+prep_d 0.0 | gemv_d 149.0 (44.6 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (51200 jobs, us/job): prep_gu 0.0 | gemv_gu 321.5 (41.2 GB/s) | act+prep_d 0.0 | gemv_d 148.3 (44.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.025 max 0.105 | worst layers L0:0.050 L3:0.046 L1:0.033 L4:0.033
+ -- split prof [wait] (2048 brackets, stream ms): med 0.203 p90 0.269 max 21.578 | worst layers L24:0.713 L1:0.626 L14:0.620 L16:0.586
+ -- moe_cpu prof (51712 jobs, us/job): prep_gu 0.0 | gemv_gu 321.2 (41.2 GB/s) | act+prep_d 0.0 | gemv_d 147.7 (44.8 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (52224 jobs, us/job): prep_gu 0.0 | gemv_gu 320.4 (41.1 GB/s) | act+prep_d 0.0 | gemv_d 147.8 (44.6 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (52736 jobs, us/job): prep_gu 0.0 | gemv_gu 318.9 (41.2 GB/s) | act+prep_d 0.0 | gemv_d 147.1 (44.7 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (53248 jobs, us/job): prep_gu 0.0 | gemv_gu 317.9 (41.3 GB/s) | act+prep_d 0.0 | gemv_d 146.5 (44.8 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.020 max 0.098 | worst layers L0:0.049 L1:0.035 L4:0.029 L2:0.029
+ -- split prof [wait] (2048 brackets, stream ms): med 0.199 p90 0.264 max 29.887 | worst layers L28:0.866 L7:0.747 L21:0.729 L1:0.724
+ -- moe_cpu prof (53760 jobs, us/job): prep_gu 0.0 | gemv_gu 316.8 (41.3 GB/s) | act+prep_d 0.0 | gemv_d 145.8 (44.9 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (54272 jobs, us/job): prep_gu 0.0 | gemv_gu 315.7 (41.3 GB/s) | act+prep_d 0.0 | gemv_d 145.3 (44.9 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (54784 jobs, us/job): prep_gu 0.0 | gemv_gu 314.5 (41.3 GB/s) | act+prep_d 0.0 | gemv_d 144.6 (45.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (55296 jobs, us/job): prep_gu 0.0 | gemv_gu 313.1 (41.4 GB/s) | act+prep_d 0.0 | gemv_d 143.9 (45.1 GB/s) | tf_d/finish 0.0 | accum 0.0
+Context   2048: S=[37;1m1 [32;1m     36.64[0m tokens/s
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.025 max 0.085 | worst layers L0:0.050 L4:0.034 L1:0.033 L3:0.028
+ -- split prof [wait] (2048 brackets, stream ms): med 0.191 p90 0.263 max 25.080 | worst layers L17:0.923 L1:0.840 L32:0.660 L46:0.345
+ -- moe_cpu prof (55808 jobs, us/job): prep_gu 0.0 | gemv_gu 312.3 (41.4 GB/s) | act+prep_d 0.0 | gemv_d 143.3 (45.1 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (56320 jobs, us/job): prep_gu 0.0 | gemv_gu 311.4 (41.5 GB/s) | act+prep_d 0.0 | gemv_d 143.4 (45.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (56832 jobs, us/job): prep_gu 0.0 | gemv_gu 310.5 (41.5 GB/s) | act+prep_d 0.0 | gemv_d 143.2 (45.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (57344 jobs, us/job): prep_gu 0.0 | gemv_gu 309.6 (41.5 GB/s) | act+prep_d 0.0 | gemv_d 143.0 (44.9 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.019 max 0.078 | worst layers L0:0.049 L1:0.034 L4:0.030 L3:0.029
+ -- split prof [wait] (2048 brackets, stream ms): med 0.198 p90 0.265 max 29.350 | worst layers L1:2.242 L0:0.819 L13:0.754 L42:0.655
+ -- moe_cpu prof (57856 jobs, us/job): prep_gu 0.0 | gemv_gu 308.7 (41.5 GB/s) | act+prep_d 0.0 | gemv_d 142.5 (45.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (58368 jobs, us/job): prep_gu 0.0 | gemv_gu 308.2 (41.5 GB/s) | act+prep_d 0.0 | gemv_d 142.2 (45.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (58880 jobs, us/job): prep_gu 0.0 | gemv_gu 307.0 (41.6 GB/s) | act+prep_d 0.0 | gemv_d 141.6 (45.1 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (59392 jobs, us/job): prep_gu 0.0 | gemv_gu 306.0 (41.7 GB/s) | act+prep_d 0.0 | gemv_d 141.3 (45.1 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.022 max 0.081 | worst layers L0:0.050 L1:0.036 L4:0.034 L3:0.029
+ -- split prof [wait] (2048 brackets, stream ms): med 0.202 p90 0.266 max 25.946 | worst layers L21:0.786 L18:0.714 L1:0.449 L26:0.414
+ -- moe_cpu prof (59904 jobs, us/job): prep_gu 0.0 | gemv_gu 304.8 (41.7 GB/s) | act+prep_d 0.0 | gemv_d 140.9 (45.1 GB/s) | tf_d/finish 0.0 | accum 0.0
+Context   4096: S=[37;1m1 [32;1m     35.06[0m tokens/s
+ -- moe_cpu prof (60416 jobs, us/job): prep_gu 0.0 | gemv_gu 304.0 (41.7 GB/s) | act+prep_d 0.0 | gemv_d 140.9 (45.0 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (60928 jobs, us/job): prep_gu 0.0 | gemv_gu 303.0 (41.8 GB/s) | act+prep_d 0.0 | gemv_d 140.3 (45.1 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (61440 jobs, us/job): prep_gu 0.0 | gemv_gu 302.6 (41.7 GB/s) | act+prep_d 0.0 | gemv_d 139.7 (45.2 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.021 max 0.082 | worst layers L0:0.048 L1:0.030 L4:0.030 L3:0.029
+ -- split prof [wait] (2048 brackets, stream ms): med 0.196 p90 0.263 max 26.774 | worst layers L1:3.137 L11:0.449 L10:0.314 L9:0.273
+ -- moe_cpu prof (61952 jobs, us/job): prep_gu 0.0 | gemv_gu 301.5 (41.8 GB/s) | act+prep_d 0.0 | gemv_d 139.2 (45.3 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (62464 jobs, us/job): prep_gu 0.0 | gemv_gu 300.4 (41.9 GB/s) | act+prep_d 0.0 | gemv_d 138.8 (45.3 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (62976 jobs, us/job): prep_gu 0.0 | gemv_gu 299.3 (42.0 GB/s) | act+prep_d 0.0 | gemv_d 138.6 (45.3 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (63488 jobs, us/job): prep_gu 0.0 | gemv_gu 298.3 (42.1 GB/s) | act+prep_d 0.0 | gemv_d 138.2 (45.4 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- split prof [issue] (2048 brackets, stream ms): med 0.012 p90 0.020 max 0.087 | worst layers L0:0.048 L1:0.038 L3:0.035 L4:0.030
+ -- split prof [wait] (2048 brackets, stream ms): med 0.210 p90 0.270 max 17.938 | worst layers L1:0.680 L42:0.603 L17:0.292 L14:0.281
+ -- moe_cpu prof (64000 jobs, us/job): prep_gu 0.0 | gemv_gu 297.2 (42.1 GB/s) | act+prep_d 0.0 | gemv_d 137.7 (45.5 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (64512 jobs, us/job): prep_gu 0.0 | gemv_gu 296.4 (42.2 GB/s) | act+prep_d 0.0 | gemv_d 137.2 (45.5 GB/s) | tf_d/finish 0.0 | accum 0.0
+ -- moe_cpu prof (65024 jobs, us/job): prep_gu 0.0 | gemv_gu 295.3 (42.3 GB/s) | act+prep_d 0.0 | gemv_d 136.8 (45.6 GB/s) | tf_d/finish 0.0 | accum 0.0
+Context   7936: S=[37;1m1 [32;1m     38.38[0m tokens/s
+
+
+ -- alloc peak allocated=19666 MiB reserved=20592 MiB
+
+=== pass     : t9-prof16
+=== run id   : t9-prof16-20261030-090139
+=== regime   : production
+=== engine   : 1.6.5
+=== package  : C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\__init__.py
+=== extension: C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3_ext.cp312-win_amd64.pyd
+=== torch    : 2.11.0+cu130 / cuda 13.0
+=== gpu      : NVIDIA GeForce RTX 4090, 24564 MiB, 596.36
+=== free vram at start (MiB): 24138
+=== harness  : FBA75185565970C8C80A9F954DEA6AA5A3131E05A8E76352111606B7E945D3C0
+=== args     : 
+-m D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8 -cs 131072 -chunk_size 4096 -ambs 2 -cq 2,2 -max_length 8192 -mcs 376 -mct 16
+=== env      : 
+EXL3_HOST_MEM_RESERVE_MB=0 EXL3_MOE_ARENA_HUGEPAGE=0 EXL3_MOE_CPU_PIN=1 EXL3_MOE_CPU_PROF=1 EXL3_MOE_CPU_SWAP_DEBUG=1 EXL3_MOE_CPU_SWIZZLE=1 EXL3_MOE_MEMOPS=0 EXL3_MOE_SUBMIT_PROF=1 EXL3_SPLIT_PROF=1 FROZEN_STATE=master->active PYTHONUTF8=1 XDG_CACHE_HOME=C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\engine-state\active
+=== started  : 
+2026-10-30T10:01:39
+=== elapsed s: 92

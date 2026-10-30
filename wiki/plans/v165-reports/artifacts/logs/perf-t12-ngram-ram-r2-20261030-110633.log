@@ -1,0 +1,20 @@
+ -- Loading D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8
+ -- CPU split experts (worker, dynamic): model.language_model.layers.0.mlp [136..512) of 512, placement from saved profile
+
+=== pass     : t12-ngram-ram-r2
+=== run id   : t12-ngram-ram-r2-20261030-110633
+=== regime   : production
+=== engine   : 1.6.5
+=== package  : C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\__init__.py
+=== extension: C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3_ext.cp312-win_amd64.pyd
+=== torch    : 2.11.0+cu130 / cuda 13.0
+=== gpu      : NVIDIA GeForce RTX 4090, 24564 MiB, 596.36
+=== free vram at start (MiB): 24138
+=== harness  : FBA75185565970C8C80A9F954DEA6AA5A3131E05A8E76352111606B7E945D3C0
+=== args     : 
+-m D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8 -cs 131072 -chunk_size 4096 -ambs 2 -cq 2,2 -max_length 131072 -mcs 376 -mct 16 -ngr
+=== env      : 
+EXL3_HOST_MEM_RESERVE_MB=0 EXL3_MOE_ARENA_HUGEPAGE=0 EXL3_MOE_CPU_PIN=1 EXL3_MOE_CPU_SWIZZLE=1 EXL3_MOE_MEMOPS=0 FROZEN_STATE=master->active PYTHONUTF8=1 XDG_CACHE_HOME=C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\engine-state\active
+=== started  : 
+2026-10-30T12:06:33
+=== elapsed s: 27

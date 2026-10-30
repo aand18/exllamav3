@@ -1,0 +1,5 @@
+BREACH tag=t12-ngram-ram-r2-20261030-110633 at 2026-10-30T12:06:55
+free_vram_mb=21399 floor=100 low=False
+free_ram_mb=637 floor=1200 low=True
+watched_pid=36772 launcher_pid=36076
+action=killed process tree

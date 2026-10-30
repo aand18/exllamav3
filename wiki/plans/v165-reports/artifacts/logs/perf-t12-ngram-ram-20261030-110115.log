@@ -1,0 +1,34 @@
+usage: perf.py [-h] -m MODEL_DIR [-gs GPU_SPLIT] [-lm] [-or OVERRIDE] [-tp]
+               [-mcl MOE_CPU_OFFLOAD] [-mcs MOE_CPU_SPLIT] [-mcpa]
+               [-mct MOE_CPU_THREADS] [-ngl] [-ngr] [-embd] [-tpb TP_BACKEND]
+               [-tp_attn TP_MAX_PARALLELISM_ATTN]
+               [-tp_mlp TP_MAX_PARALLELISM_MLP]
+               [-tp_moe TP_MAX_PARALLELISM_MOE]
+               [-tp_linear TP_MAX_PARALLELISM_LINEAR]
+               [-tp_linear_attn TP_MAX_PARALLELISM_LINEAR_ATTN] [-tp_moe_ts]
+               [-swa_full] [-ambs AUTOSPLIT_MAX_BATCH_SIZE]
+               [-chunk_size CHUNK_SIZE] [-lv] [-asnf] [-nw]
+               [-layer_map LAYER_MAP] [-cs CACHE_SIZE] [-cq CACHE_QUANT]
+               [-rs32] [-cca CACHE_COMPAND_A] [-ccs CPU_CACHE_SIZE]
+               [-dcd DISK_CACHE_DIR] [-dcs DISK_CACHE_SIZE]
+               [-rcs RECURRENT_CACHE_SIZE] [-max_length MAX_LENGTH] [-spf]
+               [-dr DECODE_REPS] [-sg] [-swu] [-short] [-sd]
+perf.py: error: unrecognized arguments: -ngram_ram
+
+=== pass     : t12-ngram-ram
+=== run id   : t12-ngram-ram-20261030-110115
+=== regime   : production
+=== engine   : 1.6.5
+=== package  : C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\__init__.py
+=== extension: C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3_ext.cp312-win_amd64.pyd
+=== torch    : 2.11.0+cu130 / cuda 13.0
+=== gpu      : NVIDIA GeForce RTX 4090, 24564 MiB, 596.36
+=== free vram at start (MiB): 24138
+=== harness  : FBA75185565970C8C80A9F954DEA6AA5A3131E05A8E76352111606B7E945D3C0
+=== args     : 
+-m D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8 -cs 131072 -chunk_size 4096 -ambs 2 -cq 2,2 -max_length 131072 -mcs 376 -mct 16 -ngram_ram
+=== env      : 
+EXL3_HOST_MEM_RESERVE_MB=0 EXL3_MOE_ARENA_HUGEPAGE=0 EXL3_MOE_CPU_PIN=1 EXL3_MOE_CPU_SWIZZLE=1 EXL3_MOE_MEMOPS=0 FROZEN_STATE=master->active PYTHONUTF8=1 XDG_CACHE_HOME=C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\engine-state\active
+=== started  : 
+2026-10-30T12:01:15
+=== elapsed s: 2
