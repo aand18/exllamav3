@@ -62,7 +62,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File \
 | `-CacheSize N` | replaces the regime's `-cs`; `0` takes `cache_size` from `state.json`, or `draft.spec_decode_cache_size` for a drafting run |
 | `-Model PATH` | replaces the regime's `-m`; empty takes `model` from `state.json` |
 | `-Runner perf` / `-Runner spec_decode` | one `perf.py` pp/tg ladder (default) or one `spec_decode.py` drafting pass |
-| `-Extra "..."` | appends raw runner flags (`-dr 3`, `-rb_ab`, …). It may not restate a flag the regime owns — `-m`, `-cs`, `-cq`, `-chunk_size`, `-ambs`, `-max_length`, `-mcs`, `-mct` and, on a drafting run, `-mtp`/`-ndt`/`-sdh`/`-hdt`/`-dds` — in any spelling (`-cs=40960`, `--cache_size 40960` included); a restatement aborts and names the flag with the switch or state field that sets it |
+| `-Extra "..."` | appends raw runner flags (`-dr 3`, `-rb_ab`, …). It may not restate a flag the regime owns — `-m`, `-cs`, `-cq`, `-chunk_size`, `-ambs`, `-max_length`, `-mcs`, `-mct` and, on a drafting run, `-mtp`/`-ndt`/`-sdh`/`-hdt`/`-dds` — in any spelling (`-cs=40960`, `--cache_size 40960` included); a restatement aborts, naming the flag and the way to change it: the delta switch where one exists (`-Model`, `-CacheSize`, `-MaxLength`, `-Split`, `-Threads`), `edit state.json` for the rest (`-cq`, `-chunk_size`, `-ambs` and the drafting flags) |
 | `-StaticSwap` | applies `state.json`'s `knob_arms_disable_swap` to this pass (`EXL3_MOE_CPU_SWAP=0`); a drafting run gets it without asking |
 | `-DryRun` | prints the `DRYRUN`/`ARGS`/`ENV` lines and exits 0: no log, no CSV row, no watcher, no frozen-profile restore, no output directory, no GPU, and no one-owner check — so it works while another pass or the server owns the card |
 | `-NoSpecDec` | skip the S=1..4 decode grid (prefill-only decisions) |
@@ -82,10 +82,11 @@ inheriting what the previous run learned (`-NoFrozenState` opts out).
 
 Drafting is `-Runner spec_decode` only, and its flags come from `state.json` too: `draft.mode: mtp`
 becomes `-mtp`, `num_draft_tokens` becomes `-ndt`, `sparse_draft_head`/`hybrid_draft_tokens` are
-passed when above zero, and a drafting run's cache is `draft.spec_decode_cache_size` (`-cs 40960`,
-not the ladder's 131072). A `perf.py` ladder carries no draft flags at all — `eval/perf.py`
-registers none, so `-mtp` in its argv aborts at argparse. `-Extra` carries only what the state does
-not: on a drafting run `-Extra "-rb_ab"` is a delta, `-Extra "-rb_ab -mtp"` is refused.
+passed when above zero, `dynamic_draft: true` becomes `-dds`, and a drafting run's cache is
+`draft.spec_decode_cache_size` (`-cs 40960`, not the ladder's 131072). A `perf.py` ladder carries no
+draft flags at all — `eval/perf.py` registers none, so `-mtp` in its argv aborts at argparse.
+`-Extra` carries only what the state does not: on a drafting run `-Extra "-rb_ab"` is a delta,
+`-Extra "-rb_ab -mtp"` is refused.
 
 `perf.py` measures prefill at `256, 512, … max_length` and decode at `0, 256, … max_length-256`
 with `S=1..4`; `S=1` is the tg number, `S=2..4` are the per-step cost of MTP verification, not an
