@@ -23,16 +23,21 @@
 #   run_pass.ps1 -Tag memops1-a -Env "EXL3_MOE_MEMOPS=1" -MaxLength 131072
 #   run_pass.ps1 -Tag t14-a -Threads 14 -MaxLength 131072
 #   run_pass.ps1 -Tag split320 -Split 320 -MaxLength 262144
+#   run_pass.ps1 -Tag static-a -StaticSwap
 #   run_pass.ps1 -Tag reps3 -Extra "-dr 3" -MaxLength 131072
 #   run_pass.ps1 -Tag x -Unset "EXL3_MOE_MEMOPS,EXL3_MOE_CPU_PIN"
 #
 # -Env is a comma-separated KEY=VALUE list applied AFTER the regime's own environment, so it can
 # override a regime value. -Unset removes variables from the inherited environment. -Threads,
 # -Split and -CacheSize replace the regime's -mct, -mcs and -cs. -Extra appends raw perf.py flags,
-# but may not repeat one the regime owns (-m, -cs, -chunk_size, -ambs, -cq, -max_length, -mcs,
-# -mct): a second -cs is how val-spec 2026-10-29 came to log one cache size and run another, and
-# the cache quant is a state.json field now, so "-Extra \"-cq Q8\"" aborts by design. -DryRun
-# prints the argv and environment a pass would use and exits before anything is written.
+# but may not restate one the regime owns (-m, -cs, -chunk_size, -ambs, -cq, -max_length, -mcs, -mct,
+# and the state's drafting flags -mtp/-ndt/-sdh/-hdt/-dds): the guard is spelling-proof, so
+# "-cs=40960" and "--cache_size 40960" abort like "-cs 40960" (a second -cs is how val-spec
+# 2026-10-29 came to log one cache size and run another), and "-Extra \"-cq Q8\"" aborts by design.
+# Dynamic expert placement is on unless the run is a drafting one or asks for -StaticSwap: the state
+# field knob_arms_disable_swap scopes EXL3_MOE_CPU_SWAP=0 to the knob arms, because the archived
+# pp/tg ladder was measured with placement on and must stay comparable to itself. -DryRun prints the
+# argv and environment a pass would use and exits before anything is written.
 #
 # Outputs (in -OutDir):
 #   logs/perf-<Tag>-<utc>.log    perf.py stdout + stderr + an identity header appended last
@@ -61,6 +66,7 @@ param(
     [string] $Model = "",      # "" = take from state.json
     [string] $State = "",      # "" = <Root>\state.json
     [switch] $NoFrozenState,   # do not point XDG_CACHE_HOME at the frozen profile dir
+    [switch] $StaticSwap,      # turn dynamic expert placement off for a pp/tg run (spec_decode: always)
     [string] $Root = "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165",
     [switch] $DryRun,          # print argv+env and exit 0 before any log, CSV row or watcher exists
     [switch] $Short,
@@ -180,6 +186,9 @@ if ($null -ne $Draft -and $Runner -eq "spec_decode") {
     # acc=1.74/4.00 on four draft tokens while state.json said 2 is what this block exists to make
     # impossible.
     if ([string]$Draft.mode -eq "mtp") { $draftArgs += "-mtp" }
+    # 0 (or absent) is treated as unset rather than sent as "-ndt 0": the engine's default is 4 draft
+    # tokens, so a state value of 0 would silently run 4, and the way to see that from the outside is
+    # the absence of -ndt in the argv (a real 0 is not a drafting regime anyone can measure).
     if ($null -ne $Draft.num_draft_tokens -and [int]$Draft.num_draft_tokens -gt 0) {
         $draftArgs += @("-ndt", "$([int]$Draft.num_draft_tokens)")
     }
@@ -191,11 +200,78 @@ if ($null -ne $Draft -and $Runner -eq "spec_decode") {
     }
     if ($Draft.dynamic_draft -eq $true) { $draftArgs += "-dds" }
 }
-$argsList = @("-m", $MODEL, "-cs", "$CacheSize", "-chunk_size", "4096", "-ambs", "2",
-              "-cq", $CacheQuant, "-max_length", "$MaxLength", "-mcs", "$Split", "-mct", "$Threads")
-$argsList += $draftArgs
+# The regime's own argv, kept apart from the deltas: the duplicate guard below has to see exactly what
+# state.json decided, including the draft flags when they were emitted, and it has to see it BEFORE the
+# spec_decode -max_length strip can eat a restated copy.
+$regimeArgs = @("-m", $MODEL, "-cs", "$CacheSize", "-chunk_size", "4096", "-ambs", "2",
+                "-cq", $CacheQuant, "-max_length", "$MaxLength", "-mcs", "$Split", "-mct", "$Threads")
+$regimeArgs += $draftArgs
+
+# Every spelling argparse accepts for the flags above, mapped to the canonical short name the regime
+# and the abort message use. A token scan that only knows "-cs" counts one flag where the engine takes
+# the value twice and keeps the last one: "-cs=40960" and "--cache_size 40960" both set the cache size
+# (allow_abbrev=False does not stop the =value form or a long alias), which is the val-spec
+# 2026-10-29 mismatch in another spelling.
+$regimeSpellings = @{
+    "-m" = "-m";                  "--model_dir" = "-m"
+    "-cs" = "-cs";                "--cache_size" = "-cs"
+    "-cq" = "-cq";                "--cache_quant" = "-cq"
+    "-mcs" = "-mcs";              "--moe_cpu_split" = "-mcs"
+    "-mct" = "-mct";              "--moe_cpu_threads" = "-mct"
+    "-max_length" = "-max_length"; "--max_length" = "-max_length"
+    "-chunk_size" = "-chunk_size"; "--chunk_size" = "-chunk_size"
+    "-ambs" = "-ambs";            "--autosplit_max_batch_size" = "-ambs"
+    "-mtp" = "-mtp";              "--mtp" = "-mtp"
+    "-ndt" = "-ndt";              "--num_draft_tokens" = "-ndt"
+    "-sdh" = "-sdh";              "--sparse_draft_head" = "-sdh"
+    "-hdt" = "-hdt";              "--hybrid_draft_tokens" = "-hdt"
+    "-dds" = "-dds";              "--dynamic_draft" = "-dds"
+}
+# How to change an owned flag properly. A flag with no delta parameter is a state.json edit, and the
+# message says so instead of offering a parameter that does not exist.
+$regimeRemedy = @{
+    "-m"          = "use -Model, or edit state.json"
+    "-cs"         = "use -CacheSize, or edit state.json"
+    "-max_length" = "use -MaxLength, or edit state.json"
+    "-mcs"        = "use -Split, or edit state.json"
+    "-mct"        = "use -Threads, or edit state.json"
+    "-chunk_size" = "edit state.json"
+    "-ambs"       = "edit state.json"
+    "-cq"         = "edit state.json"
+    "-mtp"        = "edit state.json"
+    "-ndt"        = "edit state.json"
+    "-sdh"        = "edit state.json"
+    "-hdt"        = "edit state.json"
+    "-dds"        = "edit state.json"
+}
+
+# Canonical short flag named by an argv token, or $null for a value ("131072", "2,2", "D:\llms\...").
+# The =value form is stripped before the lookup so "-cs=40960" and "--cache_size=40960" resolve too.
+function Get-RegimeFlag([string] $tok) {
+    if (-not $tok.StartsWith("-")) { return $null }
+    $name = ($tok.Split("=")[0]).ToLowerInvariant()
+    if ($regimeSpellings.ContainsKey($name)) { return $regimeSpellings[$name] }
+    return $null
+}
+
+# -Extra may not restate a flag the regime owns. Only the regime decides those; a restatement is how
+# the recorded argv and the running process stopped describing the same pass, so it aborts instead.
+$owned = @{}
+foreach ($tok in $regimeArgs) {
+    $flag = Get-RegimeFlag $tok
+    if ($null -ne $flag) { $owned[$flag] = $true }
+}
+$argsList = $regimeArgs   # the emitted argv starts as the regime's own; -Extra appends to a copy
 if ($Extra -ne "") {
-    foreach ($tok in ($Extra -split '\s+')) { if ($tok -ne "") { $argsList += $tok } }
+    foreach ($tok in ($Extra -split '\s+')) {
+        if ($tok -eq "") { continue }
+        $flag = Get-RegimeFlag $tok
+        if ($null -ne $flag -and $owned.ContainsKey($flag)) {
+            Write-Output ("ABORT: -Extra repeats " + $flag + ", which the regime owns (" + $regimeRemedy[$flag] + ")")
+            exit 2
+        }
+        $argsList += $tok
+    }
 }
 if ($Short)          { $argsList += "-short" }
 if (-not $NoSpecDec -and $Runner -eq "perf") { $argsList += "-sd" }
@@ -213,36 +289,22 @@ if ($SkipPrefill)    { $argsList += "-spf" }
 if ($SkipGen)        { $argsList += "-sg" }
 if ($SkipWarmup)     { $argsList += "-swu" }
 
-# A regime-owned flag may appear exactly once. -Extra is raw argv, so it could append a second -cs
-# and the log header then described a cache the process never used (val-spec 2026-10-29). The scan
-# runs over the ASSEMBLED argv, so the guarantee holds whichever path added a copy, and the abort
-# names the flag that replaces it instead of leaving the arm to silently disagree with state.json.
-$regimeOwned = [ordered]@{
-    "-m"          = "use -Model, or edit state.json"
-    "-cs"         = "use -CacheSize, or edit state.json"
-    "-chunk_size" = "edit state.json"
-    "-ambs"       = "edit state.json"
-    "-cq"         = "edit state.json"
-    "-max_length" = "use -MaxLength, or edit state.json"
-    "-mcs"        = "use -Split, or edit state.json"
-    "-mct"        = "use -Threads, or edit state.json"
-}
-foreach ($flag in $regimeOwned.Keys) {
-    if (@($argsList | Where-Object { $_ -eq $flag }).Count -gt 1) {
-        Write-Output ("ABORT: -Extra repeats " + $flag + ", which the regime owns (" + $regimeOwned[$flag] + ")")
-        exit 2
-    }
-}
-
 # --- Environment -------------------------------------------------------------------------------
 $baseEnv = [ordered]@{}
 if ($ST.env) { foreach ($pr in $ST.env.PSObject.Properties) { $baseEnv[$pr.Name] = [string]$pr.Value } }
 # Drafting arms are read with dynamic expert placement OFF (state.knob_arms_disable_swap): a drafter
 # that accepts an extra token also changes which experts stay resident, so a number measured with
-# both knobs moving says nothing about either. It lands in the regime env - before -Unset/-Env - so
-# an arm can still ask for it back (-Env "EXL3_MOE_CPU_SWAP=1") and that delta is measured, not
-# assumed. $envApplied copies $baseEnv below, which puts it in the log header and in passes.csv.
-if ($ST.knob_arms_disable_swap -eq $true) { $baseEnv["EXL3_MOE_CPU_SWAP"] = "0" }
+# both knobs moving says nothing about either. The field is named for knob arms and the pp/tg ladder
+# is not one: 44 archived ladder rows were measured with placement on, so forcing it off for every
+# ladder run would silently break the series the T4 thresholds and the T10 ladder are read against.
+# Hence the scope - automatic for -Runner spec_decode (the arm-to-arm drafting comparisons) and for a
+# run that asks for it with -StaticSwap; a plain ladder run keeps the engine default. It lands in the
+# regime env, before -Unset/-Env, so an arm can still override it (-Env "EXL3_MOE_CPU_SWAP=1") and
+# that delta is measured, not assumed; $envApplied copies $baseEnv below, which puts it in the log
+# header and in passes.csv.
+if ($ST.knob_arms_disable_swap -eq $true -and ($Runner -eq "spec_decode" -or $StaticSwap)) {
+    $baseEnv["EXL3_MOE_CPU_SWAP"] = "0"
+}
 foreach ($k in $baseEnv.Keys) { Set-Item "env:$k" $baseEnv[$k] }
 $envApplied = [ordered]@{}
 foreach ($k in $baseEnv.Keys) { $envApplied[$k] = $baseEnv[$k] }
