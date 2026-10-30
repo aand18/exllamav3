@@ -20,10 +20,16 @@ DEST="${DEST:-/mnt/c/Users/yoho/Downloads/tabbyAPI/_agent/v165}"
 
 mkdir -p "$DEST/logs" "$DEST/results"
 
-# The active regime lives in state.json; run_pass.ps1 refuses to start without it. Ship the repo's
-# copy only when the destination has none, so a swap recorded on the box is never overwritten.
-if [ ! -f "$DEST/state.json" ]; then
-  install -m 0666 "$HERE/state.json" "$DEST/state.json"
+# The active regime lives in state.json; run_pass.ps1 refuses to start without it. The repo is the
+# source of truth: a regime change is recorded here and deployed, never edited on the box. Shipping
+# only when the destination lacks the file leaves the box on an old regime while
+# bench/verify_task.py --pre validates the new one, so it ships on every deploy.
+state_sha_before="$(sha256sum "$DEST/state.json" 2>/dev/null | cut -d' ' -f1 || true)"
+install -m 0666 "$HERE/state.json" "$DEST/state.json"
+if [ "$state_sha_before" = "$(sha256sum "$DEST/state.json" | cut -d' ' -f1)" ]; then
+  echo "state.json: unchanged"
+else
+  echo "state.json: updated"
 fi
 
 install -m 0666 "$HERE/watch.ps1"      "$DEST/watch.ps1"
@@ -42,4 +48,4 @@ mkdir -p "$DEST/prompts"
 cp -f "$REPO"/eval/prompts/*.json "$DEST/prompts/"
 
 echo "deployed to $DEST"
-sha256sum "$DEST"/*.ps1 "$DEST"/perf.py
+sha256sum "$DEST"/*.ps1 "$DEST"/perf.py "$DEST"/state.json
