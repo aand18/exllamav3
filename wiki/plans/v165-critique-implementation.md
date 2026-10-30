@@ -55,7 +55,9 @@ extended, nothing else created). Every commit named below is on `165-win-perf` b
 `1c5b9670`. The sections that follow C ("Conflicts resolved", "Verification performed", "Not
 exercised yet") describe the **first** pass; C records what the second review changed on top. The
 documentation that carries C is two commits of its own: `7c8754e2` (`bench/windows/README.md`, the
-harness as it now is) and `dfa36468` (this file).
+harness as it now is) and `dfa36468` (this file). The implementers' evidence for every row — dry-run
+transcripts, mutation matrices, test counts — is archived beside the run logs under
+`wiki/plans/v165-reports/artifacts/second-review/`.
 
 | # | Defect (the review's claim) | Evidence | Fix | Commit | Status |
 |---|---|---|---|---|---|
