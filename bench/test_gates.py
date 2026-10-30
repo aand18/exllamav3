@@ -159,11 +159,74 @@ class SwapRefusal(unittest.TestCase):
         self.assertEqual(spec_decode.count_arms(args), 1)
         args.no_baseline = True
         self.assertEqual(spec_decode.count_arms(args), 0)
+        # The n-gram arm is an arm: a baseline + -ngram_min run prints N-gram (greedy) beside
+        # Baseline, which is the ratio the gate exists to refuse
         args.no_baseline = False
+        args.s_ngram_match_min = 3
+        self.assertEqual(spec_decode.count_arms(args), 2)
+        args.no_baseline = True
+        self.assertEqual(spec_decode.count_arms(args), 1)
+        args.no_baseline = False
+        args.s_ngram_match_min = 0
         args.draft_model_dir = "/models/draft"
         self.assertEqual(spec_decode.count_arms(args), 2)
         args.readback_ab = True
         self.assertEqual(spec_decode.count_arms(args), 5)
+
+    def test_main_wires_the_gate_in(self):
+        # The helpers passing their own tests is not the gate: the block in main() that reads the
+        # placement, calls the refusal and exits 2 is what turns them into a refusal, and deleting
+        # it once left the whole suite green
+        with open(RUNNER, "r") as f:
+            tree = ast.parse(f.read())
+        functions = [n for n in ast.walk(tree)
+                     if isinstance(n, ast.FunctionDef) and n.name == "main"]
+        self.assertEqual(len(functions), 1, "main() is gone")
+        main = functions[0]
+        calls = [c for c in ast.walk(main) if isinstance(c, ast.Call)]
+        names = {c.func.id for c in calls if isinstance(c.func, ast.Name)}
+        self.assertIn("swap_refusal", names, "main() must ask swap_refusal()")
+        self.assertIn("dynamic_placement", names, "main() must read the placement, not assume it")
+        self.assertIn("count_arms", names, "main() must pass the arm count, not a constant")
+
+        def is_sys_exit(node):
+            return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "exit" and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "sys")
+
+        exits = [c for c in calls if is_sys_exit(c)]
+        self.assertEqual(len(exits), 1, "the refusal path must exit, and exit once")
+        # ... under the refusal: deleted guard, or an exit moved out of it, is a run that reports
+        # a ratio it should have refused
+        guarded = [n for n in ast.walk(main) if isinstance(n, ast.If)
+                   and any(isinstance(x, ast.Name) and x.id == "refusal" for x in ast.walk(n.test))
+                   and any(is_sys_exit(c) for c in ast.walk(n))]
+        self.assertTrue(guarded, "sys.exit must sit under the swap_refusal() result")
+        # and the escape hatch has to be consulted, not just documented
+        self.assertIn("swap_ok", {n.attr for n in ast.walk(main) if isinstance(n, ast.Attribute)})
+
+    def test_dynamic_placement_reads_the_registry_and_the_modules(self):
+        # Placement is fixed at load, so this is a read of two sources: the engine's registry and
+        # the modules themselves. Fakes are the whole engine here - no import, no device
+        dynamic = types.SimpleNamespace(_split_dynamic = True)
+        static = types.SimpleNamespace(_split_dynamic = False)
+        def config(registry = None, infer_params = "default"):
+            ip = types.SimpleNamespace(moe_cpu_swap_modules = registry) \
+                if infer_params == "default" else infer_params
+            return types.SimpleNamespace(infer_params = ip)
+        self.assertFalse(spec_decode.dynamic_placement(types.SimpleNamespace(modules = []),
+                                                       config(registry = [])))
+        self.assertFalse(spec_decode.dynamic_placement(types.SimpleNamespace(modules = [static]),
+                                                       config(registry = [static])))
+        self.assertTrue(spec_decode.dynamic_placement(types.SimpleNamespace(modules = [dynamic]),
+                                                      config(registry = [dynamic])))
+        # a plain load has no infer_params at all, and a split module is in model.modules even when
+        # no registry was ever created
+        self.assertFalse(spec_decode.dynamic_placement(types.SimpleNamespace(modules = []),
+                                                       types.SimpleNamespace(infer_params = None)))
+        self.assertTrue(spec_decode.dynamic_placement(types.SimpleNamespace(modules = [dynamic]),
+                                                      types.SimpleNamespace(infer_params = None)))
+
 
 
 if __name__ == "__main__":

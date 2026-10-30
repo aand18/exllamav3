@@ -531,12 +531,13 @@ $status = "ok"
 if ($breach) { $status = "breach" }
 elseif ($traceback) { $status = "fail" }
 elseif ($Runner -eq "perf" -and $ppRows.Count -eq 0 -and $tgRows.Count -eq 0) { $status = "fail" }
-# A drafting pass that measured no arm is a failure, for the same reason the ladder rule above exists:
-# the venv python's exit code is unreadable through the uv shim, so the verdict has to come from the
-# evidence. spec_decode.py now exits 2 at the swap gate before any arm runs, and a pass that dies
-# before its first ARM line is indistinguishable from one that ran - both leave no rows, and "ok with
-# no arms" reads as a measured comparison that does not exist.
-elseif ($Runner -eq "spec_decode" -and $armRows.Count -eq 0) { $status = "fail" }
+# A drafting pass that produced no evidence at all is a failure, for the same reason the ladder rule
+# above exists: the venv python's exit code is unreadable through the uv shim, so the verdict has to
+# come from the evidence. spec_decode.py now exits 2 at the swap gate before any workload runs, and a
+# pass that dies before its first row leaves neither an ARM line nor a table row. Both are required to
+# be absent: a single-arm n-gram pass (-nbl -ngram_min 3) prints the per-category table but no ARM
+# line, because arm_line() only runs for the baseline and draft arms, and that pass did measure.
+elseif ($Runner -eq "spec_decode" -and $armRows.Count -eq 0 -and $sdRows.Count -eq 0) { $status = "fail" }
 
 # --- Persist -----------------------------------------------------------------------------------
 $passesCsv = Join-Path $RES "passes.csv"
