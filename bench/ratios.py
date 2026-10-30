@@ -130,7 +130,9 @@ def main(argv: list[str]) -> int:
         for p in runs(passes):
             print(f"| {p['run_id']} | {p['tag']} | {p['status']} | {p.get('max_length','')} | "
                   f"{p.get('split','')} | {p.get('min_free_vram_mb','')} | {p.get('min_free_ram_mb','')} | "
-                  f"{p.get('runner','perf')} | `{(p.get('args') or '')[:70]}` |")
+                  # rows written before the runner column existed have no value there; every one of
+                  # them predates spec_decode support, so "perf" is what they were, not a guess
+                  f"{p.get('runner') or 'perf'} | `{(p.get('args') or '')[:70]}` |")
         return 0
 
     if not args.var:

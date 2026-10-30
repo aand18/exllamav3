@@ -161,3 +161,90 @@ was already past load and finishes on its own (its numbers are the discardable p
 **Unmeasured: `-sdh` (sparse draft head), `-hdt` (hybrid drafting), `-dds` (dynamic draft).**
 `-sdh` is the one worth resuming first — it is the only knob here that changes *what* is drafted
 rather than how much, and the plan expects it to matter most for MTP.
+
+## Step 3 — `-sdh` sparse draft head (resumed 2026-10-30, production 3.18 @ split 376)
+
+Runner: `run_pass.ps1 -Runner spec_decode`, regime from `state.json` (3.18, split 376, mct 16,
+`-cs 40960` from `draft.spec_decode_cache_size`, `EXL3_MOE_CPU_SWAP=0` automatic, frozen expert
+profile restored per arm), `-Extra "<sdh …> -nbl"` so each process measures the draft arm only.
+Harness sha256 `fba75185…`, `spec_decode.py` `333c4f24…`. All four runs `status=ok`, `breach=0`.
+
+Per the C4 protocol, the first `-sdh` run of the day only warms the shared token profile and is
+**not** a measurement:
+
+| arm (run id) | `-sdh` | tok/s | accepted/round | min free VRAM | role |
+|---|---|---|---|---|---|
+| `sdh-warm-20261030-035233` | 32768 | 43.19 | 1.18/2.00 | 1867 MB | profile warm-up — discarded |
+| `sdh32k-20261030-041634` | 32768 | 42.87 | 1.17/2.00 | 2129 MB | measured |
+| `sdh64k-20261030-042635` | 65536 | 43.16 | 1.17/2.00 | 2173 MB | measured |
+| `sdhoff-20261030-043614` | 0 (off) | **45.86** | **1.34/2.00** | 1869 MB | measured |
+
+Mechanism counter printed by every arm, e.g. the warm-up:
+`sparse draft head: 7735 columns, mode sparse True (0 switches), miss rate 0.00% (break-even
+2.61%), rounds 7416, probes 114 (0 inside / 17 outside)`.
+
+**Verdict: `-sdh` loses — drop it.** Three independent runs with the sparse head agree at
+42.9–43.2 tok/s and 1.17–1.18 accepted per round; the plain full head measures 45.86 tok/s and
+1.34. The 6 % tg loss is consistent and larger than any spread seen in this series, and it comes
+with *lower* acceptance, not equal acceptance: the miss-rate counter says the active columns cover
+the drafted mass (0.00 % against a 2.61 % break-even), but the head still disagrees with the full
+head on 17 of 114 probes outside the active set, and that shows up as a ~13 % relative acceptance
+drop. The reduced matmul does not pay for the bookkeeping plus the approximation.
+
+Consequence for T7/T13: the sparse head is **not** part of `DRAFT_WINNER`; `-sdh` stays 0 in
+`state.json`, and a sidecar/DFlash2 winner does not need to be re-tested with it unless its own
+acceptance is high enough that a 6 % draft-step saving could matter (it is not, at 1.34 accepted
+of 2 drafted).
+
+## Steps 4–5 — hybrid drafting (`-hdt`) and dynamic draft (`-dds`), 2026-10-30
+
+Same regime and protocol as Step 3 (`-nbl`, draft arm only, 3.18 @ split 376, `EXL3_MOE_CPU_SWAP=0`,
+frozen profile per arm). Ten runs in all, each `status=ok` / `breach=0`.
+
+| arm (run id) | extra flags | tok/s (mean) | accepted/round | min free VRAM |
+|---|---|---|---|---|
+| `sdhoff-…043614` | — | 45.86 | 1.34/2.00 | 1869 MB |
+| `sdhoff-r2-…044515` | — | 45.49 | 1.33/2.00 | 2401 MB |
+| `hdt16-…045515` | `-hdt 16` | 46.62 | 2.63/3.35 | 2081 MB |
+| `hdt24-…050510` | `-hdt 24` | 49.10 | 2.59/3.35 | 1569 MB |
+| `hdt32-…051505` | `-hdt 32` | 46.15 | 3.20/3.92 | 1363 MB |
+| `hdt48-…052500` | `-hdt 48` | 49.12 | 2.75/3.58 | 1803 MB |
+| `dds-on-…053455` | `-dds` | 46.50 | 1.34/1.90 | 2187 MB |
+| `hdt24-dds-…054450` | `-hdt 24 -dds` | 49.54 | 2.57/3.28 | 2037 MB |
+
+**The mean tok/s is not the verdict — the per-category ratio is.** Measured against the mean of the
+two reference runs, per category (7 workloads vs the "Trivial repetition" one):
+
+| category | hdt16 | hdt24 | hdt32 | hdt48 | dds | hdt24+dds |
+|---|---|---|---|---|---|---|
+| Agentic; code | 0.97 | 0.98 | 0.93 | 0.95 | 1.00 | 1.00 |
+| Agentic; curl | 0.88 | 0.99 | 0.94 | 0.95 | 1.02 | 0.95 |
+| Coding | 1.02 | 0.99 | 1.00 | 1.00 | **1.05** | 1.03 |
+| Creative | 1.09 | 0.97 | 0.97 | 1.03 | 0.97 | 1.04 |
+| Creative (reasoning) | 1.06 | 1.08 | 1.00 | 1.07 | 1.06 | 1.07 |
+| Translation | 1.02 | 1.00 | 1.03 | 1.01 | 1.02 | 1.02 |
+| Translation (reasoning) | 1.00 | 1.00 | 0.99 | 1.00 | 1.00 | 0.98 |
+| **Trivial repetition** | 1.16 | **1.57** | 1.23 | **1.61** | 1.02 | 1.58 |
+| **median ratio** | 1.022 | 0.995 | 0.992 | 1.002 | **1.018** | 1.021 |
+
+Reference spread (r2/r1, same config): median 0.994, range 0.972–1.014.
+
+**Verdict `-hdt`: repetition-only, keep it off.** Every variant sits at a median ratio of 0.99–1.02,
+i.e. no effect on seven of eight workloads, and the entire mean gain is the one synthetic
+"Trivial repetition" workload where a suffix match is guaranteed (1.16–1.61×). At 32 and 48 it
+also costs 5–12 % on both Agentic workloads. A deployment only wants this if its traffic is
+repetition-heavy (long duplicated boilerplate, JSON with repeated keys); it is not a default, and
+the mean "+7 %" from `hdt 24` must never be quoted without this table.
+
+**Verdict `-dds`: unresolved, leaning +2 %.** Its ratio is broad rather than concentrated
+(median 1.018, range 0.974–1.060, no category spike), which is the signature of a real effect
+rather than a workload artifact — but the reference itself moves 0.972–1.014 between two identical
+runs, so this design cannot separate +2 % from noise. One ABBA pair at the T13 config lock decides
+it; it is not carried into `MTP_WINNER` on this evidence.
+
+**Step 6 `draft_max_rows`: N/A at bsz 1** — the ceiling only trims the window when
+`bsz·(1+draft)` exceeds it, and every measurement here is single-stream. Revisit only if the server
+runs concurrent streams.
+
+**`MTP_WINNER` frozen: `-ndt 2`, batched readback, stock MTP head, `-sdh 0`, `-hdt 0`, `-dds` off
+(unresolved +2 %).** Confirmation at 262144 with the drafter happens in T13.

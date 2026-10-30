@@ -128,6 +128,39 @@ was a no-op — `$Model`/`$MODEL` are the same case-insensitive variable — fix
 default) and `-cq 2,2` in the production regime. Deployed `run_pass.ps1` sha256 `01adc66f…`. `perf.py` unchanged v1.6.4→v1.6.5, sha256
 `246e721a62d7c5238de4b7296adb0b26cd9f42a734b9f648436b35b9b6a29e04`.
 
+### Harness v2 (2026-10-30, commits `5134738b…09e3b084`) — read before any measurement
+
+The second review (tracker section C, plan `wiki/plans/v165-critique-fixes.md`) fixed six defects and
+changed what a command means. Deployed files now hash-match the repo (verify with `sha256sum`):
+`run_pass.ps1` `fba75185…`, `watch.ps1` `910f05a2…`, `perf.py` `b270a0e9…`,
+`spec_decode.py` `333c4f24…`.
+
+- **`state.json` is the regime, verbatim.** `run_pass.ps1` reads model, split, threads, cache,
+  cache quant, env, floors **and `active.draft`** (`-mtp`, `-ndt N`, `-sdh N`, `-hdt N`, `-dds`).
+  An arm passes only a delta. `-CacheSize` replaces the cache size; a drafting run defaults to
+  `draft.spec_decode_cache_size` (40960) and a ladder run to `cache_size` (131072).
+- **Draft args are `spec_decode`-only.** `perf.py` registers no draft-model args (it unpacks four
+  values from `model_init.init`), so a pp/tg ladder never carries `-mtp`/`-ndt`.
+- **`EXL3_MOE_CPU_SWAP=0` is automatic for `-Runner spec_decode`** and opt-in for a pp/tg run via
+  `-StaticSwap`. A perf knob ladder keeps the engine default (dynamic) unless the task says
+  otherwise — that is what the archived rows and the deployed server run.
+- **`-Extra` may not restate a regime flag**, in any spelling (`-cs=…`, `--cache_size …`): the run
+  aborts exit 2 naming the flag. `-DryRun` prints `DRYRUN`/`ARGS`/`ENV` and touches nothing, so a
+  spelling can be checked while the box is busy.
+- **Verdicts come from evidence.** A run with a traceback, a floor breach, no pp/tg rows (perf), or
+  no `ARM`/table rows (spec_decode) is `fail`, never `ok`.
+- **Gates are mandatory** per the measurement protocol: `bench/verify_task.py --pre` before the
+  first pass of a task and `--post --report <file>` before a number is quoted. `--post` checks every
+  cited run id is `ok` with `breach=0`, every `CPU split experts` line is warm, quoted bands match
+  the report's own table, and a cited drafting run has arm rows.
+- **`alloc peak` moved to the end** of `perf.py` and `spec_decode.py`, so `passes.csv` records the
+  watermark after generation.
+- **`deploy.sh` ships `state.json` on every run** and prints `updated`/`unchanged`.
+
+Consequence for the campaign: every arm in T7–T13 must be described as a delta against
+`state.json`, and a knob arm that needs a different split/threads/cache passes `-Split`/`-Threads`/
+`-CacheSize`, never raw `-Extra`.
+
 ## Regime (production baseline, 3.68bpw model)
 
 - cache: 262144, **Q2 (`-cq 2,2`) — operator-fixed 2026-10-29, used in every pass**, chunk
@@ -152,15 +185,21 @@ default) and `-cq 2,2` in the production regime. Deployed `run_pass.ps1` sha256 
 - **MEMOPS_WINNER: 0** (T5, ABBA 2026-10-29: memops=1 is 8–17 % slower on tg at every
   context, medians 0.83–0.93, pp neutral-to-worse; reproduces the 1.4.9 finding). Deployment
   value unchanged; no 262144 confirmation (nothing to deploy changes).
-- **MTP_WINNER (partial, 2026-10-29): `-ndt 2` + batched readback + stock MTP head.** On 3.18 at
-  split 376: ndt2 median **1.30× vs the default arm** (arm-to-arm; acceptance 50–84 % per draft),
-  default (4) 1.00× by definition, ndt6 0.97×. (The earlier 1.42×/1.10× figures were
-  drafting÷baseline ratios, i.e. contaminated by the cold-baseline problem — critique C3.) **Operator cancelled the rest of the series** — `-sdh`, `-hdt`, `-dds`
-  unmeasured; resume with `-sdh` first (it changes *what* is drafted, not how much).
-  **Box cleaned up 2026-10-30:** the `mtp-sdh1-318` arm that survived the cancel (orphaned, parent
-  shell gone) was stopped on operator instruction — its log has 378 lines and **0 measurement
-  rows** (killed after load, before the table), so it is an aborted run, not a datum. Verified
-  after: no `spec_decode`/`perf.py`/`watch.ps1` processes, GPU 0 MiB / 0 %, 50.2 GB RAM free.
+- **MTP_WINNER (frozen 2026-10-30): `-ndt 2` + batched readback + stock MTP head, `-sdh 0`,
+  `-hdt 0`, `-dds` off.** On 3.18 at split 376: ndt2 median **1.30× vs the default arm** (arm-to-arm;
+  50–84 % acceptance per draft), default (4) 1.00×, ndt6 0.97×. The earlier 1.42×/1.10× figures were
+  drafting÷baseline ratios, i.e. contaminated by the cold-baseline problem (critique C3).
+  - `-sdh 32768`/`65536`: **negative** — 42.9 / 43.2 tok/s and 1.17 accepted/round against 45.9 and
+    1.34 off, despite a 0.00 % miss rate (break-even 2.61 %) and 17/114 out-of-window probe
+    disagreements. Dropped.
+  - `-hdt 16/24/32/48`: **repetition-only** — median per-category ratio 0.99–1.02, with the whole
+    mean gain coming from the synthetic "Trivial repetition" workload (1.16–1.61×) and a 5–12 %
+    loss on both Agentic workloads at 32/48. Off by default; a lever for repetition-heavy traffic.
+  - `-dds`: **unresolved, leaning +2 %** — median 1.018 across categories with no spike, against a
+    reference that itself moves 0.972–1.014 between identical runs. One ABBA pair at the T13 lock
+    decides it.
+  - `draft_max_rows`: N/A at bsz 1 (single stream everywhere in this campaign).
+  Report `T06-mtp.md` steps 3–5 with the per-category table.
 - **Correction (2026-10-30): there is no engine leak and no tabbyAPI per-job caveat (critique C6).**
   The ~700 MB/arm growth was self-inflicted: our `spec_decode.py` build created a `Generator` per
   arm and never cleared `recurrent_cache`/`host_pool` (a Generator -> recurrent_cache -> page table

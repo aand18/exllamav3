@@ -1,0 +1,15 @@
+remark: conv1d.py:126:0: 893 instructions in function
+remark: conv1d.py:201:0: 138 instructions in function
+remark: conv1d.py:17:0: 484 instructions in function
+remark: conv1d.py:17:0: 323 instructions in function
+remark: conv1d.py:17:0: 494 instructions in function
+remark: conv1d.py:17:0: 999 instructions in function
+remark: conv1d.py:17:0: 989 instructions in function
+remark: conv1d.py:17:0: 613 instructions in function
+remark: conv1d.py:17:0: 603 instructions in function
+remark: triton_paged.py:902:0: 2458 instructions in function
+remark: triton_paged.py:1060:0: 390 instructions in function
+remark: dsa_triton.py:668:0: 259 instructions in function
+remark: dsa_triton.py:797:0: 61 instructions in function
+remark: triton_paged.py:902:0: 2465 instructions in function
+remark: triton_paged.py:1060:0: 389 instructions in function
