@@ -11,7 +11,9 @@ looking broken. None of that needs a GPU to check:
     dynamic expert placement can move experts between devices mid-generation;
   * verify_task.py's gates: the warm-placement check is per line (an MTP head can be cold while
     every body layer is warm), a quoted ratio band has to match the report's own table, and a
-    spec_decode run with no arm row is not a measurement.
+    spec_decode run with no arm row is not a measurement;
+  * run_pass.ps1's passes.csv row: a drafting pass writes an empty `max_length` cell, because its
+    argv never received the ladder length the state carries.
 
 Run with: python3 bench/test_gates.py
 """
@@ -646,6 +648,26 @@ class SizeCheckArgv(unittest.TestCase):
         for draft in ({"mode": "none"}, None):        # an old state.json has no draft block
             with self.subTest(draft = draft):
                 self.assertNotIn("--draft", verify_task.size_check_argv(self.state(draft)))
+
+
+class PassesCsvCells(unittest.TestCase):
+    """A column named for one quantity may not carry another, or a value the run never received."""
+
+    RUN_PASS = os.path.join(REPO, "bench", "windows", "run_pass.ps1")
+
+    def test_drafting_row_writes_no_max_length_it_never_received(self):
+        # a `-Runner spec_decode` argv has -max_length stripped before the argv is assembled, so the
+        # state's 131072 in the column of that name describes an argument the process never saw -
+        # and ratios.py prints the column as provenance. The drafting length is the -cs in `args`.
+        with open(self.RUN_PASS, encoding = "utf-8") as f:
+            text = f.read()
+        self.assertIn("$maxLengthCell = $MaxLength", text, "the ladder run still records its length")
+        self.assertIn('if ($Runner -eq "spec_decode") { $maxLengthCell = "" }', text,
+                      "the drafting run's cell has to be empty")
+        row = [line for line in text.splitlines() if line.lstrip().startswith("$Tag, $runId,")]
+        self.assertEqual(len(row), 1, "the passes.csv row formatter is gone")
+        self.assertIn("$maxLengthCell", row[0], "the row prints the runner-aware cell")
+        self.assertNotIn("$MaxLength", row[0], "the row must not print the state value directly")
 
 
 if __name__ == "__main__":

@@ -559,8 +559,13 @@ $argStr = (($argsList -join " ") -replace ",", ";")
 $breachInt = 0
 if ($breach) { $breachInt = 1 }
 # The cache the run used is in the args cell (-cs N), not here: this cell is the ladder length.
+# A drafting pass never receives -max_length (stripped above), so its cell stays empty instead of
+# carrying a state value the process did not get - ratios.py prints that column as provenance, and
+# the drafting length it did use is the -cs in the args cell.
+$maxLengthCell = $MaxLength
+if ($Runner -eq "spec_decode") { $maxLengthCell = "" }
 $row = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19},{20},{21},{22}" -f `
-    $Tag, $runId, (Get-Date).ToString("s"), $Regime, $status, $engine, $extName, $elapsed, $MaxLength, `
+    $Tag, $runId, (Get-Date).ToString("s"), $Regime, $status, $engine, $extName, $elapsed, $maxLengthCell, `
     $minVram, $minRam, $peakWs, $samples, $breachInt, $envStr, $Split, $Threads, $argStr, $harnessHash, `
     ("perf-" + $runId + ".log"), $Runner, ([string]::Format($inv, "{0:F0}", $peakAlloc)), ([string]::Format($inv, "{0:F0}", $peakReserved))
 Add-Content -Path $passesCsv -Value $row -Encoding ASCII
