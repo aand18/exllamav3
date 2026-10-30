@@ -345,3 +345,29 @@ Verification: the tracker names each commit `git log --oneline` shows for tasks 
 edit; every command in the edited README section is one the current `run_pass.ps1` accepts (check
 each flag against its `param` block or run `-DryRun` once); `grep -c "✅"` is consistent with the rows
 you changed.
+
+## Parked after the final review (do not re-dispatch)
+
+The whole-branch review triaged these as "can follow": none of them can turn a wrong number into an
+accepted one. Recorded here because the execution ledger that held them is scratch.
+
+- `deploy.sh`: lowercase `state_sha_before` beside `HERE`/`REPO`/`DEST`; the before-hash swallows a
+  read error (fails safe, prints `updated`); `install` rewrites an identical file (mtime churn);
+  `state.json: …` prints before the remaining installs.
+- `run_pass.ps1`: `-StaticSwap` is inert when `knob_arms_disable_swap` is false (the state is the
+  authority; the help text overpromises); the `-max_length → use -MaxLength` remedy is a dead end
+  under `-Runner spec_decode` (that flag is stripped); the new `-St` prefix now abbreviates
+  `-StaticSwap` rather than `-State` (no caller uses abbreviations); an inherited OS
+  `EXL3_MOE_CPU_SWAP` is invisible in the header (pre-existing).
+- `spec_decode.py` / tests: the AST gate test pins the call but not its position or polarity;
+  `getattr(m, "_split_dynamic", False)`'s default is unpinned; the `-swap_ok` warning still tells
+  you to pass `-swap_ok`; the gate ignores the draft model's placement; `-temp` arms are not
+  counted (the count is a lower bound, and any printed ratio still needs >= 2 arms).
+- `verify_task.py`: the precision rule rounds the table value to the quote's decimals, so a 1-dp
+  band certifies within 0.05 per endpoint; a unit-carrying range is excluded by an enumerated list,
+  so an unenumerated unit still FAILs (the loud side); `T05-memops.md` keeps four genuine FAILs
+  because its table prints per-band ranges rather than a ratio column — a report in that style
+  cannot have its prose ratio claims certified, and the gate fails closed.
+- `-Runner` accepts any string; a typo silently runs `perf.py` (the row records `runner=perf`).
+- The skill's floors table (200 MB / 2 GB) is the protocol's constant; the harness's `state.json`
+  currently enforces 100/1200. Reconciling them is a regime decision, not a doc fix.
