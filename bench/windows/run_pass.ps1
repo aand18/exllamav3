@@ -19,15 +19,20 @@
 #
 # Usage:
 #   run_pass.ps1 -Tag armA-a
+#   run_pass.ps1 -Tag dry -DryRun
 #   run_pass.ps1 -Tag memops1-a -Env "EXL3_MOE_MEMOPS=1" -MaxLength 131072
 #   run_pass.ps1 -Tag t14-a -Threads 14 -MaxLength 131072
 #   run_pass.ps1 -Tag split320 -Split 320 -MaxLength 262144
-#   run_pass.ps1 -Tag q8 -Extra "-cq Q8" -MaxLength 131072
+#   run_pass.ps1 -Tag reps3 -Extra "-dr 3" -MaxLength 131072
 #   run_pass.ps1 -Tag x -Unset "EXL3_MOE_MEMOPS,EXL3_MOE_CPU_PIN"
 #
 # -Env is a comma-separated KEY=VALUE list applied AFTER the regime's own environment, so it can
-# override a regime value. -Unset removes variables from the inherited environment. -Threads and
-# -Split replace the regime's -mct and -mcs. -Extra appends raw perf.py flags.
+# override a regime value. -Unset removes variables from the inherited environment. -Threads,
+# -Split and -CacheSize replace the regime's -mct, -mcs and -cs. -Extra appends raw perf.py flags,
+# but may not repeat one the regime owns (-m, -cs, -chunk_size, -ambs, -cq, -max_length, -mcs,
+# -mct): a second -cs is how val-spec 2026-10-29 came to log one cache size and run another, and
+# the cache quant is a state.json field now, so "-Extra \"-cq Q8\"" aborts by design. -DryRun
+# prints the argv and environment a pass would use and exits before anything is written.
 #
 # Outputs (in -OutDir):
 #   logs/perf-<Tag>-<utc>.log    perf.py stdout + stderr + an identity header appended last
@@ -51,11 +56,13 @@ param(
     [int] $MaxLength = 0,      # 0 = take from state.json
     [int] $Threads = 0,        # 0 = take from state.json
     [int] $Split = 0,          # 0 = take from state.json
+    [int] $CacheSize = 0,      # 0 = take from state.json (spec_decode: draft.spec_decode_cache_size)
     [string] $Extra = "",
     [string] $Model = "",      # "" = take from state.json
     [string] $State = "",      # "" = <Root>\state.json
     [switch] $NoFrozenState,   # do not point XDG_CACHE_HOME at the frozen profile dir
     [string] $Root = "C:\Users\yoho\Downloads\tabbyAPI\_agent\v165",
+    [switch] $DryRun,          # print argv+env and exit 0 before any log, CSV row or watcher exists
     [switch] $Short,
     [string] $Runner = "perf",   # perf.py (pp/tg ladder) or spec_decode.py (drafting arms)
     [switch] $NoSpecDec,
@@ -89,8 +96,19 @@ $MODEL = $Model
 if ($Split -eq 0)    { $Split = [int]$ST.split }
 if ($Threads -eq 0)  { $Threads = [int]$ST.threads }
 if ($MaxLength -eq 0){ $MaxLength = [int]$ST.max_length }
-$CacheSize   = [int]$ST.cache_size
+# The cache under test is not one number. A spec_decode pass sizes its cache for a short generation
+# (a 1024-token round needs 139 pages = 35584 tokens, so the pp/tg ladder's 131072 would be a
+# different allocation) and the pp/tg ladder sizes it for its measurement length. -cs was cache_size
+# for both runners and -Extra appended a second one on top: val-spec 2026-10-29 logged "-cs 131072
+# ... -mtp -cs 40960", so the header, passes.csv and the process disagreed about the cache.
 $CacheQuant  = [string]$ST.cache_quant
+$Draft       = $ST.draft
+$stateCs     = [int]$ST.cache_size
+if ($Runner -eq "spec_decode" -and $null -ne $Draft -and $null -ne $Draft.spec_decode_cache_size -and
+    [int]$Draft.spec_decode_cache_size -gt 0) {
+    $stateCs = [int]$Draft.spec_decode_cache_size
+}
+if ($CacheSize -eq 0) { $CacheSize = $stateCs }
 if (-not $PSBoundParameters.ContainsKey("MinFreeVramMB")) { $MinFreeVramMB = [int]$ST.floors.min_free_vram_mb }
 if (-not $PSBoundParameters.ContainsKey("MinFreeRamMB"))  { $MinFreeRamMB  = [int]$ST.floors.min_free_ram_mb }
 $LOGS  = Join-Path $Root "logs"
@@ -98,9 +116,11 @@ $RES   = Join-Path $Root "results"
 if ($Runner -eq "spec_decode") {
     $PERF = Join-Path $Root "spec_decode.py"
     $MATCH_CMD = "spec_decode\.py"
+    $RunnerName = "spec_decode"   # what -DryRun reports: the runner actually selected
 } else {
     $PERF = Join-Path $Root "perf.py"
     $MATCH_CMD = "perf\.py"
+    $RunnerName = "perf"
 }
 $WATCH = Join-Path $Root "watch.ps1"
 
@@ -147,8 +167,29 @@ if ($Regime -ne "production" -and $Regime -ne "state") {
     Write-Output ("ABORT: unknown regime '" + $Regime + "'. Known: state (alias: production)")
     exit 2
 }
+$draftArgs = @()
+if ($null -ne $Draft) {
+    # The state names a drafting MODE, not a sidecar: the MTP head rides the main model, so -dm is
+    # never emitted. -sdh/-hdt are passed only when non-zero because 0 is the engine's own default
+    # (full head / hybrid drafting off), and draft.readback has no per-run model_init switch at
+    # 1.6.5 - the only readback control is spec_decode.py's -rb_ab, which measures all four arms in
+    # one process - so it stays information here. A pass that measured acc=1.74/4.00 on four draft
+    # tokens while state.json said 2 is what this block exists to make impossible.
+    if ([string]$Draft.mode -eq "mtp") { $draftArgs += "-mtp" }
+    if ($null -ne $Draft.num_draft_tokens -and [int]$Draft.num_draft_tokens -gt 0) {
+        $draftArgs += @("-ndt", "$([int]$Draft.num_draft_tokens)")
+    }
+    if ($null -ne $Draft.sparse_draft_head -and [int]$Draft.sparse_draft_head -gt 0) {
+        $draftArgs += @("-sdh", "$([int]$Draft.sparse_draft_head)")
+    }
+    if ($null -ne $Draft.hybrid_draft_tokens -and [int]$Draft.hybrid_draft_tokens -gt 0) {
+        $draftArgs += @("-hdt", "$([int]$Draft.hybrid_draft_tokens)")
+    }
+    if ($Draft.dynamic_draft -eq $true) { $draftArgs += "-dds" }
+}
 $argsList = @("-m", $MODEL, "-cs", "$CacheSize", "-chunk_size", "4096", "-ambs", "2",
               "-cq", $CacheQuant, "-max_length", "$MaxLength", "-mcs", "$Split", "-mct", "$Threads")
+$argsList += $draftArgs
 if ($Extra -ne "") {
     foreach ($tok in ($Extra -split '\s+')) { if ($tok -ne "") { $argsList += $tok } }
 }
@@ -168,9 +209,36 @@ if ($SkipPrefill)    { $argsList += "-spf" }
 if ($SkipGen)        { $argsList += "-sg" }
 if ($SkipWarmup)     { $argsList += "-swu" }
 
+# A regime-owned flag may appear exactly once. -Extra is raw argv, so it could append a second -cs
+# and the log header then described a cache the process never used (val-spec 2026-10-29). The scan
+# runs over the ASSEMBLED argv, so the guarantee holds whichever path added a copy, and the abort
+# names the flag that replaces it instead of leaving the arm to silently disagree with state.json.
+$regimeOwned = [ordered]@{
+    "-m"          = "use -Model, or edit state.json"
+    "-cs"         = "use -CacheSize, or edit state.json"
+    "-chunk_size" = "edit state.json"
+    "-ambs"       = "edit state.json"
+    "-cq"         = "edit state.json"
+    "-max_length" = "use -MaxLength, or edit state.json"
+    "-mcs"        = "use -Split, or edit state.json"
+    "-mct"        = "use -Threads, or edit state.json"
+}
+foreach ($flag in $regimeOwned.Keys) {
+    if (@($argsList | Where-Object { $_ -eq $flag }).Count -gt 1) {
+        Write-Output ("ABORT: -Extra repeats " + $flag + ", which the regime owns (" + $regimeOwned[$flag] + ")")
+        exit 2
+    }
+}
+
 # --- Environment -------------------------------------------------------------------------------
 $baseEnv = [ordered]@{}
 if ($ST.env) { foreach ($pr in $ST.env.PSObject.Properties) { $baseEnv[$pr.Name] = [string]$pr.Value } }
+# Drafting arms are read with dynamic expert placement OFF (state.knob_arms_disable_swap): a drafter
+# that accepts an extra token also changes which experts stay resident, so a number measured with
+# both knobs moving says nothing about either. It lands in the regime env - before -Unset/-Env - so
+# an arm can still ask for it back (-Env "EXL3_MOE_CPU_SWAP=1") and that delta is measured, not
+# assumed. $envApplied copies $baseEnv below, which puts it in the log header and in passes.csv.
+if ($ST.knob_arms_disable_swap -eq $true) { $baseEnv["EXL3_MOE_CPU_SWAP"] = "0" }
 foreach ($k in $baseEnv.Keys) { Set-Item "env:$k" $baseEnv[$k] }
 $envApplied = [ordered]@{}
 foreach ($k in $baseEnv.Keys) { $envApplied[$k] = $baseEnv[$k] }
@@ -217,6 +285,18 @@ if ($Env -ne "") {
         Set-Item "env:$k" $v
         $envApplied[$k] = $v
     }
+}
+
+# --- Dry run ------------------------------------------------------------------------------------
+# The argv and environment a real pass would use, printed after every gate that can refuse a run: an
+# argv checked against a different engine, model or package than the one on the box proves nothing.
+# It exits before the log path is even stamped, so it writes no log, no CSV row and no watcher trace,
+# and it never touches the GPU - usable while the card is busy.
+if ($DryRun) {
+    Write-Output ("DRYRUN runner=" + $RunnerName + " state=" + $statePath)
+    Write-Output ("ARGS " + ($argsList -join " "))
+    Write-Output ("ENV " + (($envApplied.Keys | Sort-Object | ForEach-Object { "$_=$($envApplied[$_])" }) -join " "))
+    exit 0
 }
 
 # --- Run ---------------------------------------------------------------------------------------
@@ -390,8 +470,12 @@ $envStr = (($envApplied.Keys | Sort-Object | ForEach-Object { "$_=$($envApplied[
 $argStr = (($argsList -join " ") -replace ",", ";")
 $breachInt = 0
 if ($breach) { $breachInt = 1 }
+# The max_length cell carries the cache size the run was built with: passes.csv has one length column
+# and no cache column, and -Runner spec_decode strips the ladder length from its argv entirely, so
+# this is the cell that must answer "how much context did this run size for?". The ladder length, and
+# every other flag, stays visible in the args cell.
 $row = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19},{20},{21},{22}" -f `
-    $Tag, $runId, (Get-Date).ToString("s"), $Regime, $status, $engine, $extName, $elapsed, $MaxLength, `
+    $Tag, $runId, (Get-Date).ToString("s"), $Regime, $status, $engine, $extName, $elapsed, $CacheSize, `
     $minVram, $minRam, $peakWs, $samples, $breachInt, $envStr, $Split, $Threads, $argStr, $harnessHash, `
     ("perf-" + $runId + ".log"), $Runner, ([string]::Format($inv, "{0:F0}", $peakAlloc)), ([string]::Format($inv, "{0:F0}", $peakReserved))
 Add-Content -Path $passesCsv -Value $row -Encoding ASCII
