@@ -266,6 +266,15 @@ MISSING_ROW_TABLE = """
 | 4096 | 0.99 |
 """
 
+# T05-memops's shape: every ratio cell is a per-band range, so the column comparison has no min/max
+# to read and the report's quote cannot be certified against its own table
+RANGE_COLUMN_TABLE = """
+| band | pp median | pp range | tg median | tg range |
+|---|---|---|---|---|
+| 4096 | 0.974 | 0.915–1.034 | 0.856 | 0.850–0.862 |
+| 131072 / 130816 | 1.001 | 0.996–1.006 | 0.927 | 0.893–0.962 |
+"""
+
 
 class GatesFixture:
     """A results/ and logs/ tree in a tempdir: the gates only read, so a fixture is the box."""
@@ -393,7 +402,55 @@ class PercentageGate(GatesFixture, unittest.TestCase):
         rc, out = self.post(path)
         self.assertEqual(rc, 1, out)
         self.assertIn("quote without a table", out)
+        self.assertIn("no ratio table", out)
         self.assertIn("ratios.py", out)
+
+    def test_quote_against_a_range_column_names_the_ranges(self):
+        # T05-memops's shape: a ratio table whose cells are per-band ranges, so no column of it
+        # yields a min/max band. The quote fails either way - a number nothing certifies is not
+        # evidence - but "no table" sends the author to regenerate evidence that is already there
+        body = "pp medians 0.958–1.001 at the measurement bands\n" + RANGE_COLUMN_TABLE
+        path = self.report(body, self.RUN)
+        rc, out = self.post(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("matches no range in the report's table(s)", out)
+        self.assertIn("0.915–1.034", out)
+        self.assertNotIn("quote without a table", out)
+
+    def test_a_table_range_read_as_a_quote_is_not_called_a_missing_table(self):
+        # the report's own range cell is not a prose quote, and calling it one produced a message
+        # that listed the range as absent: `0.915–1.034` matches no range (ranges: 0.915–1.034, …)
+        path = self.report(RANGE_COLUMN_TABLE, self.RUN)
+        rc, out = self.post(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("is a range the report's own table prints", out)
+        self.assertNotIn("quote without a table", out)
+        self.assertNotIn("matches no range", out)
+
+    def test_one_decimal_quote_matching_the_table_passes(self):
+        # a band quoted at one decimal beside a one-decimal table is the claim "0.92-0.99" in fewer
+        # digits; the 2-decimal-only pattern matched nothing and the run ended "all gates passed"
+        path = self.report("pp at the measurement bands: 0.9–1.0\n" + RATIO_TABLE, self.RUN)
+        rc, out = self.post(path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("matches this report's own ratio table", out)
+
+    def test_one_decimal_quote_outside_the_table_fails(self):
+        # both spellings the review reproduced pass unchecked before this: 0.87-1.1 and 0.9-1.1
+        # against a table whose ratios run 0.92-0.99
+        for quoted in ("0.87–1.1", "0.9–1.1"):
+            with self.subTest(quoted = quoted):
+                path = self.report(f"pp at the measurement bands: {quoted}\n" + RATIO_TABLE, self.RUN)
+                rc, out = self.post(path)
+                self.assertEqual(rc, 1, out)
+                self.assertIn("does not match", out)
+                self.assertIn("0.92", out)              # both real endpoints named
+                self.assertIn("0.99", out)
+
+    def test_one_decimal_interval_is_read_as_a_band(self):
+        # the pattern half of the same defect: no reading of the number, no verdict on the quote
+        matches = [m.group(0) for m in verify_task.RATIO_INTERVAL.finditer("bands: 0.9–1.0.")]
+        self.assertEqual(matches, ["0.9–1.0"])
 
     def test_plain_percentage_only_informs(self):
         path = self.report("acceptance was 41 % per draft\n", self.RUN)

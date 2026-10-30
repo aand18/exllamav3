@@ -27,6 +27,7 @@ import json
 import os
 import re
 import sys
+from decimal import Decimal, ROUND_HALF_UP
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DEFAULT = "/mnt/c/Users/yoho/Downloads/tabbyAPI/_agent/v165/results"
@@ -182,13 +183,18 @@ PLACED = "placement from saved profile"
 # a pp/tg ratio sits near 1.0; a band whose endpoint is above this is a count ("1.14-2.01 of 4
 # drafts") or a throughput range ("35.2-38.8 t/s"), not a ratio, and is not checked as one
 RATIO_SCALE = 1.2
-RATIO_TOL = 0.005
 SYMMETRIC_PCT = re.compile(r"±\s*\d+(?:\.\d+)?(?:\s*[–—-]\s*\d+(?:\.\d+)?)?\s*%")
 PCT = re.compile(r"\d+(?:\.\d+)?\s*%")
-RATIO_INTERVAL = re.compile(r"(?<![\w.])(\d+\.\d{2,})\s*[–—-]\s*(\d+\.\d{2,})(?!\w)(?!\.\d)")
+# one or more decimals per endpoint, not two or more: a band quoted at one decimal ("0.9–1.0") beside
+# a table printed at one decimal is the same claim as "0.92–0.99" and has to be read the same way -
+# the 2-decimal-only pattern matched nothing there, so the report passed with no number examined
+RATIO_INTERVAL = re.compile(r"(?<![\w.])(\d+\.\d+)\s*[–—-]\s*(\d+\.\d+)(?!\w)(?!\.\d)")
 # a ratio cell printed with 1 to 3 decimals; a band, a t/s rate (45.76) or a MiB figure (2141) is
 # not one, which is what keeps an unrelated table from being read as a ratio table
 RATIO_CELL = re.compile(r"[01]\.\d{1,3}")
+# a ratio range written in one cell ("0.915–1.034"): a per-band pair of measurements rather than one
+# median, so no column of that table yields a min/max band for a quote to be checked against
+RATIO_RANGE_CELL = re.compile(r"[01]\.\d{1,3}\s*[–—-]\s*[01]\.\d{1,3}")
 
 
 def warm_gate(log: str, label: str, allow_cold: bool = False) -> bool:
@@ -300,6 +306,32 @@ def ratio_columns(text: str) -> list[tuple[float, float]]:
     return out
 
 
+def ratio_endpoint_matches(quoted: str, value: float) -> bool:
+    """Whether a quoted endpoint equals a table value at the precision the quote carries.
+
+    A one-decimal quote is compared with the table value rounded to one decimal - half-up, as a
+    human rounds it - so `0.9–1.0` certifies a 0.92–0.99 table and `0.87–1.1` does not. Comparing
+    with a fixed 0.005 tolerance instead would let `0.87` through against `0.92` (exactly 0.05 apart
+    at one decimal), which is the band this gate exists to catch.
+    """
+    quantum = Decimal(1).scaleb(-len(quoted.partition(".")[2]))
+    return Decimal(repr(value)).quantize(quantum, rounding = ROUND_HALF_UP) == Decimal(quoted)
+
+
+def table_ratio_ranges(text: str) -> list[str]:
+    """Ratio ranges the report's own tables print, as written, in document order.
+
+    A table whose ratio cells are ranges (`pp range`, `tg range`) is a ratio table the min/max
+    comparison cannot read, and a quote against it fails for that reason - not because the report has
+    no table. The two are different problems (edit the quote vs regenerate the evidence), so the
+    failure message has to name the right one and the ranges it did find.
+    """
+    out: list[str] = []
+    for line in text.splitlines():
+        out += [c for c in markdown_cells(line) if RATIO_RANGE_CELL.fullmatch(c)]
+    return out
+
+
 def percentage_gate(text: str) -> bool:
     """A quoted % or ratio band must be checkable against the report's own table.
 
@@ -325,10 +357,29 @@ def percentage_gate(text: str) -> bool:
             continue
         checked.append(m.span())
         if not bands:
-            good &= bad(f"`{quoted}`: quote without a table - regenerate with `bench/ratios.py` "
-                        "and quote the range it prints")
+            # two different failures wear the same message today: a report with no ratio table, and
+            # a report whose ratio table holds ranges where this gate wants a column min/max (T05).
+            # The verdict is the same (a quote nothing certifies is not evidence) - the remedy is not
+            ranges = table_ratio_ranges(text)
+            if not ranges:
+                good &= bad(f"`{quoted}`: quote without a table - no ratio table in the report; "
+                            "regenerate with `bench/ratios.py` and quote the range it prints")
+            elif quoted in ranges:
+                # the report's own range cell, read as a quote: naming it "no such range" beside a
+                # list that starts with itself would be a message contradicting itself
+                good &= bad(f"`{quoted}` is a range the report's own table prints, not a band "
+                            "quoted in prose - this gate compares a quote with a ratio column's "
+                            "min/max")
+            else:
+                listed = ", ".join(ranges[:4])
+                if len(ranges) > 4:
+                    listed += f" (+{len(ranges) - 4} more)"
+                good &= bad(f"`{quoted}` matches no range in the report's table(s) (ranges: "
+                            f"{listed}): this gate compares a quote with a ratio column's min/max, "
+                            "and those cells are ranges")
             continue
-        if any(abs(lo - a) <= RATIO_TOL and abs(hi - b) <= RATIO_TOL for a, b in bands):
+        if any(ratio_endpoint_matches(m.group(1), a) and ratio_endpoint_matches(m.group(2), b)
+               for a, b in bands):
             good &= ok(f"`{quoted}` matches this report's own ratio table")
         else:
             a, b = min(bands, key=lambda band: abs(lo - band[0]) + abs(hi - band[1]))
