@@ -100,7 +100,7 @@ if ($MaxLength -eq 0){ $MaxLength = [int]$ST.max_length }
 # (a 1024-token round needs 139 pages = 35584 tokens, so the pp/tg ladder's 131072 would be a
 # different allocation) and the pp/tg ladder sizes it for its measurement length. -cs was cache_size
 # for both runners and -Extra appended a second one on top: val-spec 2026-10-29 logged "-cs 131072
-# ... -mtp -cs 40960", so the header, passes.csv and the process disagreed about the cache.
+# ... -mtp -cs 40960", so the recorded regime and the cache the process used were not one number.
 $CacheQuant  = [string]$ST.cache_quant
 $Draft       = $ST.draft
 $stateCs     = [int]$ST.cache_size
@@ -168,13 +168,17 @@ if ($Regime -ne "production" -and $Regime -ne "state") {
     exit 2
 }
 $draftArgs = @()
-if ($null -ne $Draft) {
-    # The state names a drafting MODE, not a sidecar: the MTP head rides the main model, so -dm is
-    # never emitted. -sdh/-hdt are passed only when non-zero because 0 is the engine's own default
-    # (full head / hybrid drafting off), and draft.readback has no per-run model_init switch at
-    # 1.6.5 - the only readback control is spec_decode.py's -rb_ab, which measures all four arms in
-    # one process - so it stays information here. A pass that measured acc=1.74/4.00 on four draft
-    # tokens while state.json said 2 is what this block exists to make impossible.
+if ($null -ne $Draft -and $Runner -eq "spec_decode") {
+    # Drafting args belong to the drafting runner alone: eval/perf.py calls model_init.add_args()
+    # without add_draft_model_args and unpacks four values from model_init.init(), so -mtp/-ndt in a
+    # pp/tg argv aborts at argparse - and a pp/tg ladder measures the main model, so drafting is not
+    # part of its regime. The state names a drafting MODE, not a sidecar: the MTP head rides the main
+    # model, so -dm is never emitted. -sdh/-hdt are passed only when non-zero because 0 is the
+    # engine's own default (full head / hybrid drafting off), and draft.readback has no per-run
+    # model_init switch at 1.6.5 - the only readback control is spec_decode.py's -rb_ab, which
+    # measures all four arms in one process - so it stays information here. A pass that measured
+    # acc=1.74/4.00 on four draft tokens while state.json said 2 is what this block exists to make
+    # impossible.
     if ([string]$Draft.mode -eq "mtp") { $draftArgs += "-mtp" }
     if ($null -ne $Draft.num_draft_tokens -and [int]$Draft.num_draft_tokens -gt 0) {
         $draftArgs += @("-ndt", "$([int]$Draft.num_draft_tokens)")
@@ -253,12 +257,16 @@ if ($frozen -ne "" -and -not $NoFrozenState) {
     if ($master -ne "" -and (Test-Path $master)) {
         # Start every run from the SAME profile: without this, arm N inherits whatever placement the
         # previous run learned and the arms are not comparable (critique C1/C2, improvement I2).
-        if (Test-Path $frozen) { Remove-Item $frozen -Recurse -Force -ErrorAction SilentlyContinue }
-        New-Item -ItemType Directory -Force $frozen | Out-Null
-        Copy-Item -Path (Join-Path $master "*") -Destination $frozen -Recurse -Force -ErrorAction SilentlyContinue
+        # A -DryRun reports the same FROZEN_STATE and XDG_CACHE_HOME without doing it: the restore
+        # deletes and repopulates engine-state/active, and a dry run writes nothing.
+        if (-not $DryRun) {
+            if (Test-Path $frozen) { Remove-Item $frozen -Recurse -Force -ErrorAction SilentlyContinue }
+            New-Item -ItemType Directory -Force $frozen | Out-Null
+            Copy-Item -Path (Join-Path $master "*") -Destination $frozen -Recurse -Force -ErrorAction SilentlyContinue
+        }
         $envApplied["FROZEN_STATE"] = "master->active"
     } else {
-        New-Item -ItemType Directory -Force $frozen | Out-Null
+        if (-not $DryRun) { New-Item -ItemType Directory -Force $frozen | Out-Null }
     }
     Set-Item "env:XDG_CACHE_HOME" $frozen
     $envApplied["XDG_CACHE_HOME"] = $frozen
@@ -290,8 +298,9 @@ if ($Env -ne "") {
 # --- Dry run ------------------------------------------------------------------------------------
 # The argv and environment a real pass would use, printed after every gate that can refuse a run: an
 # argv checked against a different engine, model or package than the one on the box proves nothing.
-# It exits before the log path is even stamped, so it writes no log, no CSV row and no watcher trace,
-# and it never touches the GPU - usable while the card is busy.
+# The frozen-profile restore above is skipped under -DryRun, so nothing under engine-state/ is
+# rewritten, and this exit lands before the log path is stamped and before Start-Process: no log, no
+# CSV row, no watcher trace, and the GPU is never touched - usable while the card is busy.
 if ($DryRun) {
     Write-Output ("DRYRUN runner=" + $RunnerName + " state=" + $statePath)
     Write-Output ("ARGS " + ($argsList -join " "))
@@ -470,12 +479,9 @@ $envStr = (($envApplied.Keys | Sort-Object | ForEach-Object { "$_=$($envApplied[
 $argStr = (($argsList -join " ") -replace ",", ";")
 $breachInt = 0
 if ($breach) { $breachInt = 1 }
-# The max_length cell carries the cache size the run was built with: passes.csv has one length column
-# and no cache column, and -Runner spec_decode strips the ladder length from its argv entirely, so
-# this is the cell that must answer "how much context did this run size for?". The ladder length, and
-# every other flag, stays visible in the args cell.
+# The cache the run used is in the args cell (-cs N), not here: this cell is the ladder length.
 $row = "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19},{20},{21},{22}" -f `
-    $Tag, $runId, (Get-Date).ToString("s"), $Regime, $status, $engine, $extName, $elapsed, $CacheSize, `
+    $Tag, $runId, (Get-Date).ToString("s"), $Regime, $status, $engine, $extName, $elapsed, $MaxLength, `
     $minVram, $minRam, $peakWs, $samples, $breachInt, $envStr, $Split, $Threads, $argStr, $harnessHash, `
     ("perf-" + $runId + ".log"), $Runner, ([string]::Format($inv, "{0:F0}", $peakAlloc)), ([string]::Format($inv, "{0:F0}", $peakReserved))
 Add-Content -Path $passesCsv -Value $row -Encoding ASCII
