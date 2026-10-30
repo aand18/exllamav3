@@ -64,7 +64,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File \
 | `-Runner perf` / `-Runner spec_decode` | one `perf.py` pp/tg ladder (default) or one `spec_decode.py` drafting pass |
 | `-Extra "..."` | appends raw runner flags (`-dr 3`, `-rb_ab`, …). It may not restate a flag the regime owns — `-m`, `-cs`, `-cq`, `-chunk_size`, `-ambs`, `-max_length`, `-mcs`, `-mct` and, on a drafting run, `-mtp`/`-ndt`/`-sdh`/`-hdt`/`-dds` — in any spelling (`-cs=40960`, `--cache_size 40960` included); a restatement aborts and names the flag with the switch or state field that sets it |
 | `-StaticSwap` | applies `state.json`'s `knob_arms_disable_swap` to this pass (`EXL3_MOE_CPU_SWAP=0`); a drafting run gets it without asking |
-| `-DryRun` | prints the `DRYRUN`/`ARGS`/`ENV` lines and exits 0: no log, no CSV row, no watcher, no frozen-profile restore, no GPU |
+| `-DryRun` | prints the `DRYRUN`/`ARGS`/`ENV` lines and exits 0: no log, no CSV row, no watcher, no frozen-profile restore, no output directory, no GPU, and no one-owner check — so it works while another pass or the server owns the card |
 | `-NoSpecDec` | skip the S=1..4 decode grid (prefill-only decisions) |
 | `-SkipPrefill` / `-SkipGen` / `-SkipWarmup` | `perf.py`'s `-spf` / `-sg` / `-swu` (a `perf.py` pass only) |
 | `-Prof` | turn the v1.4.9-era profilers on (diagnosis, not tok/s) |
@@ -91,8 +91,9 @@ not: on a drafting run `-Extra "-rb_ab"` is a delta, `-Extra "-rb_ab -mtp"` is r
 with `S=1..4`; `S=1` is the tg number, `S=2..4` are the per-step cost of MTP verification, not an
 acceptance rate (that is `eval/spec_decode.py`).
 
-A spelling can be checked while the card is busy: `-DryRun` runs every gate that can refuse a pass,
-prints the argv and environment, and exits before anything is written or started.
+A spelling can be checked while the card is busy: `-DryRun` runs every gate that can refuse a pass
+except the one-owner check (a dry run starts nothing, so another pass or the tabbyAPI server may own
+the card), prints the argv and environment, and exits before anything is created or started.
 
 ```bash
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \

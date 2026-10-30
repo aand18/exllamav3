@@ -37,7 +37,9 @@
 # Dynamic expert placement is on unless the run is a drafting one or asks for -StaticSwap: the state
 # field knob_arms_disable_swap scopes EXL3_MOE_CPU_SWAP=0 to the knob arms, because the archived
 # pp/tg ladder was measured with placement on and must stay comparable to itself. -DryRun prints the
-# argv and environment a pass would use and exits before anything is written.
+# argv and environment a pass would use and exits before anything is written or created - the output
+# directories included - and without the one-owner refusal, so a spelling can be checked while the
+# card is busy.
 #
 # Outputs (in -OutDir):
 #   logs/perf-<Tag>-<utc>.log    perf.py stdout + stderr + an identity header appended last
@@ -130,7 +132,6 @@ if ($Runner -eq "spec_decode") {
 }
 $WATCH = Join-Path $Root "watch.ps1"
 
-New-Item -ItemType Directory -Force $LOGS, $RES | Out-Null
 Set-Location $Root   # trap 2: a WSL launch leaves a UNC working directory behind
 
 foreach ($f in @($PY, $PERF, $WATCH)) {
@@ -138,14 +139,19 @@ foreach ($f in @($PY, $PERF, $WATCH)) {
 }
 if (-not (Test-Path $MODEL)) { Write-Output "ABORT: model not found: $MODEL"; exit 2 }
 
-# One owner of the box: refuse to start while another pass or a server is running.
-$other = @(Get-CimInstance Win32_Process |
-           Where-Object { $_.Name -match '^python' -and $_.ProcessId -ne $PID -and
-                          $_.CommandLine -match 'perf\.py|spec_decode\.py|tabbyAPI' })
-if ($other.Count -gt 0) {
-    Write-Output "ABORT: another pass is running:"
-    $other | ForEach-Object { Write-Output ("  " + $_.ProcessId + " " + $_.CommandLine) }
-    exit 3
+# One owner of the box: refuse to start while another pass or a server is running. Skipped under
+# -DryRun, which starts nothing: before this the gate ran first, so a dry run exited 3 for any
+# running pass or for the tabbyAPI server itself (its venv path contains tabbyAPI) and the argv
+# could not be checked while the card was busy - the one case this script documents as supported.
+if (-not $DryRun) {
+    $other = @(Get-CimInstance Win32_Process |
+               Where-Object { $_.Name -match '^python' -and $_.ProcessId -ne $PID -and
+                              $_.CommandLine -match 'perf\.py|spec_decode\.py|tabbyAPI' })
+    if ($other.Count -gt 0) {
+        Write-Output "ABORT: another pass is running:"
+        $other | ForEach-Object { Write-Output ("  " + $_.ProcessId + " " + $_.CommandLine) }
+        exit 3
+    }
 }
 
 # --- Identity of what is under test ------------------------------------------------------------
@@ -361,8 +367,9 @@ if ($Env -ne "") {
 # The argv and environment a real pass would use, printed after every gate that can refuse a run: an
 # argv checked against a different engine, model or package than the one on the box proves nothing.
 # The frozen-profile restore above is skipped under -DryRun, so nothing under engine-state/ is
-# rewritten, and this exit lands before the log path is stamped and before Start-Process: no log, no
-# CSV row, no watcher trace, and the GPU is never touched - usable while the card is busy.
+# rewritten; the one-owner gate above is skipped too, and this exit lands before the output
+# directories are created, before the log path is stamped and before Start-Process: no log, no CSV
+# row, no watcher trace, and the GPU is never touched - usable while the card is busy.
 if ($DryRun) {
     Write-Output ("DRYRUN runner=" + $RunnerName + " state=" + $statePath)
     Write-Output ("ARGS " + ($argsList -join " "))
@@ -371,6 +378,9 @@ if ($DryRun) {
 }
 
 # --- Run ---------------------------------------------------------------------------------------
+# The output directories are made here, not with the state load: creating two directories is a write,
+# and a -DryRun returns above having made none.
+New-Item -ItemType Directory -Force $LOGS, $RES | Out-Null
 # Every run gets its own log file: the UTC start time is part of the name, so a repeated tag never
 # overwrites earlier evidence, and a log can be matched to a passes.csv row by filename. Nothing is
 # deleted here -- logs are the analysis record and outlive the session that made them.
