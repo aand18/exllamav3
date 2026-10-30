@@ -210,7 +210,16 @@ Consequence for the campaign: every arm in T7–T13 must be described as a delta
   (T06 report) — **default batched (`_NO_BATCH_READBACK=False`) stands**; knobs move to the
   production model, because acceptance is a body/head quality property: 1.66 model = 1.91 bpw
   body / 4.01 bpw head → 1.0–2.2 of 4 accepted (break-even), 3.68 = 4.00 / 6.01 → measuring now.
-- DRAFT_WINNER (stock / sidecar-2.6 / DFlash2 + window + sdh): — (T7)
+- **DRAFT_WINNER: DFlash2 BF16, window 4** (T7, 2026-10-30). 56.57 tok/s and 2.40/4.00 accepted
+  against the stock MTP head's 46.48 and 1.35/2.00 — **+22 % mean, median per-category ratio
+  1.258** — measured in one session at split 376 with the frozen profile (`t7-ref` vs
+  `t7-dflash2-w4`). Per category: agentic code 1.39, coding 1.36, repetition 1.36, agentic curl
+  1.32, creative 1.19, **translation 0.88–0.90** (acceptance 37 % there). One drafter, one
+  traffic mix: deploy it for coding/agentic traffic, keep the stock MTP head for a
+  translation-heavy box. Windows: 4 > 6 (55.45) and 8 crashes — the drafter's `block_size` is 8 and
+  the generator asks for `window + 1`, so the usable maximum is 7 (engine defect, reported).
+  Sidecar heads closed negative (2.6 bpw: acceptance identical at w2, both tok/s and acceptance
+  worse at w4). Report `T07-drafter.md`.
 - CODE_WINNER (stock vs win-perf): — (T8)
 - THREADS/HOST_CORES: — (T9)
 - **SPLIT: 376 on the 3.18bpw model** (T10 ladder pulled forward by the model swap, 2026-10-29).
