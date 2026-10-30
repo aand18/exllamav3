@@ -8,17 +8,24 @@ looking broken. None of that needs a GPU to check:
   * read_prompt() is the single prompt reader, and it decodes the stringified tool-call arguments
     that the `Agentic, *` workloads carry, for the timed and the untimed pass alike;
   * swap_refusal() decides, as a pure function, whether a multi-arm run may run at all while
-    dynamic expert placement can move experts between devices mid-generation.
+    dynamic expert placement can move experts between devices mid-generation;
+  * verify_task.py's gates: the warm-placement check is per line (an MTP head can be cold while
+    every body layer is warm), a quoted ratio band has to match the report's own table, and a
+    spec_decode run with no arm row is not a measurement.
 
 Run with: python3 bench/test_gates.py
 """
 
 import ast
+import contextlib
 import glob
 import importlib.util
+import io
 import json
 import os
+import shutil
 import sys
+import tempfile
 import types
 import unittest
 
@@ -81,6 +88,17 @@ def load_runner(filename):
 
 
 spec_decode = load_runner("spec_decode.py")
+
+
+def load_tool(path, name):
+    """Import a bench/ script: they are stdlib-only, so nothing has to be stubbed."""
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+verify_task = load_tool(os.path.join(HERE, "verify_task.py"), "verify_task_gates")
 
 
 class ReadPrompt(unittest.TestCase):
@@ -227,6 +245,283 @@ class SwapRefusal(unittest.TestCase):
         self.assertTrue(spec_decode.dynamic_placement(types.SimpleNamespace(modules = [dynamic]),
                                                       types.SimpleNamespace(infer_params = None)))
 
+
+RATIO_TABLE = """
+| band | ratio |
+|---|---|
+| 4096 | 0.92 |
+| 8192 | 0.96 |
+| 16384 | 0.99 |
+"""
+
+
+class GatesFixture:
+    """A results/ and logs/ tree in a tempdir: the gates only read, so a fixture is the box."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix = "verify-gates-")
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.results = os.path.join(self.tmp, "results")
+        self.logs = os.path.join(self.tmp, "logs")
+        os.makedirs(self.results)
+        os.makedirs(self.logs)
+        self.passes = os.path.join(self.results, "passes.csv")
+        self.write(self.passes, "tag,run_id,status,breach,runner\n")
+
+    def write(self, path, text, newline = None):
+        with open(path, "w", encoding = "utf-8", newline = newline) as f:
+            f.write(text)
+
+    def add_pass(self, run, runner = "perf", status = "ok", breach = "0"):
+        with open(self.passes, "a", encoding = "utf-8") as f:
+            f.write(f"tag,{run},{status},{breach},{runner}\n")
+
+    def read_bytes(self, path):
+        with open(path, "rb") as f:
+            return f.read()
+
+    def add_arm(self, run, arm = "baseline"):
+        path = os.path.join(self.results, "arms.csv")
+        if not os.path.exists(path):
+            self.write(path, "tag,run_id,arm,tok_s,acc,draft,rounds\n")
+        with open(path, "a", encoding = "utf-8") as f:
+            f.write(f"tag,{run},{arm},45.14,0.00,0.00,1\n")
+
+    def add_log(self, run, lines):
+        self.write(os.path.join(self.logs, f"perf-{run}.log"), "\n".join(lines) + "\n")
+
+    def placement(self, count):
+        """`count` warm CPU-split lines in the shape the engine prints them."""
+        return [f" -- CPU split experts (worker, dynamic): "
+                f"model.language_model.layers.{i}.mlp [152..512) of 512, "
+                f"placement from saved profile"
+                for i in range(count)]
+
+    def report(self, body, run):
+        path = os.path.join(self.tmp, "report.md")
+        self.write(path, body + f"\nRun `{run}`.\n")
+        return path
+
+    def post(self, report):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = verify_task.main(["--post", "--report", report,
+                                   "--results", self.results, "--logs", self.logs])
+        return rc, buf.getvalue()
+
+
+class WarmPlacementGate(GatesFixture, unittest.TestCase):
+    """Every `CPU split experts` line carries a saved placement, not just one of them."""
+
+    RUN = "mtp-ref-20261030-010101"
+
+    def setUp(self):
+        super().setUp()
+        self.add_pass(self.RUN)
+
+    def test_every_line_warm_passes(self):
+        self.add_log(self.RUN, self.placement(4))
+        rc, out = self.post(self.report("# warm\n", self.RUN))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("4 CPU-split component(s)", out)
+
+    def test_one_cold_component_fails_and_names_it(self):
+        # the real shape: 48 warm body layers and a cold MTP head on line 2 of the log, which the
+        # old "placement from saved profile" in <whole log> test certified warm
+        lines = ([" -- CPU split experts (worker, dynamic): mtp.layers.0.mlp [136..512) of 512"]
+                 + self.placement(48))
+        self.add_log(self.RUN, lines)
+        rc, out = self.post(self.report("# cold head\n", self.RUN))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("1 of 49", out)
+        self.assertIn("mtp.layers.0.mlp", out)
+
+    def test_log_with_no_placement_line_fails(self):
+        self.add_log(self.RUN, [" -- Loading model", " -- alloc peak allocated=1 MiB"])
+        rc, out = self.post(self.report("# no placement\n", self.RUN))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("no `CPU split experts` line", out)
+
+
+class PercentageGate(GatesFixture, unittest.TestCase):
+    """A quoted band is checked against the report's own ratio table, not certified by a `%`."""
+
+    RUN = "ratio-20261030-020202"
+
+    def setUp(self):
+        super().setUp()
+        self.add_pass(self.RUN)
+        self.add_log(self.RUN, self.placement(2))
+
+    def test_quote_matching_the_table_passes(self):
+        path = self.report("pp at the measurement bands: 0.92–0.99\n" + RATIO_TABLE, self.RUN)
+        before = self.read_bytes(path)
+        rc, out = self.post(path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("matches this report's own ratio table", out)
+        # --post is a reader: a gate that rewrites the file it checks is not evidence
+        self.assertEqual(self.read_bytes(path), before)
+
+    def test_quote_disagreeing_with_the_table_fails(self):
+        path = self.report("pp at the measurement bands (0.95-0.99)\n" + RATIO_TABLE, self.RUN)
+        rc, out = self.post(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("does not match", out)
+        self.assertIn("0.92", out)
+        self.assertIn("0.99", out)
+
+    def test_symmetric_band_fails(self):
+        path = self.report("means vary ±5 % run to run\n" + RATIO_TABLE, self.RUN)
+        rc, out = self.post(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("symmetric band", out)
+
+    def test_interval_without_a_table_fails(self):
+        path = self.report("pp at the measurement bands: 0.92–0.99\n", self.RUN)
+        rc, out = self.post(path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("quote without a table", out)
+        self.assertIn("ratios.py", out)
+
+    def test_plain_percentage_only_informs(self):
+        path = self.report("acceptance was 41 % per draft\n", self.RUN)
+        rc, out = self.post(path)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("INFO", out)
+        self.assertIn("41 %", out)
+        self.assertIn("all gates passed", out)
+
+
+class ArmRowGate(GatesFixture, unittest.TestCase):
+    """A spec_decode run with no arm row died before measuring anything."""
+
+    RUN = "dead-spec-20261030-030303"
+
+    def setUp(self):
+        super().setUp()
+        self.add_pass(self.RUN, runner = "spec_decode")
+        self.add_log(self.RUN, self.placement(2))
+
+    def test_run_without_arm_rows_fails(self):
+        self.add_arm("live-spec-20261030-031313")      # the file covers another run, not this one
+        rc, out = self.post(self.report("# no arm\n", self.RUN))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("no row for it in arms.csv", out)
+
+    def test_run_with_arm_rows_passes(self):
+        self.add_arm(self.RUN)
+        rc, out = self.post(self.report("# arm\n", self.RUN))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("arm rows present", out)
+
+    def test_spec_decode_csv_alone_is_arm_evidence(self):
+        # the archive's older drafting runs print no `ARM` line and exist only in spec_decode.csv,
+        # which is why the gate reads both tables instead of whichever one the deploy happened to
+        # create first
+        self.add_arm("live-spec-20261030-031313")
+        self.write(os.path.join(self.results, "spec_decode.csv"),
+                   "tag,run_id,category,arm,tok_s,ratio,acc,draft\n"
+                   f"tag,{self.RUN},Agentic; code,Baseline,33.84,0,-1,-1\n")
+        rc, out = self.post(self.report("# arm\n", self.RUN))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("arm rows present", out)
+
+    def test_runner_is_read_from_the_overflow_cell(self):
+        # the box's passes.csv predates the `runner` column: 20-column header, value appended
+        self.add_arm("live-spec-20261030-031313")
+        self.write(self.passes, "tag,run_id,status,breach\n")
+        with open(self.passes, "a", encoding = "utf-8") as f:
+            f.write(f"tag,{self.RUN},ok,0,spec_decode\n")
+        rc, out = self.post(self.report("# no arm\n", self.RUN))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("no row for it in arms.csv", out)
+
+
+class DeployedStateGate(unittest.TestCase):
+    """`--pre` validates the repo state.json; the box loads the deployed copy."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix = "verify-deployed-")
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.deployed = os.path.join(self.tmp, "deployed")
+        os.makedirs(self.deployed)
+        self.repo = {"active": {"model": "D:\\llms\\m", "split": 376, "cache_size": 131072,
+                                "cache_quant": "2,2", "draft": {"mode": "mtp"}},
+                     "history": []}
+
+    def gate(self, doc = None, text = None):
+        path = os.path.join(self.deployed, "state.json")
+        if text is not None:
+            self.write(path, text, newline = "")
+        elif doc is not None:
+            self.write(path, json.dumps(doc, indent = 2))
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            good = verify_task.deployed_state_gate(self.repo, self.deployed)
+        return good, buf.getvalue()
+
+    def write(self, path, text, newline = None):
+        with open(path, "w", encoding = "utf-8", newline = newline) as f:
+            f.write(text)
+
+    def test_deployed_state_differing_fails(self):
+        stale = json.loads(json.dumps(self.repo))
+        stale["active"]["split"] = 372
+        good, out = self.gate(stale)
+        self.assertFalse(good)
+        self.assertIn("deploy.sh", out)
+        self.assertIn("active.split", out)
+
+    def test_absent_deployed_state_passes(self):
+        good, out = self.gate()
+        self.assertTrue(good)
+        self.assertIn("INFO", out)
+
+    def test_pre_consults_the_deployed_copy(self):
+        # the gate is only a gate if --pre asks it: a change edited in the repo and never deployed
+        # has to stop the pass even though the repo copy on its own is valid
+        state_path = os.path.join(self.tmp, "repo-state.json")
+        self.write(state_path, json.dumps(self.repo, indent = 2))
+        stale = json.loads(json.dumps(self.repo))
+        stale["active"]["split"] = 372
+        self.gate(stale)                              # writes the deployed copy
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            verify_task.main(["--pre", "--state", state_path, "--deployed", self.deployed])
+        self.assertIn("deployed state.json differs", buf.getvalue())
+
+    def test_key_order_and_line_endings_are_not_a_difference(self):
+        # core.autocrlf=true writes CRLF on a plain `git checkout -- state.json` while the blob is
+        # LF, so the comparison has to be over parsed JSON
+        text = json.dumps({"history": [],
+                           "active": {"draft": {"mode": "mtp"}, "cache_quant": "2,2",
+                                      "cache_size": 131072, "split": 376,
+                                      "model": "D:\\llms\\m"}}, indent = 2)
+        good, out = self.gate(text = text.replace("\n", "\r\n"))
+        self.assertTrue(good, out)
+        self.assertIn("PASS", out)
+
+
+class SizeCheckArgv(unittest.TestCase):
+    """`--pre` has to ask about the machine that will be loaded, draft head included."""
+
+    def state(self, draft = {"mode": "mtp"}):
+        state = {"model": "D:\\llms\\m", "split": 376, "cache_size": 131072, "cache_quant": "2,2"}
+        if draft is not None:
+            state["draft"] = draft
+        return state
+
+    def test_mtp_regime_asks_for_the_draft_head(self):
+        argv = verify_task.size_check_argv(self.state())
+        self.assertIn("--draft", argv)
+        self.assertEqual(argv[argv.index("--draft") + 1], "mtp")
+        self.assertIn("/mnt/d/llms/m", argv)          # the path is still translated for the check
+        self.assertEqual(argv.count("--mcs"), 1)
+
+    def test_no_draft_regime_leaves_it_off(self):
+        for draft in ({"mode": "none"}, None):        # an old state.json has no draft block
+            with self.subTest(draft = draft):
+                self.assertNotIn("--draft", verify_task.size_check_argv(self.state(draft)))
 
 
 if __name__ == "__main__":
