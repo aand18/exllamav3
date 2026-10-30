@@ -12,9 +12,9 @@ model, run `eval/perf.py`". These scripts make that repeatable.
 | File | Purpose | Status |
 |---|---|---|
 | `watch.ps1` | samples free VRAM/RAM every second, writes a CSV, kills the process tree and writes `BREACH-<tag>-<utc>.txt` when a floor is crossed | in use, mandatory |
-| `run_pass.ps1` | one `perf.py` pp/tg pass or one `spec_decode.py` drafting pass, in the regime `state.json` names, under `watch.ps1`, parsed into CSVs; prints the `HARNESS/PASS/FLOORS/PP/TG_S1` block and one `ARM` line per drafting arm | in use |
+| `run_pass.ps1` | one `perf.py` pp/tg pass, one `spec_decode.py` drafting pass or one `longctx.py` retrieval pass, in the regime `state.json` names, under `watch.ps1`, parsed into CSVs; prints the `HARNESS/PASS/FLOORS/PP/TG_S1` block, one `ARM` line per drafting arm and one `LONGCTX` line per retrieval test | in use |
 | `run_build.ps1` | one wheel build under `watch.ps1`, records the wheel and its size | in use |
-| `deploy.sh` | copies the scripts, `state.json`, the sidecar specs, `eval/perf.py`, `eval/spec_decode.py` and the prompt corpus to the directory the box runs from | in use |
+| `deploy.sh` | copies the scripts, `state.json`, the sidecar specs, `eval/perf.py`, `eval/spec_decode.py`, `eval/longctx.py` and both corpora (`prompts/`, `eval_texts/`) to the directory the box runs from | in use |
 | `legacy/` | the v1.4.9-era scripts, kept for provenance | superseded, see `legacy/README.md` |
 
 ## Floors: non-negotiable
@@ -61,7 +61,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File \
 | `-Split N` | replaces the regime's `-mcs`; `0` takes `split` from `state.json` |
 | `-CacheSize N` | replaces the regime's `-cs`; `0` takes `cache_size` from `state.json`, or `draft.spec_decode_cache_size` for a drafting run |
 | `-Model PATH` | replaces the regime's `-m`; empty takes `model` from `state.json` |
-| `-Runner perf` / `-Runner spec_decode` | one `perf.py` pp/tg ladder (default) or one `spec_decode.py` drafting pass |
+| `-Runner perf` / `-Runner spec_decode` / `-Runner longctx` | one `perf.py` pp/tg ladder (default), one `spec_decode.py` drafting pass, or one `longctx.py` retrieval pass |
 | `-Extra "..."` | appends raw runner flags (`-dr 3`, `-rb_ab`, …). It may not restate a flag the regime owns — `-m`, `-cs`, `-cq`, `-chunk_size`, `-ambs`, `-max_length`, `-mcs`, `-mct` and, on a drafting run, `-mtp`/`-ndt`/`-sdh`/`-hdt`/`-dds` — in any spelling (`-cs=40960`, `--cache_size 40960` included); a restatement aborts, naming the flag and the way to change it: the delta switch where one exists (`-Model`, `-CacheSize`, `-MaxLength`, `-Split`, `-Threads`), `edit state.json` for the rest (`-cq`, `-chunk_size`, `-ambs` and the drafting flags) |
 | `-StaticSwap` | applies `state.json`'s `knob_arms_disable_swap` to this pass (`EXL3_MOE_CPU_SWAP=0`); a drafting run gets it without asking |
 | `-DryRun` | prints the `DRYRUN`/`ARGS`/`ENV` lines and exits 0: no log, no CSV row, no watcher, no frozen-profile restore, no output directory, no GPU, and no one-owner check — so it works while another pass or the server owns the card |
@@ -92,6 +92,15 @@ draft flags at all — `eval/perf.py` registers none, so `-mtp` in its argv abor
 with `S=1..4`; `S=1` is the tg number, `S=2..4` are the per-step cost of MTP verification, not an
 acceptance rate (that is `eval/spec_decode.py`).
 
+Retrieval is `-Runner longctx`, and it is a **quality** runner: `eval/longctx.py` feeds whole stories
+(14k tokens for Sherlock, 38k for "The Variable Man", 177k for the `-xl` Pride & Prejudice arm) and
+asks for summaries, translations, Q&A and inserted-passage detection. Its answers are prose, so no
+script grades them — the harness records the run (one `LONGCTX job=<name> prompt_tokens=<n>
+out_chars=<k>` line per test, into `results/longctx.csv`), refuses to call a run `ok` without them,
+and the reader scores the transcript against the references the script prints. A retrieval run gets
+`EXL3_MOE_CPU_SWAP=0` like a drafting run (a placement sweep can flip the greedy token an answer
+depends on), and carries no draft args.
+
 A spelling can be checked while the card is busy: `-DryRun` runs every gate that can refuse a pass
 except the one-owner check (a dry run starts nothing, so another pass or the tabbyAPI server may own
 the card), prints the argv and environment, and exits before anything is created or started.
@@ -112,6 +121,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File \
 | `results/tg.csv` | `tag, run_id, context, s1, s2, s3, s4` |
 | `results/spec_decode.csv` | `tag, run_id, category, arm, tok_s, ratio, acc, draft` — a drafting pass's per-category table |
 | `results/arms.csv` | `tag, run_id, arm, tok_s, acc, draft, rounds` — the `ARM` lines, one row per arm |
+| `results/longctx.csv` | `tag, run_id, job, prompt_tokens, out_chars` — the `LONGCTX` lines, one row per retrieval test |
 | `results/watch-<tag>-<utc>.csv` | `t_iso, free_vram_mb, used_vram_mb, free_ram_mb, proc_ws_mb` |
 | `results/builds.csv` | `tag, run_id, finished_utc, src, exit, elapsed_s, wheel, wheel_mb, harness_sha256, log` — one row per build, and `log` names `logs/build-<tag>-<utc>.log` |
 | `logs/perf-<tag>-<utc>.log` | runner stdout+stderr, identity header appended last (partial metrics survive a kill); `.err.log` beside it keeps the raw stderr |

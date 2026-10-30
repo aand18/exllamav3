@@ -733,6 +733,43 @@ class CitesFailureGate(unittest.TestCase):
                                "--cites-failure", "bad-20261030-000001"])
         self.assertEqual(rc, 0)
 
+class LongctxRunner(unittest.TestCase):
+    """The retrieval runner has to be a first-class harness citizen, not a script someone wires by hand.
+
+    Its answers are prose, so no test can grade them; what the harness must guarantee is that the
+    run was recorded (a LONGCTX row per test), that it cannot report `ok` with no evidence, and that
+    the corpus it reads travels with it.
+    """
+
+    RUN_PASS = os.path.join(REPO, "bench", "windows", "run_pass.ps1")
+    DEPLOY = os.path.join(REPO, "bench", "windows", "deploy.sh")
+    LONGCTX = os.path.join(REPO, "eval", "longctx.py")
+
+    def _read(self, path):
+        with open(path, encoding = "utf-8") as f:
+            return f.read()
+
+    def test_runner_is_selectable_and_records_its_context(self):
+        text = self._read(self.RUN_PASS)
+        self.assertIn('elseif ($Runner -eq "longctx")', text, "run_pass.ps1 has no longctx branch")
+        self.assertIn('"longctx\\.py"', text, "the watcher must be told to match longctx.py")
+        script = self._read(self.LONGCTX)
+        self.assertIn("LONGCTX job=", script, "the script prints no machine-readable summary")
+        self.assertIn("prompt_tokens=", script, "the summary has to name the context each test saw")
+        self.assertIn("LONGCTX jobs=", script, "the summary has to state how many tests ran")
+
+    def test_a_retrieval_run_without_results_is_a_failure(self):
+        text = self._read(self.RUN_PASS)
+        self.assertIn('$Runner -eq "longctx" -and $lcRows.Count -eq 0', text,
+                      "a longctx run that printed no LONGCTX line must be `fail`, not `ok`")
+        self.assertIn('$l -match \'^LONGCTX job=', text, "the LONGCTX parser is gone")
+
+    def test_the_corpus_travels_with_the_script(self):
+        text = self._read(self.DEPLOY)
+        self.assertIn('"$REPO/eval/longctx.py"', text, "deploy.sh does not ship longctx.py")
+        self.assertIn("eval_texts", text, "deploy.sh does not ship the stories longctx.py reads")
+
+
 
 if __name__ == "__main__":
     unittest.main(verbosity = 2)

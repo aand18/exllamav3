@@ -125,6 +125,13 @@ if ($Runner -eq "spec_decode") {
     $PERF = Join-Path $Root "spec_decode.py"
     $MATCH_CMD = "spec_decode\.py"
     $RunnerName = "spec_decode"   # what -DryRun reports: the runner actually selected
+} elseif ($Runner -eq "longctx") {
+    # Retrieval at length: eval/longctx.py reads stories from eval_texts/ and prints one LONGCTX
+    # line per test plus a count. Its verdict is a reader's, but the run has to prove which tests
+    # ran and what context each one saw.
+    $PERF = Join-Path $Root "longctx.py"
+    $MATCH_CMD = "longctx\.py"
+    $RunnerName = "longctx"
 } else {
     $PERF = Join-Path $Root "perf.py"
     $MATCH_CMD = "perf\.py"
@@ -281,9 +288,9 @@ if ($Extra -ne "") {
 }
 if ($Short)          { $argsList += "-short" }
 if (-not $NoSpecDec -and $Runner -eq "perf") { $argsList += "-sd" }
-if ($Runner -eq "spec_decode") {
-    # -max_length is perf.py's ladder length; spec_decode.py takes model_init args plus its own
-    # a fixed-size array has no RemoveAt: rebuild without the flag and its value
+if ($Runner -ne "perf") {
+    # -max_length is perf.py's ladder length; spec_decode.py and longctx.py take model_init args
+    # plus their own, and a fixed-size array has no RemoveAt: rebuild without the flag and its value
     $keep = @()
     for ($j = 0; $j -lt $argsList.Count; $j++) {
         if ($argsList[$j] -eq "-max_length") { $j++; continue }
@@ -308,7 +315,9 @@ if ($ST.env) { foreach ($pr in $ST.env.PSObject.Properties) { $baseEnv[$pr.Name]
 # regime env, before -Unset/-Env, so an arm can still override it (-Env "EXL3_MOE_CPU_SWAP=1") and
 # that delta is measured, not assumed; $envApplied copies $baseEnv below, which puts it in the log
 # header and in passes.csv.
-if ($ST.knob_arms_disable_swap -eq $true -and ($Runner -eq "spec_decode" -or $StaticSwap)) {
+# A retrieval run is a quality comparison, so placement must be frozen for it too: a sweep mid-
+# generation changes rounding and can flip the greedy token the answer depends on.
+if ($ST.knob_arms_disable_swap -eq $true -and ($Runner -eq "spec_decode" -or $Runner -eq "longctx" -or $StaticSwap)) {
     $baseEnv["EXL3_MOE_CPU_SWAP"] = "0"
 }
 foreach ($k in $baseEnv.Keys) { Set-Item "env:$k" $baseEnv[$k] }
@@ -526,6 +535,16 @@ foreach ($rawLine in (($raw -replace "`r", "`n") -split "`n")) {
     }
 }
 
+# Retrieval runs: one LONGCTX line per test, parsed so a run that produced none is a failure rather
+# than an `ok` row with no evidence (the same rule the drafting runner follows).
+$lcRows = New-Object System.Collections.ArrayList
+foreach ($rawLine in (($raw -replace "`r", "`n") -split "`n")) {
+    $l = ($rawLine -replace $ansi, "").Trim()
+    if ($l -match '^LONGCTX job=(\S+)\s+prompt_tokens=(\d+)\s+out_chars=(\d+)') {
+        [void]$lcRows.Add(@($Matches[1], [int]$Matches[2], [int]$Matches[3]))
+    }
+}
+
 # torch allocator watermarks (improvement I3b): driver-free VRAM says nothing about how much of the
 # card PyTorch is holding in cached blocks, which is what actually kills runs at the floor
 $peakAlloc = 0.0
@@ -548,6 +567,7 @@ elseif ($Runner -eq "perf" -and $ppRows.Count -eq 0 -and $tgRows.Count -eq 0) { 
 # be absent: a single-arm n-gram pass (-nbl -ngram_min 3) prints the per-category table but no ARM
 # line, because arm_line() only runs for the baseline and draft arms, and that pass did measure.
 elseif ($Runner -eq "spec_decode" -and $armRows.Count -eq 0 -and $sdRows.Count -eq 0) { $status = "fail" }
+elseif ($Runner -eq "longctx" -and $lcRows.Count -eq 0) { $status = "fail" }
 
 # --- Persist -----------------------------------------------------------------------------------
 $passesCsv = Join-Path $RES "passes.csv"
@@ -595,6 +615,12 @@ foreach ($r in $armRows) {
         ([string]::Format($inv, "{0:F2}", $r[3])), $r[4]) -Encoding ASCII
 }
 
+$lcCsv = Join-Path $RES "longctx.csv"
+if (-not (Test-Path $lcCsv)) { Set-Content -Path $lcCsv -Value "tag,run_id,job,prompt_tokens,out_chars" -Encoding ASCII }
+foreach ($r in $lcRows) {
+    Add-Content -Path $lcCsv -Value ("{0},{1},{2},{3},{4}" -f $Tag, $runId, $r[0], $r[1], $r[2]) -Encoding ASCII
+}
+
 $tgCsv = Join-Path $RES "tg.csv"
 if (-not (Test-Path $tgCsv)) { Set-Content -Path $tgCsv -Value "tag,run_id,context,s1,s2,s3,s4" -Encoding ASCII }
 foreach ($r in $tgRows) {
@@ -616,12 +642,17 @@ if ($ppRows.Count -gt 0) {
     foreach ($r in $ppRows) { $parts += ("{0}={1}" -f $r[0], [string]::Format($inv, "{0:F2}", $r[1])) }
     Write-Output ("PP   " + ($parts -join " "))
 }
+if ($lcRows.Count -gt 0) {
+    $parts = @()
+    foreach ($r in $lcRows) { $parts += ("{0}:{1}tok/{2}ch" -f $r[0], $r[1], $r[2]) }
+    Write-Output ("LONGCTX " + $lcRows.Count + " test(s) " + ($parts -join " "))
+}
 if ($tgRows.Count -gt 0) {
     $parts = @()
     foreach ($r in $tgRows) { $parts += ("{0}={1}" -f $r[0], [string]::Format($inv, "{0:F2}", $r[1][1])) }
     Write-Output ("TG_S1 " + ($parts -join " "))
 }
-Write-Output ("CSV  " + $passesCsv + " ; " + $ppCsv + " ; " + $tgCsv + " ; " + $sdCsv + " ; " + $armCsv + " ; " + $wCsv)
+Write-Output ("CSV  " + $passesCsv + " ; " + $ppCsv + " ; " + $tgCsv + " ; " + $sdCsv + " ; " + $armCsv + " ; " + $lcCsv + " ; " + $wCsv)
 
 if ($status -eq "breach") {
     Write-Output ("BREACH tag=$Tag run=$runId floors violated; see " + (Join-Path $RES ("BREACH-" + $runId + ".txt")))
