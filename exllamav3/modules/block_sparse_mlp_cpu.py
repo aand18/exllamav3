@@ -685,7 +685,7 @@ class BlockSparseMLP_CPU:
                 print(f" !! {self.key}: unsupported bitrate, CPU offload skipped")
                 return False
         def bias_keys(ls):
-            has = [(l.key + ".bias") in stc.tensor_file_map for l in ls]
+            has = [stc.has_tensor(l.key + ".bias") for l in ls]
             if any(has) and not all(has):
                 print(f" !! {self.key}: mixed expert biases, CPU offload skipped")
                 return None
@@ -802,7 +802,7 @@ class BlockSparseMLP_CPU:
                 print(f" !! {self.key}: unsupported bitrate, CPU split skipped")
                 return False
         def bias_keys(ls):
-            has = [(l.key + ".bias") in stc.tensor_file_map for l in ls[first:]]
+            has = [stc.has_tensor(l.key + ".bias") for l in ls[first:]]
             if any(has) and not all(has):
                 print(f" !! {self.key}: mixed expert biases, CPU split skipped")
                 return None
