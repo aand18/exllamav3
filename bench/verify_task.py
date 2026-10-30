@@ -341,23 +341,50 @@ def table_ratio_ranges(text: str) -> list[str]:
     return out
 
 
+def table_line_spans(text: str) -> list[tuple[int, int]]:
+    """Character spans of the report's markdown table rows.
+
+    A band printed in a table is the reference data; a band in prose is the claim checked against it.
+    Only the claim is audited, so the scan has to know which lines are rows - a report whose table
+    prints per-band ranges is otherwise reported as contradicting itself fourteen times over.
+    """
+    spans: list[tuple[int, int]] = []
+    offset = 0
+    for line in text.splitlines(keepends = True):
+        if markdown_cells(line):
+            spans.append((offset, offset + len(line)))
+        offset += len(line)
+    return spans
+
+
+def in_table_row(spans: list[tuple[int, int]], pos: int) -> bool:
+    """Whether a character offset falls inside one of those rows."""
+    return any(start <= pos < end for start, end in spans)
+
+
 def percentage_gate(text: str) -> bool:
     """A quoted % or ratio band must be checkable against the report's own table.
 
     The old gate printed PASS for any `%` in the report without reading a number, which certifies
     arithmetic it never did. Now every number is either checked against the table printed beside it
-    or labelled INFO - never PASS.
+    or labelled INFO - never PASS. Bands inside a markdown table are that table, not claims about it,
+    so the scan reads prose lines only.
     """
     good = True
     bands = ratio_columns(text)
+    table_rows = table_line_spans(text)
     checked: list[tuple[int, int]] = []
 
     for m in SYMMETRIC_PCT.finditer(text):
+        if in_table_row(table_rows, m.start()):
+            continue                      # a band in a table is data, not a claim
         checked.append(m.span())
         good &= bad(f"`{m.group(0).strip()}` is a symmetric band; this project reports one-sided "
                     "ratio intervals (C5) - point at the ratio table's min/max instead")
 
     for m in RATIO_INTERVAL.finditer(text):
+        if in_table_row(table_rows, m.start()):
+            continue                      # not even INFO: a range cell is the reference data
         quoted = m.group(0).strip()
         unit = RANGE_UNIT.match(text, m.end())
         if unit:
@@ -374,19 +401,13 @@ def percentage_gate(text: str) -> bool:
             continue
         checked.append(m.span())
         if not bands:
-            # two different failures wear the same message today: a report with no ratio table, and
-            # a report whose ratio table holds ranges where this gate wants a column min/max (T05).
-            # The verdict is the same (a quote nothing certifies is not evidence) - the remedy is not
+            # a report with no ratio table and one whose ratio cells are ranges (T05) both leave this
+            # gate without a min/max to certify a prose quote against. The verdict is the same (a
+            # quote nothing certifies is not evidence); the remedy is not, so the message says which
             ranges = table_ratio_ranges(text)
             if not ranges:
                 good &= bad(f"`{quoted}`: quote without a table - no ratio table in the report; "
                             "regenerate with `bench/ratios.py` and quote the range it prints")
-            elif quoted in ranges:
-                # the report's own range cell, read as a quote: naming it "no such range" beside a
-                # list that starts with itself would be a message contradicting itself
-                good &= bad(f"`{quoted}` is a range the report's own table prints, not a band "
-                            "quoted in prose - this gate compares a quote with a ratio column's "
-                            "min/max")
             else:
                 listed = ", ".join(ranges[:4])
                 if len(ranges) > 4:

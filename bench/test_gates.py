@@ -419,15 +419,24 @@ class PercentageGate(GatesFixture, unittest.TestCase):
         self.assertIn("0.915–1.034", out)
         self.assertNotIn("quote without a table", out)
 
-    def test_a_table_range_read_as_a_quote_is_not_called_a_missing_table(self):
-        # the report's own range cell is not a prose quote, and calling it one produced a message
-        # that listed the range as absent: `0.915–1.034` matches no range (ranges: 0.915–1.034, …)
+    def test_a_table_only_range_report_passes(self):
+        # a ratio table whose cells are ranges is the reference data, and this report makes no claim
+        # about it: the gate audits prose. Before this, every one of its 12 range cells was FAILed
         path = self.report(RANGE_COLUMN_TABLE, self.RUN)
         rc, out = self.post(path)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("0.915–1.034", out)         # no FAIL, and no INFO either
+        self.assertNotIn("0.850–0.862", out)
+
+    def test_the_same_range_quoted_in_prose_still_fails(self):
+        # the cell is data, the sentence is a claim: the same interval written in prose still has no
+        # ratio column to certify it, which is what the failure names
+        body = "pp medians 0.915–1.034 at the measurement bands\n" + RANGE_COLUMN_TABLE
+        path = self.report(body, self.RUN)
+        rc, out = self.post(path)
         self.assertEqual(rc, 1, out)
-        self.assertIn("is a range the report's own table prints", out)
-        self.assertNotIn("quote without a table", out)
-        self.assertNotIn("matches no range", out)
+        self.assertIn("matches no range in the report's table(s)", out)
+        self.assertIn("0.915–1.034", out)
 
     def test_one_decimal_quote_matching_the_table_passes(self):
         # a band quoted at one decimal beside a one-decimal table is the claim "0.92-0.99" in fewer
