@@ -339,8 +339,17 @@ T4 (`T04-armA.md` — reference + thresholds), T5 (`T05-memops.md` — MEMOPS_WI
   RAM to 637 MB in 27 s and the watcher killed it; `-rs32` costs VRAM for no gain; `EXL3_BC_GDN=0`
   costs 15 % decode; `EXL3_GDN_SUB_CHUNK=1024` is 2–4 % down. No lever here — and three load-bearing
   defaults confirmed.
-- Not started: T13 steps 3–4 (boot under the watcher, verify — operator's call on a production
-  service) and T11 step 3 (Q2 retrieval).
+- Not started: nothing in the measurement plan. **T13 steps 3–4 done 2026-10-31** on operator
+  instruction ("start best variant, I wanna test it"): the fully measured configuration is applied
+  and the server is **live on `0.0.0.0:4099`** (model 3.18 @ split 376, cache 131072, Q2, DFlash2
+  w4, `EXL3_MOE_THREAD_PRIO=1`), boot 34 s, first request 36.5 tok/s with the drafter accepting 37
+  of 108 draft tokens on a trivial prompt, floor watcher running (`watch-server.csv`, 200/2048).
+  Exact files: `wiki/plans/v165-reports/artifacts/deployed/{config.yml,start_tuned.ps1}`.
+  **Two deployment findings:** tabbyAPI has no `Q2` cache mode — it validates
+  `FP16|Q8|Q6|Q4` or a numeric pair, so Q2 is spelled `"2,2"` (the first boot died on it); and
+  `curl` from WSL to the Windows listener returns `400 Invalid HTTP request received` for a
+  well-formed request (GET included) while PowerShell gets 200, so scripted clients must not be
+  WSL curl.
 
 ## Non-GPU prep done 2026-10-29
 

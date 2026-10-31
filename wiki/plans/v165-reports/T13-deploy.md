@@ -110,9 +110,49 @@ and the watcher floors 200 MB VRAM / 2048 MB RAM. `EXL3_MOE_TIMER_RES` and
 `EXL3_MOE_CPU_PIN_OFFSET=8` are **not** deployed (both measured neutral); `EXL3_MOE_BLOCKING_SYNC`
 stays off for the reason recorded in T8.
 
-## Step 3/4 — boot under the watcher, verify
+## Step 3/4 — booted under the watcher (operator instruction, 2026-10-31)
 
-Not done: it requires restarting the production server, which is the operator's call. Every number
-this report quotes comes from the offline harness (`perf.py` / `spec_decode.py`), never from the
-server, so the boot test is the one remaining step of T13 and it is a deployment action, not a
-measurement.
+Operator: *"Start best variant, I wanna test it."* Applied: the fully measured configuration,
+recorded verbatim in `artifacts/deployed/config.yml` and `artifacts/deployed/start_tuned.ps1`.
+
+| field | applied | why |
+|---|---|---|
+| `model.model_name` | `…-3.18bpw_h6_ng8` | production model; the previous value named a **deleted** checkpoint |
+| `model.cache_size` | `131072` | the measured length (262144 needs split 392 with a drafter) |
+| `model.cache_mode` | `"2,2"` | Q2 — see the schema finding below |
+| `model.cpu_moe_split_experts` | `376` | T10 ladder winner |
+| `draft_model` | `model` / DFlash2 / 4 tokens / `"2,2"` / `dynamic_draft: false` | T7 winner |
+| env | `MEMOPS=0`, `THREAD_PRIO=1`, `CPU_PIN=1`, `SWIZZLE=1`, `HOST_MEM_RESERVE_MB=0`, `HUGEPAGE=0` | T5/T8/T13 |
+
+**Finding: tabbyAPI has no `Q2` cache mode.** `cache_mode` validates against
+`literal['FP16','Q8','Q6','Q4'] | pattern '^[2-8]\s*,\s*[2-8]$'`, so the measured Q2 regime is spelled
+**`"2,2"`** — the name is rejected at startup with a pydantic `literal_error`, which is how this was
+found (the first boot attempt died before loading anything). `draft_cache_mode` takes the same pair.
+
+Boot: `main.py` directly (not `start.py`, which re-checks dependencies) from the tabbyAPI directory
+with the venv python, logs to `logs/server-<stamp>.log`. **Model loaded in 34.1 s, warmup 20.6 s,
+serving on `0.0.0.0:4099`** (a configured port, not the 5000 default).
+
+First request, from the Windows side:
+
+```
+GET  /v1/models        -> 200, id=Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8, n_ctx=131072
+POST /v1/chat/completions
+     23 prompt tokens + 64 completion tokens in 2.2 s (36.5 tok/s)
+     accepted_prediction_tokens=37, rejected_prediction_tokens=71   <- the drafter is live
+```
+
+`c-api` note: `curl` **from WSL** to the Windows listener gets `400 Invalid HTTP request received`
+for a well-formed HTTP/1.1 request (GET included), while the same request via PowerShell returns
+200 — the WSL→Windows hop breaks the framing for this listener. Verification and any scripted
+client should go through PowerShell (`Invoke-RestMethod`) or the host IP from a Windows shell, not
+`curl` from WSL, or the server will look broken when it is not.
+
+Floor watcher: `watch-server.csv` in the v165 results (floors **200 MB VRAM / 2048 MB RAM**), first
+samples 3025 MB VRAM free, 11674 MB RAM free, tree 38 GB. `stop-server.flag` in the same directory
+ends it.
+
+**The 262144 switch**, if the longer window is wanted: `cache_size: 262144` and
+`cpu_moe_split_experts: 392` together (measured in Step 2b: fits, 2749 MB free, 54.32 tok/s against
+56.57 at 131072 — 4 % of drafting speed for double the context). Both fields change or the drafter
+does not fit.
