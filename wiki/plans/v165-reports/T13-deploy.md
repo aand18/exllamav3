@@ -152,7 +152,43 @@ Floor watcher: `watch-server.csv` in the v165 results (floors **200 MB VRAM / 20
 samples 3025 MB VRAM free, 11674 MB RAM free, tree 38 GB. `stop-server.flag` in the same directory
 ends it.
 
-**The 262144 switch**, if the longer window is wanted: `cache_size: 262144` and
-`cpu_moe_split_experts: 392` together (measured in Step 2b: fits, 2749 MB free, 54.32 tok/s against
-56.57 at 131072 — 4 % of drafting speed for double the context). Both fields change or the drafter
-does not fit.
+## Step 5 — 262144 deployed at the split floor (2026-10-31, operator: "max VRAM use, 200 MB headroom")
+
+The 392 recommendation above was a step, not a search. Asked to use as much VRAM as the card allows
+while holding the 200 MB floor, the split was swept instead of stepped:
+
+| split | 262144 + DFlash2 | result |
+|---|---|---|
+| 377 | — | **refuses at load** (`Insufficient VRAM in split for model and cache`, 25 s) |
+| **378** | corpus: **58.54 tok/s**, 2.46/4 accepted, **763 MB** min free VRAM | **deployed** |
+| 392 | corpus: 54.32 tok/s, 2.35/4 accepted, 2749 MB min free | previous recommendation |
+
+**378 is the engine's floor, not the headroom's.** The watcher never came near 200 MB — the engine's
+own load-time accounting refuses at 377 while ~1 GB was still free, so "200 MB of headroom" is not
+reachable by lowering the split further. The lowest usable split buys **+7.8 %** over 392 (58.54 vs
+54.32 tok/s on the same corpus, same cache, same drafter) and it is the last performance the split
+can give.
+
+Note the measurement that changed the answer: a one-workload 128-token smoke said 378 ≈ 392
+(76.99 vs 77.03 tok/s on Coding); the full 22-workload corpus said +7.8 %. The smoke was noise.
+
+Floors and shapes at 378 / 262144:
+
+| run | workload | min free VRAM | min free RAM | verdict |
+|---|---|---|---|---|
+| `t13-378-corpus` | 22 workloads × 1024 tok | **763 MB** | 7779 MB | ok |
+| `t13-378-xl` | 165 k-token prompts, 16 k-token generations | 1545 MB | 7015 MB | ok, 16/16 retrieval facts |
+
+Deployed: `cache_size: 262144`, `cpu_moe_split_experts: 378`, `max_seq_len: 262144` (which also
+silences the clamp warning). Boot 31.7 s, warmup 18.5 s.
+
+**End-to-end through the API** (the deployment-shaped check):
+
+| request | prompt | prefill | decode | drafter |
+|---|---|---|---|---|
+| cold | **165 433 tokens** | 95.8 s → **1726 tok/s** | 56.6 tok/s | 130 / 280 accepted |
+| same prompt again | 165 433 (165 376 cached) | prompt cache hit | **503 tokens in 9.5 s** | 345 / 632 accepted |
+
+The answer was correct — it located the inserted passage "between Chapters XXIX and XXX" and quoted
+its first two sentences — and the floor watcher recorded **1393 MB** free VRAM at the minimum, seven
+times the floor.

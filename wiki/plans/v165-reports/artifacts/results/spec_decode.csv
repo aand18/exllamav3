@@ -265,3 +265,12 @@ t13-262k-dflash-s392,t13-262k-dflash-s392-20261030-081052,Creative (reasoning),D
 t13-262k-dflash-s392,t13-262k-dflash-s392-20261030-081052,Translation,DFlash (greedy),36.58,0.000,1.46,4.00
 t13-262k-dflash-s392,t13-262k-dflash-s392-20261030-081052,Translation (reasoning),DFlash (greedy),38.33,0.000,1.52,4.00
 t13-262k-dflash-s392,t13-262k-dflash-s392-20261030-081052,Trivial repetition,DFlash (greedy),71.58,0.000,3.99,4.00
+t13-378-smoke,t13-378-smoke-20261031-154543,Coding,DFlash (greedy),76.99,0.000,2.17,4.00
+t13-378-corpus,t13-378-corpus-20261031-162616,Agentic; code,DFlash (greedy),75.00,0.000,3.12,4.00
+t13-378-corpus,t13-378-corpus-20261031-162616,Agentic; curl,DFlash (greedy),64.79,0.000,2.41,4.00
+t13-378-corpus,t13-378-corpus-20261031-162616,Coding,DFlash (greedy),82.80,0.000,2.96,4.00
+t13-378-corpus,t13-378-corpus-20261031-162616,Creative,DFlash (greedy),46.49,0.000,1.92,4.00
+t13-378-corpus,t13-378-corpus-20261031-162616,Creative (reasoning),DFlash (greedy),44.75,0.000,1.90,4.00
+t13-378-corpus,t13-378-corpus-20261031-162616,Translation,DFlash (greedy),44.58,0.000,1.87,4.00
+t13-378-corpus,t13-378-corpus-20261031-162616,Translation (reasoning),DFlash (greedy),39.45,0.000,1.54,4.00
+t13-378-corpus,t13-378-corpus-20261031-162616,Trivial repetition,DFlash (greedy),70.49,0.000,3.97,4.00

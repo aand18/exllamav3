@@ -344,6 +344,14 @@ T4 (`T04-armA.md` — reference + thresholds), T5 (`T05-memops.md` — MEMOPS_WI
   and the server is **live on `0.0.0.0:4099`** (model 3.18 @ split 376, cache 131072, Q2, DFlash2
   w4, `EXL3_MOE_THREAD_PRIO=1`), boot 34 s, first request 36.5 tok/s with the drafter accepting 37
   of 108 draft tokens on a trivial prompt, floor watcher running (`watch-server.csv`, 200/2048).
+  **Updated 2026-10-31 (operator: 262k ctx, max VRAM use):** the server now runs
+  **cache 262144 at split 378** — the *lowest* split that loads at that cache (377 refuses; the
+  engine's accounting binds ~1 GB before the 200 MB floor does). Full corpus: **58.54 tok/s**,
+  2.46/4 accepted, **min free VRAM 763 MB**; 165 k-token prompts: 1545 MB min free, 16/16 retrieval
+  facts. That is **+7.8 %** over the earlier 392 recommendation (54.32 tok/s, 2749 MB free) — and a
+  one-workload 128-token smoke had said they were equal, so the corpus run decided it.
+  End-to-end through the API: 165 433-token prompt prefill **1726 tok/s** (95.8 s), decode 56.6
+  tok/s, cached repeat 503 tokens in 9.5 s, min free VRAM 1393 MB, correct answer.
   Exact files: `wiki/plans/v165-reports/artifacts/deployed/{config.yml,start_tuned.ps1}`.
   **Two deployment findings:** tabbyAPI has no `Q2` cache mode — it validates
   `FP16|Q8|Q6|Q4` or a numeric pair, so Q2 is spelled `"2,2"` (the first boot died on it); and

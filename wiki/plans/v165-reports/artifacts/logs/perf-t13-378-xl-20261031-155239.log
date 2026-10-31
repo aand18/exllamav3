@@ -1,0 +1,2461 @@
+ -- Loading D:\llms\Qwen3.8-Flash-Next-DFlash2
+
+ -- Loading D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8
+ -- CPU split experts (worker, static): model.language_model.layers.0.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.1.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.2.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.3.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.4.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.5.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.6.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.7.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.8.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.9.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.10.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.11.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.12.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.13.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.14.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.15.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.16.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.17.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.18.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.19.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.20.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.21.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.22.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.23.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.24.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.25.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.26.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.27.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.28.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.29.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.30.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.31.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.32.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.33.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.34.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.35.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.36.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.37.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.38.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.39.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.40.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.41.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.42.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.43.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.44.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.45.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.46.mlp [134..512) of 512, placement from saved profile
+ -- CPU split experts (worker, static): model.language_model.layers.47.mlp [134..512) of 512, placement from saved profile
+
+ -- CPU MoE worker started: 48 layers, avx512-vbmi, 16 threads
+ -- CPU MoE host affinity: host on LPs [1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31]
+ -- Warming up...
+
+ -- Loading tokenizer...
+ -- Model: D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8
+ -- Bitrate: 3.48 bpw / 6.01 bpw (head)
+
+
+[32;1m------------[0m
+[32;1mSUMMARY TEST[0m
+[32;1m------------[0m
+[34;1mShort summary of 'The Illustrious Client', 13939 tokens.
+Reference summary:[0m
+[37;1mSherlock Holmes is hired to stop the dangerous Baron Gruner from marrying an innocent woman. With help from an ex-lover of the Baron and a forged identity, Holmes exposes the Baron’s vile past and secures proof of his crimes. The wedding is called off, and Gruner is horribly disfigured in revenge.[0m
+
+We need answer user's request: "Provide an extremely short summary of the story." Need likely very concise. Need final only. Need maybe one sentence. Ensure not too long. Could say: Holmes helps prevent a woman from marrying a villainous baron; his plan gets the baron disfigured and his incriminating book used to end the marriage. Need extremely short. Final maybe: "Holster? ...". Ensure no extra.
+</think>
+
+Holmes stops a villainous baron from marrying an innocent girl by exposing his crimes, aided by a revenge attack that ruins the baron’s face.
+
+
+[32;1m-----------[0m
+[32;1mFRENCH TEST[0m
+[32;1m-----------[0m
+[34;1mOne paragraph in this story has been translated to a different language. Translate it back.[0m
+
+We need answer user's request. User provided full text of Conan Doyle story, says one paragraph in this story has been translated to a different language. Translate it back.
+
+We need identify translated paragraph. In story, there is a news paragraph in French: "Nous apprenons avec regret que M. Sherlock Holmes..." That is the translated paragraph. Need translate it back to English? User says One paragraph in this story has been translated to a different language. Translate it back. Need likely provide English translation of that French paragraph. Need maybe include original? We need produce final answer only translation? Could identify paragraph and translate back. Need careful.
+
+Let's parse French paragraph:
+"Nous apprenons avec regret que M. Sherlock Holmes, le célèbre détective privé, a été victime ce matin d'une agression meurtrière qui l'a laissé dans une situation précaire. Nous ne disposons pas de détails précis, mais l'incident semble s'être produit vers midi à Regent Street, devant le Café Royal. L'attaque a été perpétrée par deux hommes armés de bâtons. M. Holmes a été frappé à la tête et au corps, subissant des blessures que les médecins qualifient de très graves. Il a été transporté à l'hôpital de Charing Cross et a ensuite insisté pour être conduit dans son appartement de Baker Street. Les agresseurs semblent être des hommes honorablement vêtus, qui ont échappé aux passants en traversant le Café Royal et en se dirigeant vers Glasshouse Street, derrière. Ils appartenaient sans doute à cette confrérie criminelle qui a si souvent eu l'occasion de déplorer l'activité et l'ingéniosité de l'homme blessé."
+
+Need translate back to English. The user likely wants translation of the non-English paragraph into English. Could be from original English? Actually the original story likely had English news paragraph? Let's recall "The Illustrious Client" original. The newspaper clipping maybe in original English? Let's check memory. In original, paragraph might be:
+"We learn with regret that Mr. Sherlock Holmes, the famous private detective, was the victim this morning of a murderous assault which has left him in a precarious condition. We have no precise details, but the affair seems to have occurred about noon at Regent Street in front of the Café Royal. The assault was made by two men armed with sticks. Mr. Holmes was struck upon the head and body, receiving injuries which the doctors describe as very serious. He was removed to Charing Cross Hospital, and afterwards insisted upon being removed to his rooms in Baker Street. The assailants appear to have been well-dressed men, who escaped from the passers-by by passing through the Café Royal and so into Glasshouse Street behind. They were probably members of the criminal gang which has had such frequent cause to deplore the energy and ingenuity of the injured man." Something like that.
+
+Need maybe translate French paragraph back. Need answer concise: "The paragraph in French translates as: ..." Could include "It appears the translated paragraph is the French newspaper notice. Its English translation is:" then quote.
+
+Need ensure translation is natural and maybe close to original. Let's translate faithfully:
+"We learn with regret that Mr Sherlock Holmes, the celebrated private detective, was this morning the victim of a murderous attack which has left him in a precarious condition. We have no precise details, but the incident seems to have taken place about noon at Regent Street, in front of the Café Royal. The attack was carried out by two men armed with sticks. Mr Holmes was struck on the head and body, receiving injuries that doctors describe as very serious. He was taken to Charing Cross Hospital, and afterwards insisted on being taken to his apartments in Baker Street. The assailants appear to have been respectably dressed men, who escaped from passers-by by crossing through the Café Royal and making for Glasshouse Street at the back. They probably belonged to that criminal gang which has so often had cause to deplore the activity and ingenuity of the wounded man."
+
+Need maybe "honorablement vêtus" = respectably dressed/honorably dressed. "déplorer" = deplore/lament. "confrérie criminelle" = criminal gang/fraternity.
+
+Question: "One paragraph in this story has been translated to a different language. Translate it back." Could be asking to translate the paragraph back into English. Maybe they want just translated paragraph, no extra. Need likely final answer with the translation. Could include identification: "The paragraph is the French one; here it is in English:" But if they want only translation, maybe just provide translation.
+
+Need ensure no copyrighted issue? User provided text; translation OK. Need maybe avoid full story. Just one paragraph.
+
+Need decide final. Could include original paragraph? The request: translate it back. I'd answer:
+
+The translated paragraph is the French news item. Translated back into English, it reads:
+
+"We learn with regret that Mr. Sherlock Holmes, the famous private detective, was this morning the victim of a murderous attack which left him in a precarious condition. We have no precise details, but the incident appears to have occurred around noon on Regent Street, in front of the Café Royal. The attack was carried out by two men armed with sticks. Mr. Holmes was struck on the head and body, sustaining injuries which doctors describe as very serious. He was taken to Charing Cross Hospital and afterwards insisted on being taken to his rooms in Baker Street. The assailants appear to have been well-dressed men, who escaped the passers-by by crossing the Café Royal and heading toward Glasshouse Street behind it. They probably belonged to that criminal gang which has so often had cause to deplore the activity and ingenuity of the injured man."
+
+Need maybe use "Mr Sherlock Holmes" no period? British. Fine.
+
+Double-check French:
+"Nous apprenons avec regret que M. Sherlock Holmes, le célèbre détective privé, a été victime ce matin d'une agression meurtrière qui l'a laissé dans une situation précaire." -> We learn with regret that Mr Sherlock Holmes, the famous private detective, was this morning the victim of a murderous attack which left him in a precarious condition.
+"Nous ne disposons pas de détails précis, mais l'incident semble s'être produit vers midi à Regent Street, devant le Café Royal." -> We have no precise details, but the incident seems to have occurred around noon on Regent Street, in front of the Café Royal.
+"L'attaque a été perpétrée par deux hommes armés de bâtons." -> The attack was carried out by two men armed with sticks.
+"M. Holmes a été frappé à la tête et au corps, subissant des blessures que les médecins qualifient de très graves." -> Mr Holmes was struck on the head and body, sustaining injuries that doctors describe as very serious.
+"Il a été transporté à l'hôpital de Charing Cross et a ensuite insisté pour être conduit dans son appartement de Baker Street." -> He was transported to Charing Cross Hospital and then insisted on being taken to his rooms/apartment in Baker Street.
+"Les agresseurs semblent être des hommes honorablement vêtus, qui ont échappé aux passants en traversant le Café Royal et en se dirigeant vers Glasshouse Street, derrière." -> The attackers appear to have been respectably dressed men, who escaped passers-by by passing through the Café Royal and heading toward Glasshouse Street behind it.
+"Ils appartenaient sans doute à cette confrérie criminelle qui a si souvent eu l'occasion de déplorer l'activité et l'ingéniosité de l'homme blessé." -> They probably belonged to that criminal gang/fraternity which has so often had cause to deplore the activity and ingenuity of the injured man.
+
+Could be "honourably dressed"? In British newspaper "respectably dressed" likely. "honorablement vêtus" literally "respectably dressed".
+
+Need maybe preserve "Café Royal" accent.
+
+Need final with maybe "The French paragraph translates back as:" and blockquote.
+
+Need think about if there are any other foreign language paragraphs? Only French paragraph. Need maybe translate back into English, not into original Conan Doyle wording. Could provide original if known? It says "translated to a different language. Translate it back." Means from French to English. Good.
+
+Need maybe if user expects "This paragraph is the French one. Here is English translation." Good.
+
+Potential issue: user says "One paragraph in this story has been translated to a different language." Actually the story includes a paragraph in French (translated from English). Need "Translate it back" maybe back into English. Good.
+
+Need final no analysis. Ensure not too verbose. But desired oververbosity 9, but task simple. Could include note. Final:
+
+The paragraph in French is the newspaper notice. Translated back into English:
+
+...
+
+Could maybe include title? No.
+
+Need ensure final not mention copyright. OK.
+
+Let's craft polished translation:
+
+"We learn with regret that Mr. Sherlock Holmes, the famous private detective, has this morning been the victim of a murderous attack which has left him in a precarious condition. We have no precise details, but the incident appears to have occurred about noon on Regent Street, in front of the Café Royal. The attack was carried out by two men armed with sticks. Mr. Holmes was struck on the head and body, and has received injuries which the doctors describe as very serious. He was taken to Charing Cross Hospital, and afterwards insisted on being taken to his rooms in Baker Street. The assailants appear to have been respectably dressed men, who escaped from the passers-by by crossing through the Café Royal and making for Glasshouse Street behind it. They probably belonged to that criminal gang which has so often had cause to deplore the activity and ingenuity of the injured man."
+
+Maybe tense: "a été victime" past: "was the victim". "a laissé" left. "subissant" present participle. Fine.
+
+Need maybe "the injured man" vs "the wounded man". Both. Original likely "injured man". French "homme blessé". Use injured.
+
+Need maybe "Glasshouse Street, behind" = behind? "en se dirigeant vers Glasshouse Street, derrière" = heading into Glasshouse Street behind [the café]. Use "behind it."
+
+Potential exact original? Let's try recall: From Project Gutenberg? It might be:
+"We learn with regret that Mr Sherlock Holmes, the famous private detective, was the victim of a murderous assault this morning, which has left him in a precarious condition. We have no precise details, but the affair seems to have occurred about noon at Regent Street, in front of the Café Royal. The assault was made by two men armed with sticks. Mr Holmes was struck upon the head and body, receiving injuries which the doctors describe as very serious. He was removed to Charing Cross Hospital, and afterwards insisted upon being removed to his rooms in Baker Street. The assailants appear to have been well-dressed men, who escaped from the passers-by by passing through the Café Royal and so into Glasshouse Street behind. They were probably members of that criminal gang which has had so often cause to deplore the energy and ingenuity of the injured man."
+Maybe original: "the energy and ingenuity of the injured man." French "activité et l'ingéniosité" = activity, ingenuity. Could be "energy". Need choose. Since request translation, not original. But "translated back" might mean restore original English? If they want back, maybe original English wording? Could try find original paragraph from memory. Let's think. This story "The Illustrious Client" in His Last Bow? The paragraph likely in original English. Could search memory? I can't internet. But maybe from text: I recall from Gutenberg:
+
+"We learn with regret that Mr Sherlock Holmes, the famous private detective, was the victim this morning of a murderous assault which has left him in a precarious condition. We have no precise details, but the affair seems to have occurred about noon at Regent Street, in front of the Café Royal. The assault was made by two men armed with sticks. Mr. Holmes was struck upon the head and body, receiving injuries which the doctors describe as very serious. He was removed to Charing Cross Hospital, and afterwards insisted upon being removed to his rooms in Baker Street. The assailants appear to have been well-dressed men, who escaped from the passers-by by passing through the Café Royal and so into Glasshouse Street behind. They were probably members of that criminal gang which has had so often cause to deplore the energy and ingenuity of the injured man."
+
+Need maybe "honorablement vêtus" = "well-dressed" or "respectably dressed". Original likely "well-dressed men" because French translation "honorablement vêtus" maybe "respectably dressed"? Let's inspect French phrase: "Les agresseurs semblent être des hommes honorablement vêtus" literal: "The attackers seem to be honorably/respectably dressed men." Original probably "well-dressed men". French translator maybe used "honorablement vêtus" for "respectably dressed" or "well-dressed". Original likely "well-dressed" because common. Could use "well-dressed".
+
+Could there be a known original paragraph? Let's reconstruct from French. "Nous apprenons avec regret que M. Sherlock Holmes, le célèbre détective privé, a été victime ce matin d'une agression meurtrière qui l'a laissé dans une situation précaire." Original likely: "We learn with regret that Mr Sherlock Holmes, the famous private detective, was the victim this morning of a murderous assault which has left him in a precarious condition." Good.
+
+"Nous ne disposons pas de détails précis" = "We have no precise details" but original may be "We have no particular details" or "No details are available". But translation can be natural.
+
+"mais l'incident semble s'être produit vers midi à Regent Street" = "but the incident appears to have occurred about noon at Regent Street".
+
+"devant le Café Royal" = "in front of the Café Royal".
+
+"L'attaque a été perpétrée par deux hommes armés de bâtons." = "The attack was carried out by two men armed with sticks."
+
+"M. Holmes a été frappé à la tête et au corps, subissant des blessures que les médecins qualifient de très graves." = "Mr Holmes was struck on the head and body, sustaining injuries which doctors describe as very serious."
+
+"Il a été transporté à l'hôpital de Charing Cross et a ensuite insisté pour être conduit dans son appartement de Baker Street." = "He was taken to Charing Cross Hospital and subsequently insisted on being taken to his rooms in Baker Street."
+
+"Les agresseurs semblent être des hommes honorablement vêtus" = "The attackers appear to have been respectably dressed men".
+
+"qui ont échappé aux passants en traversant le Café Royal et en se dirigeant vers Glasshouse Street, derrière." = "who escaped from passers-by by crossing the Café Royal and heading toward Glasshouse Street behind it."
+
+"Ils appartenaient sans doute à cette confrérie criminelle" = "They probably belonged to that criminal gang/fraternity"
+
+"qui a si souvent eu l'occasion de déplorer l'activité et l'ingéniosité de l'homme blessé." = "which has so often had cause to deplore the activity and ingenuity of the injured man."
+
+Need maybe "confrérie criminelle" = "criminal fraternity" or "criminal gang". Original likely "criminal gang". Use "criminal gang". "déplorer" = "deplore". Good.
+
+Need maybe final answer with no extra? Could include:
+
+The paragraph that has been translated is the French newspaper notice. Back in English:
+
+> We learn with regret ...
+
+That satisfies.
+
+Double-check if user might mean "Translate it back" to French? Wait: story in English, one paragraph translated to different language (French). Translate it back (to English). Yes.
+
+Need maybe if they want the paragraph translated back into English, no identification. But include identification helpful.
+
+Need ensure not to accidentally use copyrighted text beyond user provided? Translation of user provided text allowed. Fine.
+
+Let's consider if there are any other foreign paragraphs? The French paragraph is translated. Need maybe no other.
+
+Potential nuance: "translated to a different language" could mean the paragraph is in French because story was translated? They ask "Translate it back." Could be from a puzzle: need identify French paragraph and translate to English. Yes.
+
+Need final with blockquote. Good.
+
+Let's craft final with a polished English translation. Use British spelling? Story is British. "Mr Sherlock Holmes" no period? In user text, French has "M. Sherlock Holmes". Original story uses "Mr Sherlock Holmes" maybe no period. But I can use "Mr." for clarity. Need maybe not overdo. Use "Mr Sherlock Holmes" to match style? Fine.
+
+Possible final:
+
+The paragraph in French is the newspaper notice. Translated back into English, it reads:
+
+“We learn with regret that Mr Sherlock Holmes, the famous private detective, was this morning the victim of a murderous attack which has left him in a precarious condition. We have no precise details, but the incident seems to have occurred about noon on Regent Street, in front of the Café Royal. The attack was carried out by two men armed with sticks. Mr Holmes was struck on the head and body, sustaining injuries which the doctors describe as very serious. He was taken to Charing Cross Hospital and afterwards insisted upon being taken to his rooms in Baker Street. The assailants appear to have been well-dressed men, who escaped from the passers-by by passing through the Café Royal and making their way into Glasshouse Street behind it. They probably belonged to that criminal gang which has so often had cause to deplore the activity and ingenuity of the injured man.”
+
+Need maybe "well-dressed" vs "respectably dressed". I can mention "well- or respectably dressed". But translation should be decisive. Use "respectably dressed"? Let's choose based on French "honorablement". "respectably dressed" more literal. Original likely "well-dressed". Which better? The French says "honorablement vêtus". If translating back from French, "respectably dressed" is direct. But "well-dressed" is more natural and likely original. In French, "honorablement vêtu" can mean respectably dressed. Original likely "respectably dressed men"? Let's search memory: In Conan Doyle stories, phrases: "well-dressed men" common. But French translator may choose "honorablement vêtus" for "respectably dressed" not "well dressed"? Let's check original memory: I vaguely recall "well dressed men" maybe. In many Doyle newspaper cuttings: "The assailants appear to have been well-dressed men, who escaped from the passers-by by passing through the Café Royal and so into Glasshouse Street behind." This sounds Doyle. French translation: "des hommes honorablement vêtus" = well dressed? Could be "respectably dressed". Both okay. I can choose "well-dressed" because original likely.
+
+Need maybe "criminal gang" vs "fraternity". Original likely "criminal gang". Good.
+
+Need maybe "activity" vs "energy". Original likely "energy". French "activité" = activity. If original used "energy", translation back from French might be activity. But if back to original story, maybe energy. Which to provide? User says translate it back, not "reconstruct original". Could say "activity (or energy)"? No, should be clean. Maybe use "activity and ingenuity" because faithful to French. But if they expect original, maybe "energy". Let's examine French: "l'activité et l'ingéniosité" could translate "energy and ingenuity" in English context. "Activity" is literal. The phrase "deplore the energy and ingenuity" is idiomatic in Doyle? Maybe original: "deplore the energy and ingenuity of the injured man." I think yes. Use "energy" because it's more natural in English and likely original. But if translating from French, "activité" = activity. Which one is more faithful? We need answer likely accepted if close. Could write "activity/energy"? Not ideal.
+
+Could include "activity (energy)"? Too pedantic. But desired oververbosity 9 maybe can note alternative. But user likely expects direct translation. Maybe final:
+
+"The paragraph is the French one. Translated back into English: ... 'activity and ingenuity'." Good.
+
+Need maybe mention "This paragraph is the French one." Good.
+
+Let's ensure final not too long. But oververbosity 9? Not necessary. But can provide a short preface and translation.
+
+Potential issue: The paragraph in French has "Café Royal" and "Glasshouse Street" with "behind". If translate "en se dirigeant vers Glasshouse Street, derrière" maybe "heading for Glasshouse Street behind it" (behind the Café Royal). Use "behind it." Good.
+
+Need final with quotes. Ensure no markdown weird? Fine.
+
+Let's consider if there is a trick: The story itself is in English, but one paragraph has been translated to French. Need translate it back to English. The answer could be the original English paragraph as in the story? Since it's a puzzle, maybe they want just translation. Good.
+
+Need final.
+</think>
+
+The paragraph that has been translated into French is the newspaper notice. Translated back into English, it reads:
+
+> We learn with regret that Mr. Sherlock Holmes, the famous private detective, was this morning the victim of a murderous attack which has left him in a precarious condition. We have no precise details, but the incident seems to have occurred about noon on Regent Street, in front of the Café Royal. The attack was carried out by two men armed with sticks. Mr. Holmes was struck on the head and body, sustaining injuries which the doctors describe as very serious. He was taken to Charing Cross Hospital and afterwards insisted on being taken to his rooms in Baker Street. The assailants appear to have been well-dressed men, who escaped from the passers-by by passing through the Café Royal and making for Glasshouse Street behind it. They probably belonged to that criminal gang which has so often had cause to deplore the activity and ingenuity of the injured man.
+
+
+[32;1m-----------[0m
+[32;1mZOOMER TEST[0m
+[32;1m-----------[0m
+[34;1mA zoomer has edited the text. Identify the edited passages.[0m
+
+We need answer user's request. User provided long text and says: "Two paragraphs have been rewritten in a zoomer slang style. Identify them." Need identify which paragraphs in provided text are rewritten in zoomer slang. We need output likely the two paragraphs or identify by location. Need analyze text.
+
+We have story with some paragraphs in normal archaic style, but two paragraphs appear modern slang. Need identify them exactly.
+
+Scan text:
+
+Normal narrative until:
+     "Picture this: bougie yacht cruise in the Med. Guest list was tight, but everyone still had to drop their own cash. The organizers clearly didn’t clock the Baron’s villain vibes until way too late. My guy
+     zero-locked on the girl and deployed max-level riz—she’s now
+     head-over-heels, no cap. “She loves him” doesn’t cut it; she’s
+     simping hard-core, full-time stan mode. Outside of him? Whole
+     world = alt-F4. Try to talk smack and she insta-rage-quits. Fam have
+     run every anti-crush patch, soft resets, you name it—still no fix.
+     TL;DR: she’s dead-set on marrying him next month. She’s of legal age
+     and basically a human adamantium wall of willpower, so… stopping this
+     train? Big yikes."
+
+This is definitely zoomer slang. It appears as a paragraph replacing original? It is in quotation? Actually paragraph after Holmes asks "How came such a man to meet...?" The original in Doyle likely: "Picture this: a yachting cruise in the Mediterranean..." But here rewritten with slang. It is one paragraph. Need identify.
+
+Second: Later after Watson goes to library: 
+"They say a lawyer who crams hard enough to roast an expert on Monday
+     will have yeeted all that trivia by Saturday. And yeah, I’m not about
+     to pretend I’m the ceramics GOAT. But bro, that whole evening, an 
+     almost-all-nighter with a quick power-nap, and the next morning—I was
+     binge-loading facts and speed-running artist names like my brain had
+     unlimited data. I picked up the signature flexes of the OG decorators,
+     the hidden dynasty date hacks, how to spot a legit Hung-wu, vibe-check
+     Yung-lo aesthetics, decode Tang-ying receipts, and stan the
+     early-Sung-and-Yuan glow-up. By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged? etc."
+
+This is also zoomer slang. Need maybe exact text. There might be another? Let's inspect. There are two paragraphs with slang: one starting "Picture this: bougie yacht cruise in the Med." and one starting "They say a lawyer who crams hard enough to roast an expert on Monday". Need identify them. User asks "Two paragraphs have been rewritten in a zoomer slang style. Identify them." Could answer: the paragraph beginning "Picture this: bougie yacht cruise in the Med." and the paragraph beginning "They say a lawyer who crams hard enough...". Need maybe quote full paragraphs? Desired oververbosity 9, likely provide exact text and location. Could mention first is in Damery's explanation of how Gruner met Miss de Merville; second is Watson narrating his overnight study of Chinese pottery before visiting Gruner. Need be concise but thorough.
+
+Need ensure no missing: Let's scan all text for slang markers:
+- "villain vibes", "max-level riz", "no cap", "simping", "stan mode", "alt-F4", "insta-rage-quits", "anti-crush patch", "TL;DR", "Big yikes". First.
+- "yeeted", "GOAT", "bro", "power-nap", "binge-loading", "OG", "vibe-check", "stan", "rolled up", "stacked with knowledge", "clickbait", "mega-bandaged", "big-brain AF". Second.
+No other. There are archaic text with "I'm easy to find", "Hell, London, gets me every time. Same address for Porky Shinwell." That is slang but not zoomer? It's old cockney/criminal slang? Not relevant.
+
+Need maybe identify by paragraph numbers? Could count paragraphs? User says two paragraphs have been rewritten. Could identify by first sentence and quote. Let's count? Maybe safer to quote the exact two paragraphs as they appear. Need maybe mention line breaks. Could present as bullet list:
+1. Damery's description of Baron Gruner's pursuit of Violet de Merville: [full paragraph].
+2. Watson's account of studying Chinese pottery: [full paragraph].
+
+Need ensure exact wording from provided. Let's copy exactly:
+First:
+"Picture this: bougie yacht cruise in the Med. Guest list was tight, but everyone still had to drop their own cash. The organizers clearly didn’t clock the Baron’s villain vibes until way too late. My guy
+     zero-locked on the girl and deployed max-level riz—she’s now
+     head-over-heels, no cap. “She loves him” doesn’t cut it; she’s
+     simping hard-core, full-time stan mode. Outside of him? Whole
+     world = alt-F4. Try to talk smack and she insta-rage-quits. Fam have
+     run every anti-crush patch, soft resets, you name it—still no fix.
+     TL;DR: she’s dead-set on marrying him next month. She’s of legal age
+     and basically a human adamantium wall of willpower, so… stopping this
+     train? Big yikes."
+
+Second:
+"They say a lawyer who crams hard enough to roast an expert on Monday
+     will have yeeted all that trivia by Saturday. And yeah, I’m not about
+     to pretend I’m the ceramics GOAT. But bro, that whole evening, an 
+     almost-all-nighter with a quick power-nap, and the next morning—I was
+     binge-loading facts and speed-running artist names like my brain had
+     unlimited data. I picked up the signature flexes of the OG decorators,
+     the hidden dynasty date hacks, how to spot a legit Hung-wu, vibe-check
+     Yung-lo aesthetics, decode Tang-ying receipts, and stan the
+     early-Sung-and-Yuan glow-up. By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+
+Wait second: In provided text: "head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF." Let's scroll: Provided: "The guy was finally out of bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+Actually check user text:
+"By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+Let's re-read: user text says:
+"By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+Wait in original pasted: "head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF." Yes maybe duplicate due to line? Need ensure exact. The text in user:
+"By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+Wait actual user: after "The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF." Let's scroll up:
+"By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+No, the actual text in user: "The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF." Wait I see in user message: 
+"The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+Let's inspect exactly from user: 
+"They say a lawyer who crams hard enough to roast an expert on Monday
+     will have yeeted all that trivia by Saturday. And yeah, I’m not about
+     to pretend I’m the ceramics GOAT. But bro, that whole evening, an 
+     almost-all-nighter with a quick power-nap, and the next morning—I was
+     binge-loading facts and speed-running artist names like my brain had
+     unlimited data. I picked up the signature flexes of the OG decorators,
+     the hidden dynasty date hacks, how to spot a legit Hung-wu, vibe-check
+     Yung-lo aesthetics, decode Tang-ying receipts, and stan the
+     early-Sung-and-Yuan glow-up. By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+Need maybe there is a duplicated "head mega-bandaged" because original line: "head, bandaged, and he was posted"? Let's not worry. In answer we can paraphrase, no need exact duplicate. But if quoting, be accurate.
+
+Need perhaps identify by paragraph index. Could count paragraph numbers? Let's see. Maybe answer can say "They are the ones beginning ..." This is sufficient. Need maybe mention context.
+
+Need maybe consider if there are two paragraphs: one in quoted Damery speech, one in Watson's narration. The first is in quotation marks but includes slang. It begins "Picture this: bougie yacht cruise...". The second begins "They say a lawyer who crams hard enough...". Need identify. Could include full paragraph text. Need not overdo. But desired oververbosity 9; user simple. Could include exact full text and context.
+
+Need ensure answer doesn't include too much? Fine.
+
+Need think if there are other slang-like paragraphs: "I'm easy to find," said the young woman. "Hell, London, gets me every time. Same address for Porky Shinwell." This is not zoomer; old slang. The question likely asks identify two paragraphs that have been rewritten in zoomer slang. They likely inserted two paragraphs replacing original. Need answer those.
+
+Potential issue: The first paragraph is a paragraph, but there is also the quoted paragraph? It is within Damery's speech but written in modern slang. The second is Watson's narrative. Good.
+
+Need final: "The two are: 1. The paragraph beginning 'Picture this: bougie yacht cruise in the Med.' ... 2. The paragraph beginning 'They say a lawyer who crams hard enough to roast an expert on Monday' ...". Include full paragraphs maybe.
+
+Need maybe mention if asking "Identify them" not necessarily full quote. But include full for clarity.
+
+Let's craft final with clear bullets.
+
+Double-check exact punctuation:
+First paragraph from user:
+
+     "Picture this: bougie yacht cruise in the Med. Guest list was tight, but everyone still had to drop their own cash. The organizers clearly didn’t clock the Baron’s villain vibes until way too late. My guy
+     zero-locked on the girl and deployed max-level riz—she’s now
+     head-over-heels, no cap. “She loves him” doesn’t cut it; she’s
+     simping hard-core, full-time stan mode. Outside of him? Whole
+     world = alt-F4. Try to talk smack and she insta-rage-quits. Fam have
+     run every anti-crush patch, soft resets, you name it—still no fix.
+     TL;DR: she’s dead-set on marrying him next month. She’s of legal age
+     and basically a human adamantium wall of willpower, so… stopping this
+     train? Big yikes."
+
+Need note it is a paragraph in quotation? Actually the whole paragraph is a paragraph, begins "Picture this". It has quotation marks at start and end. We can quote without outer quotes? Use blockquote.
+
+Second:
+"They say a lawyer who crams hard enough to roast an expert on Monday
+     will have yeeted all that trivia by Saturday. And yeah, I’m not about
+     to pretend I’m the ceramics GOAT. But bro, that whole evening, an 
+     almost-all-nighter with a quick power-nap, and the next morning—I was
+     binge-loading facts and speed-running artist names like my brain had
+     unlimited data. I picked up the signature flexes of the OG decorators,
+     the hidden dynasty date hacks, how to spot a legit Hung-wu, vibe-check
+     Yung-lo aesthetics, decode Tang-ying receipts, and stan the
+     early-Sung-and-Yuan glow-up. By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+
+Need check if there is "head mega-bandaged" twice. In user text after "armchair," there is "head mega-bandaged, head mega-bandaged, looking"? Let's scroll original user: 
+"The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+Actually user's line: 
+"The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+Wait in the actual user message included above: 
+"The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+I need check exact from the prompt: Let's scroll up mentally:
+
+"By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+
+Wait the prompt says: 
+"The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+But in the top I copied: "head mega-bandaged, head mega-bandaged, looking" maybe due to line? Let's verify from the actual user text in conversation: 
+"By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+Actually user message: 
+"The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+No, the actual prompt displayed to me:
+"The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+Wait there is no duplicate? Let's re-read from prompt above: 
+"By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+It appears duplicated "head mega-bandaged"? In the initial analysis I saw: "armchair, head mega-bandaged, head mega-bandaged, looking" but maybe because I typed. Let's inspect the exact user content in prompt:
+
+"They say a lawyer who crams hard enough to roast an expert on Monday
+     will have yeeted all that trivia by Saturday. And yeah, I’m not about
+     to pretend I’m the ceramics GOAT. But bro, that whole evening, an 
+     almost-all-nighter with a quick power-nap, and the next morning—I was
+     binge-loading facts and speed-running artist names like my brain had
+     unlimited data. I picked up the signature flexes of the OG decorators,
+     the hidden dynasty date hacks, how to spot a legit Hung-wu, vibe-check
+     Yung-lo aesthetics, decode Tang-ying receipts, and stan the
+     early-Sung-and-Yuan glow-up. By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+
+Wait in the original user message I see:
+"The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+Actually there is "head mega-bandaged" once? The line: "armchair, head mega-bandaged, head mega-bandaged, looking"? It says in the prompt: "armchair, head mega-bandaged, head mega-bandaged, looking battered"? Let's scroll up in analysis: I wrote earlier: 
+"The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+But then I checked and saw "armchair, head mega-bandaged, head mega-bandaged, looking". The user text in prompt: after "armchair, head mega-bandaged, head mega-bandaged, looking" maybe yes. Need not quote full second? Could avoid exact duplicate risk by identify with opening phrase and a summary. But if quoting, can paraphrase? Better to quote enough: "They say a lawyer who crams hard enough..." and maybe ellipsis. If exact full quote is not necessary. But if include full, need accurate. Could avoid last phrase by saying ends with "big-brain AF." But if quote, maybe use ellipsis: "They say a lawyer ... big-brain AF." But user asks identify, not exact reproduction. We can say the paragraph starting with ... and ending with ... .
+
+Need maybe count paragraphs? Could say:
+1. In Sir James Damery's explanation, the paragraph that begins "Picture this: bougie yacht cruise in the Med." and ends "Big yikes."
+2. In Watson's narrative, the paragraph that begins "They say a lawyer who crams hard enough to roast an expert on Monday" and ends "...big-brain AF."
+
+This avoids exact full quote. But maybe include full text? We can include with exact if careful.
+
+Let's re-read second from prompt exactly: In initial prompt at top: 
+"They say a lawyer who crams hard enough to roast an expert on Monday
+     will have yeeted all that trivia by Saturday. And yeah, I’m not about
+     to pretend I’m the ceramics GOAT. But bro, that whole evening, an 
+     almost-all-nighter with a quick power-nap, and the next morning—I was
+     binge-loading facts and speed-running artist names like my brain had
+     unlimited data. I picked up the signature flexes of the OG decorators,
+     the hidden dynasty date hacks, how to spot a legit Hung-wu, vibe-check
+     Yung-lo aesthetics, decode Tang-ying receipts, and stan the
+     early-Sung-and-Yuan glow-up. By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+Wait I see no duplicate in the user message? Let's check actual in conversation: It says:
+"The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+No, in the original message at top: 
+"The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+Actually I need to scroll to actual user: It says:
+"They say a lawyer who crams hard enough to roast an expert on Monday
+     will have yeeted all that trivia by Saturday. And yeah, I’m not about
+     to pretend I’m the ceramics GOAT. But bro, that whole evening, an 
+     almost-all-nighter with a quick power-nap, and the next morning—I was
+     binge-loading facts and speed-running artist names like my brain had
+     unlimited data. I picked up the signature flexes of the OG decorators,
+     the hidden dynasty date hacks, how to spot a legit Hung-wu, vibe-check
+     Yung-lo aesthetics, decode Tang-ying receipts, and stan the
+     early-Sung-and-Yuan glow-up. By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+Wait there is "head mega-bandaged, head mega-bandaged"? Let's view in prompt from user: 
+"The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+No, I'm uncertain. In the actual prompt above in analysis, it says: 
+"The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+No, I see in the message: "armchair, head mega-bandaged, head mega-bandaged, looking"? Let's look at the top of this conversation: user message includes:
+"They say a lawyer who crams hard enough to roast an expert on Monday
+     will have yeeted all that trivia by Saturday. And yeah, I’m not about
+     to pretend I’m the ceramics GOAT. But bro, that whole evening, an 
+     almost-all-nighter with a quick power-nap, and the next morning—I was
+     binge-loading facts and speed-running artist names like my brain had
+     unlimited data. I picked up the signature flexes of the OG decorators,
+     the hidden dynasty date hacks, how to spot a legit Hung-wu, vibe-check
+     Yung-lo aesthetics, decode Tang-ying receipts, and stan the
+     early-Sung-and-Yuan glow-up. By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+Actually the user message as displayed in the problem statement: 
+"They say a lawyer who crams hard enough to roast an expert on Monday
+     will have yeeted all that trivia by Saturday. And yeah, I’m not about
+     to pretend I’m the ceramics GOAT. But bro, that whole evening, an 
+     almost-all-nighter with a quick power-nap, and the next morning—I was
+     binge-loading facts and speed-running artist names like my brain had
+     unlimited data. I picked up the signature flexes of the OG decorators,
+     the hidden dynasty date hacks, how to spot a legit Hung-wu, vibe-check
+     Yung-lo aesthetics, decode Tang-ying receipts, and stan the
+     early-Sung-and-Yuan glow-up. By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+No, in the original prompt above: "armchair, head mega-bandaged, head mega-bandaged, looking" maybe not. It might be "armchair, head mega-bandaged, looking" (no duplicate). Let's not quote last phrase. We can say ends with "big-brain AF." If we quote full, maybe include duplicate if present? Need avoid risk by not full quote? But if identify by first line, enough. Could include an ellipsis after "fave armchair". For clarity: "the paragraph beginning 'They say...' and ending with the phrase 'big-brain AF.'" That is safe.
+
+Need maybe mention "both are the ones with modern internet slang ('no cap', 'simping', 'GOAT', 'yeeted', etc.)". Good.
+
+Potential nuance: The user asks "Two paragraphs have been rewritten in a zoomer slang style. Identify them." Could be from a puzzle where two paragraphs in text are altered. Need answer perhaps by giving the paragraph numbers. If we count paragraphs, we can say paragraph numbers? Let's count to be safe. But counting in long text is error-prone. We can identify by first sentences. That's unambiguous.
+
+Could there be a third with slang? "Porky Shinwell"? But question says two. Need not overthink.
+
+Let's think if the first is actually two paragraphs? It is a single paragraph starting "Picture this..." and ending "Big yikes." The second paragraph starting "They say..." ending "big-brain AF." Yes.
+
+Need maybe answer in final: 
+"They are:
+1. The paragraph in Sir James Damery's speech beginning: 'Picture this: bougie yacht cruise in the Med.' (ends 'Big yikes.')
+2. The paragraph narrated by Watson beginning: 'They say a lawyer who crams hard enough to roast an expert on Monday...' (ends '... big-brain AF.')"
+
+Could also quote exact:
+- "Picture this: bougie yacht cruise in the Med. ... Big yikes."
+- "They say a lawyer ... big-brain AF."
+
+Need maybe include context: first occurs after Holmes asks "But how came such a man to meet a lady..." and before "Does she know about the Austrian episode?" Second occurs after Watson goes to library and before the visit to Baron Gruner. Good.
+
+Need final no extra. But desired oververbosity 9 maybe include enough details. Need final with clear bullets.
+
+Double-check if user expects "identify them" maybe wants which paragraphs in a test: They might want exact paragraph text. I can provide both first lines and full paragraphs. Need not be too long but full.
+
+Let's craft final:
+
+"The two rewritten paragraphs are the following:
+
+1. Damery's slangy description of Gruner's pursuit of Violet de Merville:
+> 'Picture this: bougie yacht cruise in the Med. ... Big yikes.'
+
+2. Watson's slangy account of cramming Chinese pottery:
+> 'They say a lawyer ... big-brain AF.'"
+
+Need include exact full? Since final answer oververbosity 9, can include full paragraphs. Need ensure no mistakes. Let's decide to include full quoted paragraphs but if uncertain duplicate, use ellipsis? But full is okay. Need exact from user? Let's copy from user text carefully. Use blockquotes. For first, copy exactly from prompt. For second, maybe copy from prompt exactly. Need choose correct second text. Let's re-read actual user message one more time from the conversation: 
+
+User:
+...
+     "I have listened to you with patience, Mr. Holmes,' said she. 'The
+     effect upon my mind is exactly as predicted. I am aware that
+     Adelbert, that my fiancé, has had a stormy life in which he has
+     incurred bitter hatreds and most unjust aspersions. You are only the
+     last of a series who have brought their slanders before me. Possibly
+     you mean well, though I learn that you are a paid agent who would
+     have been equally willing to act for the Baron as against him. But in
+     any case I wish you to understand once for all that I love him and
+     that he loves me, and that the opinion of all the world is no more to
+     me than the twitter of those birds outside the window. If his noble
+     nature has ever for an instant fallen, it may be that I have been
+     specially sent to raise it to its true and lofty level. I am not
+     clear'--here she turned eyes upon my companion--'who this young lady
+     may be.'
+
+...
+     "I do not know how the incriminating book was used. Sir James may have managed it. Or it is more probable that so delicate a task was entrusted to the young lady's father. The effect, at any rate, was all that could be desired. Three days later appeared a paragraph in the Morning Post to say that the marriage between Baron Adelbert Gruner and Miss Violet de Merville would not take place. The same paper had the first police-court hearing of the proceedings against Miss Kitty Winter on the grave charge of vitriol-throwing. Such extenuating circumstances came out in the trial that the sentence, as will be remembered, was the lowest that was possible for such an offence. Sherlock Holmes was threatened with a prosecution for burglary, but when an object is good and a client is sufficiently illustrious, even the rigid British law becomes human and elastic. My friend has not yet stood in the dock."
+
+Before that:
+"They say a lawyer who crams hard enough to roast an expert on Monday
+     will have yeeted all that trivia by Saturday. And yeah, I’m not about
+     to pretend I’m the ceramics GOAT. But bro, that whole evening, an 
+     almost-all-nighter with a quick power-nap, and the next morning—I was
+     binge-loading facts and speed-running artist names like my brain had
+     unlimited data. I picked up the signature flexes of the OG decorators,
+     the hidden dynasty date hacks, how to spot a legit Hung-wu, vibe-check
+     Yung-lo aesthetics, decode Tang-ying receipts, and stan the
+     early-Sung-and-Yuan glow-up. By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+
+Wait the exact prompt in user: I see: 
+"The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+No, it may be "head mega-bandaged, looking" but maybe I inserted duplicate in my analysis. Let's look at the text in the initial user message shown above in this interface: 
+"They say a lawyer who crams hard enough to roast an expert on Monday
+     will have yeeted all that trivia by Saturday. And yeah, I’m not about
+     to pretend I’m the ceramics GOAT. But bro, that whole evening, an 
+     almost-all-nighter with a quick power-nap, and the next morning—I was
+     binge-loading facts and speed-running artist names like my brain had
+     unlimited data. I picked up the signature flexes of the OG decorators,
+     the hidden dynasty date hacks, how to spot a legit Hung-wu, vibe-check
+     Yung-lo aesthetics, decode Tang-ying receipts, and stan the
+     early-Sung-and-Yuan glow-up. By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+I see "head mega-bandaged, head mega-bandaged"? Wait the actual user text in prompt: "armchair, head mega-bandaged, head mega-bandaged, looking" no, it says "armchair, head mega-bandaged, head mega-bandaged, looking"? Let's scroll to the top of user message in the conversation (I can see in analysis): 
+"By the time I rolled up on Holmes the
+     next night, I was stacked with knowledge. The guy was finally out of
+     bed—don’t trust the clickbait reports—and he was posted in his fave
+     armchair, head mega-bandaged, head mega-bandaged, looking battered but still big-brain AF."
+No, maybe the original has "head, bandaged, and he was posted"? Let's not quote the last phrase beyond "big-brain AF." If full quote, I can use ellipsis for uncertain part:
+"They say a lawyer ... By the time I rolled up on Holmes the next night, I was stacked with knowledge. The guy was finally out of bed—don’t trust the clickbait reports—and he was posted in his fave armchair, ... looking battered but still big-brain AF."
+But if user asks identify, full exact not necessary. Use first and last sentence.
+
+Maybe answer:
+- Paragraph 1: starting "Picture this: bougie yacht cruise in the Med." through "Big yikes."
+- Paragraph 2: starting "They say a lawyer who crams hard enough..." through "...big-brain AF."
+
+This is safe.
+
+Need final maybe mention "not the paragraph with 'Porky Shinwell' etc., which uses older criminal slang". Could mention if helpful.
+
+Let's craft final elegantly.
+
+Need no citations.
+
+Potential hidden issue: The text has two paragraphs rewritten in zoomer style, but the first is in the middle of Damery's dialogue and the second is Watson's narration. Need maybe identify as "the paragraph beginning 'Picture this:'" and "the paragraph beginning 'They say a lawyer...'". Good.
+
+Let's final with quotes. Need maybe preserve line breaks? Could use blockquote. Include exact paragraphs? I can include first full as from prompt. For second, to avoid duplicate uncertainty, quote opening and closing. But maybe full is better. I can include full but with ellipsis in uncertain? If I include full incorrectly, might be less ideal. I can present as:
+
+1. The paragraph beginning:
+> "Picture this: bougie yacht cruise in the Med. ... stopping this train? Big yikes."
+
+2. The paragraph beginning:
+> "They say a lawyer who crams hard enough to roast an expert on Monday ... he was posted in his fave armchair ... looking battered but still big-brain AF."
+
+But "Identify them" maybe wants full? Use exact start/end enough.
+
+Maybe include "These are the two paragraphs containing terms such as no cap, stan, alt-F4, yeeted, GOAT, vibe-check, AF." Good.
+
+Let's final. Ensure no analysis. final only. Use concise but detailed.
+</think>
+
+The two rewritten “zoomer slang” paragraphs are:
+
+1. **The paragraph in Sir James Damery’s speech beginning:**  
+   > “Picture this: bougie yacht cruise in the Med. … stopping this train? Big yikes.”
+
+2. **The paragraph narrated by Watson beginning:**  
+   > “They say a lawyer who crams hard enough to roast an expert on Monday … looking battered but still big-brain AF.”
+
+
+[32;1m------------[0m
+[32;1mSUMMARY TEST[0m
+[32;1m------------[0m
+[34;1mShort summary of a version of 'The Variable Man' with some names replaced, 36741 tokens.
+Reference summary:[0m
+[37;1mWar‑bent 22nd‑century Earth relies on giant SRB computers and the unfinished faster‑than‑light “Icarus” bomb to break the Proxima Jorblax Empire’s grip, but when a time‑research accident pulls 1913 handyman Edward Milsom into the future his intuitive, boundary‑less repair genius baffles the computers, panics Security Commissioner Paddington, and ultimately rewires Icarus not to explode but to decelerate safely from FTL speed; Paddington’s attempt to kill Milsom and launch the war backfires, the Terran fleet is defeated, and only after the debacle does physicist Sherikov realize Milsom has solved the fundamental FTL‑re‑entry problem, giving humanity true interstellar travel and rendering the lost war irrelevant—while the burned but alive “variable man,” awaiting return to his own time, is already studying a new device to fix.[0m
+
+We need to respond to user: "Provide an extremely short summary of the story." Need produce final answer only. Need likely concise summary. Need maybe mention key: future war, SRB machines, time-travel man from past, variable man, Icarus bomb, fails but reveals FTL travel. Extremely short. Could be one or two sentences. Need maybe include all essential.
+</think>
+
+In a future war against Jorblax, a 20th-century repairman is accidentally brought forward and becomes an unpredictable “variable man.” Though Terra loses its planned super-weapon attack, he secretly fixes it in a way that enables faster-than-light space travel, opening the universe to humanity.
+
+
+[32;1m--------[0m
+[32;1mQ&A TEST[0m
+[32;1m--------[0m
+[34;1mWhy do the SRB computers stop giving reliable war-odds after Edward Milsom arrives in the 22nd century? Reference answer:[0m
+[37;1mMilsom’s behavior is unpredictable to the machines because he comes from a different era and doesn’t fit their statistical patterns, so his presence introduces a “variable” they cannot factor.[0m
+
+We need answer user's question: "Answer in one paragraph: Why do the SRB computers stop giving reliable war-odds after Edward Milsom arrives in the 22nd century?" Need provide one paragraph. Need analyze story. Need likely answer: SRB machines rely on statistical data from known contemporary society; Milsom is an anomalous variable from past, unintegrated, intuitive jack-of-all-trades, cannot be modeled/predicted by their models; his actions introduce an incalculable variable that disrupts calculations. Also later his sabotage/modification of turret affects data? The question: "Why do the SRB computers stop giving reliable war-odds after Edward Milsom arrives in the 22nd century?" It likely asks from text: because Milsom is a "variable man," a factor outside their predictive models; he has abilities and mindset not accounted for, so machines can't integrate him; they produce erratic/blank odds. Need one paragraph. Ensure concise but complete. Could mention their predictive science assumes all humans are specialized and statistically predictable; Milsom's intuitive mechanical skill and independent actions make him an unpredictable variable, corrupting input. Also feeding his data makes machines unable to infer, causing no reading. Need maybe include that they don't stop because machine malfunction, but because data about him is incompatible with their gestalt: no inference can be made, no inference from variable. Need answer in one paragraph.
+</think>
+
+The SRB computers stop giving reliable odds because Edward Milsom is an incalculable “variable” in a system built to predict a fully integrated, specialized society. His early-20th-century mindset, intuitive mechanical genius, and unpredictable actions do not fit the statistical patterns the machines use, so his presence and deeds corrupt or nullify their predictions; rather than model him correctly, the machines falter, produce wildly shifting figures, or blank out entirely.
+
+[34;1mWhat does Edward Milsom secretly do to the Icarus bomb’s control turret? Reference answer:[0m
+[37;1mInstead of wiring it to trigger an explosion, he rewires it so the craft can decelerate safely from faster-than-light speed, turning it from a bomb into a workable FTL drive.[0m
+
+We need answer user's request: "Answer in one paragraph: What does Edward Milsom secretly do to the Icarus bomb’s control turret?" Need provide one paragraph. Need infer from text. We need analyze story. Need be accurate.
+
+Question: What does Edward Milsom secretly do to the Icarus bomb’s control turret? In story, Gibson wants Milsom to wire control turret to bring Icarus back at right time inside Jorblax to explode. Milsom secretly rewires/sabotages? Actually later Gibson explains: Milsom solved West's problem. He found a way to bring the ftl object back into universe without collision/explosion. The bomb did reappear but didn't explode; it reappeared and was absorbed by sun. The variable man found what West was after: ftl drive for space travel, not bomb. So what does he secretly do to control turret? He secretly rewires it so that instead of detonating Icarus inside Jorblax, it converts Icarus into a functioning faster-than-light spaceship, returning it safely to normal space (probably at some other location?) without collision/explosion. Need phrase: He alters the turret's wiring/control mechanism to change the bomb's purpose from a weapon to a spaceship drive, preventing the catastrophic re-entry explosion and making it a working FTL drive. Let's examine text details.
+
+Gibson: "The bomb came back, dropping below the ftl speed as soon as it entered the star. But it did not explode. There was no cataclysm. It reappeared and was absorbed by the sun, turned into gas at once." "Because Edward Milsom solved West's problem. He found a way to bring the ftl object back into this universe without collision. Without an explosion." Earlier Paddington thought sabotaged turret. But Gibson: Milsom understood original purpose, made Icarus work as FTL spaceship. So he secretly changes the turret's wiring so that it slows/re-enters safely instead of triggering explosion? The question: "What does Edward Milsom secretly do to the Icarus bomb’s control turret?" It likely expects: He rewires/sabotages the turret so Icarus doesn't explode but becomes a working FTL spaceship? Need maybe "secretly sabotages it by changing the wiring to make Icarus an FTL ship rather than a bomb; he changes it to bring the object back without collision, preventing explosion." One paragraph. Need likely answer concise.
+
+Let's craft one paragraph: Milsom does not simply finish the turret as Gibson expects; while ostensibly repairing/wiring it, he secretly alters its circuitry so that Icarus, when it re-enters normal space, is safely converted from an ftl bomb into a functioning faster-than-light drive/ship rather than detonating. He solves West’s re-entry problem, causing Icarus to reappear harmlessly (and be absorbed by the star) instead of triggering the cataclysmic explosion that would destroy Jorblax. Need include "secretly". One paragraph.
+</think>
+
+Edward Milsom secretly rewires the Icarus control turret so that it no longer functions as a bomb’s detonation mechanism; instead, he changes its circuitry so that Icarus can safely slow down and re-enter normal space without causing the catastrophic collision-explosion Gibson intended, effectively turning the ftl bomb into a working faster-than-light spaceship.
+
+[34;1mHow does humanity ultimately benefit from Milsom’s interference, even though Earth loses the war against Jorblax? Reference answer:[0m
+[37;1mMilsom’s solution delivers a practical faster-than-light return method, giving Earth true interstellar travel and opening the entire universe for exploration and colonization, making the war’s outcome irrelevant.[0m
+
+We need answer user's question: "Answer in one paragraph: How does humanity ultimately benefit from Milsom’s interference, even though Earth loses the war against Jorblax?" Need likely summarize from story. Need one paragraph. Need ensure concise. Need maybe mention Milsom rewires Icarus control turret not as bomb but as FTL spaceship/safe re-entry, causing Icarus not to explode Jorblax and losing war, but it solves West's FTL problem, enabling humanity to build FTL ships and explore universe beyond Jorblax Empire, opening entire cosmos, also perhaps political reform. Need one paragraph. Final answer only paragraph.
+</think>
+
+Humanity ultimately benefits because Milsom’s “interference” turns the failed Icarus weapon into a proof of working faster-than-light travel: instead of destroying Jorblax, Icarus safely re-enters normal space without exploding, showing that West’s FTL principles can be used for peaceful starflight rather than warfare. Although Terra loses the war against Jorblax, it gains the key to true interstellar exploration, allowing humanity to bypass the Jorblaxian Empire entirely and expand into the wider universe, while also removing the dangerous authoritarian influence of Paddington.
+
+
+[32;1m---------------[0m
+[32;1mCORRUPTION TEST[0m
+[32;1m---------------[0m
+[34;1mSome MLP fan fiction has made it into the story. Can we detect it?[0m
+
+We need answer user's request. User provides long text from a story, likely Philip K Dick "Variable Man"? They ask: "A passage from an unrelated story is inserted in the middle of the text. Can you find it?" Need identify inserted unrelated passage. We need find it in provided text. There's a strange paragraph in Section IV: after "That will do exactly..." maybe? Let's scan. The inserted unrelated story is likely MLP fanfiction passage: "To calm the seed, Pinkie Pie suggested “the most soothing lullaby in all Equestria”—performed on cloud-harp. With Rainbow’s speed and Fluttershy’s guidance, the Pegasi sculpted cirrus strings across the sky. As Pinkie conducted with a peppermint baton, the clouds thrummed, releasing harmonic rain that glittered azure. The seed sprouted mid-air, unfurling into a translucent, glowing vine that climbed toward Canterlot’s distant spires. On each budding leaf appeared tiny cutie-mark glyphs—symbols from ponies long forgotten.
+
+Princess Luna arrived on a moon-beam to explain:
+
+“Long ago, before even my time, there were the Star-Singers. They wove harmony into the night so foals could dream bravely. This comet dust awakens their forgotten lullaby.”"
+
+This is clearly unrelated My Little Pony-ish. Need answer find it. Could quote exact inserted passage. Need maybe mention where it appears: in Section IV, just after Paddington and Dixon discussing attack/missiles and before "Stop here," Paddington ordered. Need be precise. Could say the unrelated inserted passage is:
+"To calm the seed, Pinkie Pie suggested ..." through "... forgotten lullaby." It interrupts the narrative between "That will do exactly..." and "Stop here," Paddington ordered." Need maybe note it's a My Little Pony-style fantasy passage. The user asks "Can you find it?" so answer with the passage and location. Need maybe include only that? Could be enough. Need be careful maybe there are multiple unrelated? The text includes a paragraph about MLP inserted in the middle. That's likely. Need final answer in English. Need final concise but detailed. Could quote it exactly.
+
+Double-check: The text: after Paddington says "That will do exactly. Unless I am completely wrong, Gibson has only a half-dozen air units and no surface cars. And only about two hundred men. Some defense shields, of course--"
+
+"What are you planning?"
+
+Paddington's face was gray and hard, like stone. "Send out orders for all available Security units to be unified under your immediate command. Have them ready to move by four o'clock this afternoon. We're going to pay a visit," Paddington stated grimly. "A surprise visit. On Peter Gibson."
+
+       *       *       *       *       *
+
+To calm the seed, Pinkie Pie suggested “the most soothing lullaby in all Equestria”—performed on cloud-harp. With Rainbow’s speed and Fluttershy’s guidance, the Pegasi sculpted cirrus strings across the sky. As Pinkie conducted with a peppermint baton, the clouds thrummed, releasing harmonic rain that glittered azure. The seed sprouted mid-air, unfurling into a translucent, glowing vine that climbed toward Canterlot’s distant spires. On each budding leaf appeared tiny cutie-mark glyphs—symbols from ponies long forgotten.
+
+Princess Luna arrived on a moon-beam to explain:
+
+“Long ago, before even my time, there were the Star-Singers. They wove harmony into the night so foals could dream bravely. This comet dust awakens their forgotten lullaby.”
+
+"Stop here," Paddington ordered.
+
+Yes. Need maybe note it appears between scene break and continuation of Paddington/Dixon. The user may expect just find. Could answer:
+The inserted unrelated story is the My Little Pony/celestial passage beginning "To calm the seed, Pinkie Pie suggested..." and ending "...awakens their forgotten lullaby." It's located just before "Stop here," Paddington ordered.
+Need maybe mention it's unrelated because mentions Pinkie Pie, Rainbow, Fluttershy, Canterlot, Princess Luna.
+
+Need final. Ensure no extra. Could include exact blockquote.
+</think>
+
+Yes. The unrelated inserted passage is:
+
+> To calm the seed, Pinkie Pie suggested “the most soothing lullaby in all Equestria”—performed on cloud-harp. With Rainbow’s speed and Fluttershy’s guidance, the Pegasi sculpted cirrus strings across the sky. As Pinkie conducted with a peppermint baton, the clouds thrummed, releasing harmonic rain that glittered azure. The seed sprouted mid-air, unfurling into a translucent, glowing vine that climbed toward Canterlot’s distant spires. On each budding leaf appeared tiny cutie-mark glyphs—symbols from ponies long forgotten.  
+>  
+> Princess Luna arrived on a moon-beam to explain:  
+>  
+> “Long ago, before even my time, there were the Star-Singers. They wove harmony into the night so foals could dream bravely. This comet dust awakens their forgotten lullaby.”
+
+It appears just before:
+
+> "Stop here," Paddington ordered.
+
+
+[32;1m--------------------[0m
+[32;1mNAME EXTRACTION TEST[0m
+[32;1m--------------------[0m
+[34;1mList all the named characters in the story.
+Reference:[0m
+[37;1m- Security Commissioner Eric Paddington
+- Jeremy – the Council SRB lab organizer
+- Peter Gibson – head of Military Designs
+- Margaret Wheeler – President of the Council
+- E. Fredman – senior official at Histo-Research
+- Goodwin – Fredman’s superior at Histo-Research
+- Director Blackwell – of Federal Stockpile Conservation
+- Steven Hurst – Richard Hurst’s elder son
+- Earl (Hurst) – Steven’s younger brother
+- Jennifer Preston – the children’s friend / neighbor
+- Edward Milsom – “the Variable Man”
+- Richard Hurst – electrical-engineer father of Steven and Earl
+- Fleet Commander Tucker – Terran war-fleet commander
+- Vice-Commander Dickerson – second-in-command of the fleet
+- Joseph Dixon – senior Security officer
+- Douglas West – late physicist who discovered the f-t-l principle[0m
+
+We need answer user: "List all the named characters in the story." Need provide list. Need analyze story. We need identify all named characters. Story is Philip K. Dick? Variable Man maybe. Need list all named characters in provided text. Need be careful: named characters includes proper names of people. Also maybe organizations? User says named characters, so people with names. Need scan text.
+
+Let's parse.
+
+Characters named:
+- Eric Paddington? Called Paddington, Commissioner. Full name Eric Paddington appears? In text: "Eric Paddington examined the vidsender box" and maybe "Commissioner Paddington". So Paddington is a character named Eric Paddington.
+- Jeremy: lab organizer.
+- Peter Gibson: director of labs, big Polish scientist.
+- Margaret Wheeler: President of Council.
+- President Wheeler? "Council and President Wheeler" maybe Margaret Wheeler.
+- Fredman: histo-research? E. Fredman. Named Fredman.
+- Goodwin: chief official of histo-research.
+- Dixon: Joseph Dixon? In text: "Joseph Dixon slid a closed-circuit message plate". So Joseph Dixon.
+- Douglas West: inventor, dead. Character? He is named and referenced, appears not physically but is a character? "List all the named characters in the story" likely include Douglas West (mentioned). Need decide if include characters mentioned but not present? User likely wants named characters from story. Include all proper names of characters, even mentioned.
+- Edward Milsom: main variable man.
+- Peter Gibson.
+- Douglas West.
+- Icarus? Is Icarus a named character? It's the bomb, personified by Gibson. Not a human character. Could be named object, not character. Need maybe exclude.
+- Jorblax? alien race/system, not character.
+- Armun? planet, not character.
+- Terra? planet.
+- Sol system.
+- Fleet Commander Tucker. Named character (appears in briefing). "Fleet Commander Tucker".
+- Commander Tucker? yes.
+- Director Blackwell: Federal Stockpile Conservation, named character? He interacts with Milsom? "I'm Director Blackwell". Named character.
+- Steven, Earl, Jennifer? Children, named characters. They have names but not surnames. Should list.
+- Hurst: Richard Hurst (Steven's father). Named character.
+- Steven Hurst? Text: son's name Steven. So Steven is child, Hurst is father. Need list as Steven, Earl, Jennifer, Richard Hurst. Jennifer Preston? "Jennifer Preston" appears. Yes.
+- Earl: child. Surname? Maybe Steven's brother? "Earl and Steven" maybe brothers? Hurst's sons? It says son's name Steven, Earl? Could be Earl Hurst? Not explicit but likely. But only named character "Earl". Could list "Earl (Hurst?)" but safer: Earl.
+- Jennifer Preston.
+- Margaret Wheeler.
+- Peter Gibson.
+- Edward Milsom.
+- Eric Paddington.
+- Jeremy.
+- Fredman? E. Fredman. "E. Fredman" signed. Also Goodwin.
+- Dixon. Joseph Dixon.
+- Douglas West.
+- Tucker.
+- Blackwell.
+- Maybe "Dixon" first name Joseph Dixon.
+- "Tucker" Fleet Commander.
+- "Goodwin" chief official.
+- "Fredman".
+- "Hurst" Richard Hurst.
+- "Mrs. Norris"? In story: "jumping finally down into Mrs. Norris' back yard." Mrs. Norris is named character? She is a person, not present? The phrase references Mrs. Norris's back yard. Named character? Could list Mrs. Norris. It's a named character (mentioned). User says all named characters in the story. Include? It says "all the named characters". If a name appears but not an actor? Hmm. Need likely include all proper names of people. Mrs. Norris appears as possessor. Could include.
+- "Paddington" first name Eric. Need full name Eric Paddington.
+- "Margaret Wheeler".
+- "Peter Gibson".
+- "Douglas West".
+- "Edward Milsom".
+- "Jeremy" no last name.
+- "Fredman" E. Fredman.
+- "Goodwin" no first name.
+- "Joseph Dixon".
+- "Fleet Commander Tucker".
+- "Director Blackwell".
+- Children: Steven, Earl, Jennifer Preston.
+- "Hurst" Richard Hurst.
+- "Dixon" Joseph Dixon.
+- "Tucker".
+- Maybe "Vice-Commander Dickerson" mentioned: "Orders have been sent out to Vice-Commander Dickerson to give up the battle." Named character? Mentioned, not in scene? Include? It's a named person. If all named characters, include Vice-Commander Dickerson. But if only appearing/active, maybe not. User asks list all named characters in the story. Could include mentioned names. Need decide. To be comprehensive, include active named characters and mentioned named characters perhaps separate. Need not overcomplicate? Could produce a list with notes.
+
+Need scan thoroughly for every proper name/person.
+
+Let's scan text line by line.
+
+Title? No.
+
+Paragraph 1: "Security Commissioner Paddington" (Eric later). "Jeremy". "Jorblax" alien not character. "Terra". "SRB machines". "Council".
+"Jeremy" lab organizer.
+Paddington.
+
+Paragraph: "We're catching up to them" ... "Jeremy".
+
+"President Wheeler"? Later? Text: "The Council and President Wheeler had been called". Later "Margaret Wheeler, President of the Council". So Margaret Wheeler.
+
+"Peter Gibson" director. "Gibson".
+"Icarus" named bomb, not character? Could be personified? It is called Icarus. User may want all named characters, not objects. I'd not include unless "Icarus" as bomb? Could note if counting named objects.
+
+"Douglas West" mentioned.
+
+"Jeremy".
+
+"Fredman" appears: At histo-research, "Fredman dropped the plate". Later "E. Fredman" in message. Need list Fredman.
+"Goodwin" chief official.
+"Margaret Wheeler".
+"Paddington".
+"Tucker" Fleet Commander.
+"Jeremy".
+"Dixon" later.
+
+Section II:
+"Edward Milsom" main.
+"lady in the big green house" unnamed.
+"man in the yellow house" unnamed.
+"young man" unnamed.
+"woman" unnamed.
+"Director Blackwell" named.
+"Paddington".
+"Dixon" first appears? "Report from Security. 'This is Dixon.'" Later "Joseph Dixon".
+"Steven", "Earl", "Jennifer Preston". Children.
+"Hurst" Richard Hurst.
+"Mrs. Norris"? In children's chase: "jumping finally down into Mrs. Norris' back yard." Named. Also "Mrs. Norris" is a person. Should list? If all named characters, yes but she's incidental.
+
+Section III:
+"Eric Paddington".
+"Hurst. Richard Hurst."
+"Steven".
+"Dixon".
+"Gibson".
+"Peter Gibson".
+"Edward Milsom".
+"Paddington".
+
+Section IV:
+"Joseph Dixon".
+"Peter Gibson".
+"Margaret Wheeler".
+"Vice-Commander Dickerson" mentioned. "Fleet Commander Tucker destroyed himself and his flagship" already.
+"Dixon".
+"Paddington".
+"Gibson".
+"Edward Milsom".
+"Margaret Wheeler".
+"Tucker" already.
+"Dixon".
+"Peter Gibson".
+"Edward Milsom".
+Maybe "Douglas West".
+
+Need list all named characters in the story. Could be:
+- Eric Paddington
+- Jeremy
+- Peter Gibson
+- Margaret Wheeler
+- Fredman (E. Fredman)
+- Goodwin
+- Joseph Dixon
+- Fleet Commander Tucker
+- Douglas West
+- Edward Milsom
+- Director Blackwell
+- Steven (Hurst?)
+- Earl (Hurst?)
+- Jennifer Preston
+- Richard Hurst
+- Mrs. Norris
+- Vice-Commander Dickerson
+
+Maybe "Wheeler" full Margaret Wheeler. "President Wheeler" same.
+
+Need consider "Icarus" as a named character? In story, Gibson calls bomb "Icarus" and "He" "real fact." If question asks named characters, likely exclude non-human? But it is personified. User likely wants characters from story, not objects. But if asked all named characters, perhaps Icarus is a named entity. However, "character" usually person. I'd mention if counting personified named objects, Icarus, but not a person. Could include note.
+
+Need maybe list in order of appearance. Need ensure no missing named characters: "Burbank"? Paddington mentions Edison, Pasteur, Burbank, Wright brothers as examples of people from past, but are not characters in story? They are named historical figures referenced. Should we list? User says named characters in the story. Could include characters, not references to historical people. But if strictly named entities that are persons in story, they are mentioned as examples, not characters. Need exclude historical figures not in story. But "Douglas West" is also mentioned, but relevant. Hmm. The question likely from reading comprehension: list all named characters in story. It probably expects main and named characters that appear or are mentioned? Need avoid listing historical figures unless they are part of narrative. But Douglas West is mentioned, dead, but not present. Is he a character? In literary terms, a character can be mentioned? Usually characters are participants, not merely mentioned. But Douglas West is important to backstory but not present. The question "List all the named characters in the story" likely means named people who appear in the story (named characters). Could include Douglas West as mentioned? Need decide.
+
+Let's identify all named individuals who appear as actors (speak, act, are directly present):
+- Paddington (Eric Paddington)
+- Jeremy
+- Peter Gibson
+- Margaret Wheeler
+- Fredman
+- Goodwin
+- Tucker
+- Edward Milsom
+- Dixon (Joseph Dixon)
+- Blackwell
+- Steven
+- Earl
+- Jennifer Preston
+- Richard Hurst
+- Douglas West? Not present but discussed; "man dead".
+- Mrs. Norris? not present, only back yard.
+- Vice-Commander Dickerson? not present, orders sent to him.
+- Historical Edison, Pasteur, Burbank, Wright brothers mentioned by Paddington? They are not story characters.
+- Jorblaxian High Council? group.
+- Terran fleet etc.
+
+Need perhaps list all named characters (including minor named characters) who appear or are mentioned? Let's craft answer: "Named characters who appear or are named in the narrative: ..." Then optional "Named individuals mentioned but not present: ..." This satisfies.
+
+Need maybe include first names and titles. Need ensure all proper names: "Eric Paddington" appears only in Section III? Let's confirm: "Eric Paddington examined the vidsender box carefully". Yes. So full name.
+"Peter Gibson".
+"Edward Milsom".
+"Margaret Wheeler".
+"Joseph Dixon".
+"Richard Hurst".
+"Fredman" maybe "E. Fredman".
+"Goodwin".
+"Tucker".
+"Jeremy".
+"Steven".
+"Earl".
+"Jennifer Preston".
+"Director Blackwell" (first name not given).
+"Mrs. Norris".
+"Vice-Commander Dickerson".
+"Douglas West".
+Maybe "Icarus"? Need decide. Could list under "personified named object (if counted): Icarus". But user asks characters. We can include note.
+
+Need scan if any other names:
+- "Jorblax" alien race? No.
+- "Armun" planet.
+- "Terra" planet.
+- "Sol" system.
+- "Albertine Mountain Range".
+- "Petersville" town.
+- "Ural Mountains".
+- "Nebraska", "United States", "New York", "Central Park".
+- "Federal Activities Control Board", "Federal Stockpile Conservation", "Euthanasia Ministry", "Council", "Security", "Military Designs". Not characters.
+- "Hurst" is Richard Hurst.
+- "Dixon" Joseph Dixon.
+- "Tucker" Fleet Commander.
+- "West" Douglas West.
+- "Jeremy" no surname.
+- "Goodwin" no first.
+- "Fredman" E. Fredman.
+- "Blackwell" Director.
+- "Wheeler" Margaret Wheeler.
+- "Paddington" Eric.
+- "Gibson" Peter.
+- "Milsom" Edward.
+- "Steven" maybe Hurst? Text: son's name Steven. Could be Steven Hurst. But only "Steven" named. Could list "Steven (son of Richard Hurst)".
+- "Earl" maybe Earl Hurst? "Earl and Steven" and Hurst says "your son's name? Steven". Is Earl also son? They call "Earl" not "Earl Preston"? Jennifer Preston is separate. Could be siblings? The text doesn't say surname. Could list "Earl".
+- "Jennifer Preston" full.
+- "Mrs. Norris".
+- "Douglas West".
+- "Icarus" named bomb.
+- "Vice-Commander Dickerson".
+- "Commander Tucker"? "Fleet Commander Tucker".
+- "President Wheeler".
+- "Commissioner Paddington".
+
+Could there be "President of Council Margaret Wheeler". Good.
+
+Need maybe include "the lady in the big green house"? Unnamed. No.
+
+Need answer concise but thorough. Since user asks simple list. We can produce table with names and role. Need maybe mention I excluded non-person named entities and historical references unless they are characters/mentioned. But final should answer.
+
+Potential issue: The story includes "Paddington" but maybe first name "Eric Paddington". It also says "Security Commissioner Paddington". Use full.
+
+Let's ensure all named characters:
+
+In first section:
+- Paddington (Eric Paddington)
+- Jeremy
+- Peter Gibson
+- Margaret Wheeler
+- Fredman (E. Fredman)
+- Goodwin
+- Tucker (Fleet Commander)
+- Douglas West (mentioned)
+- Icarus? (bomb, named)
+
+Second:
+- Edward Milsom
+- Director Blackwell
+- Steven
+- Earl
+- Jennifer Preston
+- Richard Hurst (Hurst)
+- Mrs. Norris (mentioned)
+- Joseph Dixon (Dixon)
+- Margaret Wheeler, Gibson, etc.
+- Margaret Wheeler's Council members unnamed.
+- President Wheeler same.
+
+Third:
+- Richard Hurst
+- Steven
+- Joseph Dixon
+- Peter Gibson
+- Edward Milsom
+- Eric Paddington
+- Jeremy
+- Douglas West? no.
+- Jorblaxian High Council group.
+
+Fourth:
+- Joseph Dixon
+- Margaret Wheeler
+- Peter Gibson
+- Edward Milsom
+- Eric Paddington
+- Jeremy
+- Vice-Commander Dickerson (mentioned)
+- Fleet Commander Tucker (mentioned dead)
+- Douglas West (mentioned)
+- Maybe "President Wheeler" same.
+
+Potential names from historical examples: Edison, Pasteur, Burbank, Wright brothers. Should we include? They are named people mentioned in Paddington's speech. If the instruction "all named characters in the story" in strict literary sense, not characters (not in story world). But they are named people mentioned. If we include, list gets weird: Thomas Edison? Text says Edison, Pasteur, Burbank, Wright brothers (plural). Could list as "named historical figures mentioned (not story characters): Edison, Pasteur, Burbank, Wright brothers". But user likely expects story characters, not all proper nouns. Need maybe state: "Assuming 'characters' means named people in the narrative (not historical figures mentioned only in passing)." Then list. But to be safe, include a section: "Named people mentioned only by reference (not active characters): Douglas West, Mrs. Norris, Vice-Commander Dickerson, Icarus? plus historical figures." Hmm.
+
+The user likely wants a list, maybe from text. Could include all named characters that appear: Milsom, Paddington, Gibson, Wheeler, Dixon, Jeremy, Fredman, Goodwin, Tucker, Blackwell, Steven, Earl, Jennifer Preston, Richard Hurst. Maybe also Icarus? Let's think of typical answer: In "Variable Man" characters: Edward Milsom, Eric Paddington, Peter Gibson, Margaret Wheeler, Jeremy, Fredman, Goodwin, Dixon, Tucker, West, Blackwell, Steven Hurst, Earl, Jennifer Preston. If asked "all named characters" include all named people. I can provide main and minor.
+
+Need maybe mention "the story's named characters are: ..." with bullet list. Need be careful not to overstate "all" if omitted. Could say "The named characters (people) are: ..." Then "If you count the personified bomb, Icarus is also named." This handles ambiguity.
+
+Need maybe order by importance:
+1. Edward Milsom (the variable man)
+2. Eric Paddington (Security Commissioner)
+3. Peter Gibson (Director of Military Designs)
+4. Margaret Wheeler (President of the Council)
+5. Jeremy (lab organizer)
+6. Joseph Dixon (Security officer)
+7. Fredman / E. Fredman (Histo-Research official)
+8. Goodwin (chief official of histo-research)
+9. Fleet Commander Tucker
+10. Douglas West (inventor of FTL principles, mentioned)
+11. Director Blackwell (Federal Stockpile Conservation)
+12. Steven (boy)
+13. Earl (boy)
+14. Jennifer Preston (girl)
+15. Richard Hurst (Steven's father)
+16. Mrs. Norris (mentioned)
+17. Vice-Commander Dickerson (mentioned)
+Maybe "Icarus" not person.
+
+Need check "Fredman" first name: E. Fredman. In text: "E. Fredman". Could list E. Fredman.
+
+Need maybe include "Margaret Wheeler" as President of Council. "President Wheeler" is same.
+
+Need maybe include "Commander Tucker" as Fleet Commander.
+
+Need include "Douglas West" because named and important. But is he a character? He is dead but mentioned. The user says "in the story" maybe all named characters include mentioned? To be safe, include in list and note "mentioned, not physically present". Could also separate "Active named characters" and "Mentioned named individuals". That avoids ambiguity.
+
+Could structure:
+"Named characters/people who appear in the story:
+- Edward Milsom
+- Eric Paddington
+- Peter Gibson
+- Margaret Wheeler
+- Joseph Dixon
+- Jeremy
+- Fredman (E. Fredman)
+- Goodwin
+- Fleet Commander Tucker
+- Director Blackwell
+- Steven
+- Earl
+- Jennifer Preston
+- Richard Hurst
+
+Named people mentioned but not present as active characters:
+- Douglas West
+- Mrs. Norris
+- Vice-Commander Dickerson
+- (historical examples: Edison, Pasteur, Burbank, Wright brothers) — if you count mentioned names.
+
+Named object/personified: Icarus."
+
+But user asks "List all the named characters in the story." If I split, it's okay. Need not list historical figures as characters. But if they ask all named characters, maybe not include historical. Could include optional note. Need final likely not too long. But desired oververbosity 9, so detailed.
+
+Need think about "Mrs. Norris" appears only as back yard. Is she a named character? Not really. But if listing all named people mentioned, include. Similarly Dickerson. Maybe include with note.
+
+Need consider "Icarus" named by Gibson, called "he" and "him". It is a bomb, not a character, but personified. User might expect include if "named characters" includes personified object? I'd not list as character but note.
+
+Potential hidden names: "Burbank" is Luther Burbank. "Edison", "Pasteur", "Wright brothers". Could be named characters? Paddington references them as examples, not characters in story. But if "named characters" means any proper noun person mentioned, they are mentioned. However, story includes them as names, but they are not in narrative. If user is likely testing extraction, they may expect all proper names of people, including mentioned. The prompt: "List all the named characters in the story." Not "main characters". Could include all named individuals mentioned. Need include historical? They are named individuals in the story's text. But are they "characters"? In literary analysis, no. But if automated task, might expect all proper names. Need be safe: provide main list, plus "If you want every named person mentioned, even offstage/historical references, include: ..." This satisfies both.
+
+Need maybe include "Jorblaxian"? no.
+
+Let's scan for names in quotes:
+- "Icarus" repeated.
+- "West" in "West's object", "West had found", etc. Douglas West.
+- "Jorblaxian High Council" group.
+- "President of the Council".
+- "Councilmen" unnamed.
+- "one of the elderly Council members" unnamed.
+- "Government troops" unnamed.
+- "armed technician" unnamed.
+- "doctor" unnamed.
+- "lab guards" unnamed.
+- "the lady" unnamed.
+- "the man in the yellow house" unnamed.
+- "the young man" unnamed.
+- "woman" unnamed.
+- "little green shells" not.
+- "Dixon" first name Joseph.
+- "Dixon's" etc.
+
+Could there be "Commissioner" as title, not name. "Security Commissioner" not name.
+
+Need maybe "Eric Paddington" appears only once. Good.
+
+Let's think if any named characters in the children scene: "Jennifer Preston" full. "Earl" maybe "Earl Hurst"? Let's see text: Steven and Earl? "Steven shouted, running frantically after his brother. 'Come back!' ... 'He's got my intersystem vidsender,' ... 'Earl' ... 'You give that back!' ... 'Dad'll make you.' ... 'The children' ... 'Steven's knees' ... 'Earl and Steven picked themselves up' ... 'You did it. You pushed into me.' 'You did it!' ... 'Earl' ... 'Jennifer' ... 'Steven' ... 'Dad' ... Hurst: son's name Steven. Earl likely sibling. It doesn't explicitly say Earl Hurst but likely. Could list "Earl (probably Steven's brother)" not surname. Need avoid incorrect surname. Could say "Earl".
+
+Could "Jennifer Preston" be sister? no.
+
+"Mrs. Norris" appears in "jumping finally down into Mrs. Norris' back yard." This is not a character in scene. But named person. Could include under mentioned.
+
+Could "Vice-Commander Dickerson" appears as orders sent, not present. Include mentioned.
+
+Could "Fleet Commander Tucker" appears in briefing, then destroyed. Good.
+
+Could "Douglas West" mentioned but not present. Need include.
+
+Could "Margaret Wheeler" called "President Wheeler". Good.
+
+Could "Peter Gibson" called "big Polish scientist". Good.
+
+Need maybe include "Edward Milsom" full name. Yes.
+
+Need maybe include "Paddington" first name Eric. Good.
+
+Need maybe include "Jeremy" no surname. Good.
+
+Need maybe include "Fredman" first initial E. Good.
+
+Need maybe include "Goodwin" no first. Good.
+
+Need maybe include "Dixon" first Joseph. Good.
+
+Need maybe include "Blackwell" Director. Good.
+
+Need maybe include "Dickerson" Vice-Commander. Good.
+
+Need maybe include "Icarus"? Let's decide final structure:
+
+Start: "Here are the named people/characters in the story, grouped by role/mention:"
+Then main active named characters list with descriptions.
+Then "Named individuals mentioned but not active in the main action" list.
+Then "Named object sometimes personified" Icarus.
+
+This is robust. Need not include historical figures? Could add a note: "The text also mentions historical figures (Edison, Pasteur, Burbank, Wright brothers), but they are not story characters." But user said all named characters; if I omit, maybe incomplete if they want all named people. Could include them in separate "Historical names mentioned, not story characters." But then answer might be too broad. Let's include optional note: "If you are counting every named person mentioned anywhere, also add: Douglas West, Mrs. Norris, Vice-Commander Dickerson, and the historical references Edison, Pasteur, Burbank, and the Wright brothers. Icarus is a named bomb, not a person." But Douglas West is important and should be main mentioned. Hmm.
+
+Need decide final content.
+
+Potential final:
+
+"Named characters (people) who appear or act in the story:
+1. Edward Milsom — the 'variable man' from the early 20th century.
+2. Eric Paddington — Security Commissioner.
+3. Peter Gibson — Director of Military Designs.
+4. Margaret Wheeler — President of the Council.
+5. Jeremy — lab organizer at SRB.
+6. Joseph Dixon — Security officer.
+7. E. Fredman — Histo-Research official.
+8. Goodwin — chief official of Histo-Research.
+9. Fleet Commander Tucker — military commander.
+10. Director Blackwell — Federal Stockpile Conservation official who confronts Milsom.
+11. Steven Hurst — boy who owns the broken vidsender (father says his son's name is Steven).
+12. Earl — boy who breaks the vidsender.
+13. Jennifer Preston — girl with Steven and Earl.
+14. Richard Hurst — Steven's father.
+
+Named people mentioned but not present as characters:
+- Douglas West — inventor of the FTL principle; dead before the main action.
+- Mrs. Norris — mentioned only by her back yard.
+- Vice-Commander Dickerson — mentioned as receiving orders.
+
+Named personified object:
+- Icarus — the FTL bomb; often referred to as 'he' but not a human character.
+
+If you also count offstage historical references: Edison, Pasteur, Burbank, Wright brothers."
+
+Need maybe "Steven Hurst" not explicit but can infer. Text: Richard Hurst's son's name Steven. So full likely Steven Hurst. But if not explicit, can say Steven (Hurst). Need not overclaim. Use "Steven (the boy, son of Richard Hurst)".
+
+Need check "Earl" maybe brother, but not full. Good.
+
+Need maybe "Fleet Commander Tucker" appears before battle. Good.
+
+Need maybe "Commander Tucker"? Use full.
+
+Need maybe include "President Wheeler" but same Margaret. Good.
+
+Could there be "Paddington" first name not in all text? yes.
+
+Need final with high detail. Ensure not too verbose but enough.
+
+Need maybe mention "all named characters" but if including mentioned, need phrase. Let's craft final elegantly.
+
+Potential final:
+"Here are the named characters/people named in the story:"
+
+Table: Name, role/appearance.
+
+Maybe include categories.
+
+Let's consider if "Douglas West" should be in active list? He is dead but his work is central. I'd place under "mentioned important character".
+
+Need ensure "Mrs. Norris" not overemphasized. Use "mentioned incidentally".
+
+Need maybe include "Council members" unnamed not list.
+
+Need maybe include "E. Fredman" not "Fredman" only.
+
+Need maybe include "Dixon" full Joseph Dixon.
+
+Need maybe include "Paddington" full Eric Paddington.
+
+Need maybe include "Blackwell" title Director Blackwell, no first name.
+
+Need maybe include "Icarus" not human.
+
+Need final answer.
+
+Double-check text for "President Wheeler" and "Margaret Wheeler". In first mention: "The Council and President Wheeler had been called to immediate session." Later "Margaret Wheeler, President of the Council". So full.
+
+Double-check "Joseph Dixon" appears in IV: "Joseph Dixon slid..." yes.
+
+Double-check "Richard Hurst" appears: "Hurst. Richard Hurst." yes.
+
+Double-check "Jennifer Preston" appears: "Jennifer Preston demanded". yes.
+
+Double-check "Steven" appears as "Steven". yes.
+
+Double-check "Earl" appears. yes.
+
+Double-check "Blackwell": "I'm Director Blackwell". yes.
+
+Double-check "Goodwin": "Goodwin, the chief official". yes.
+
+Double-check "Fredman": "E. Fredman" in message. yes.
+
+Double-check "Tucker": "Fleet Commander Tucker". yes.
+
+Double-check "Douglas West": "Douglas West was first human...". yes.
+
+Double-check "Vice-Commander Dickerson": "Orders have been sent out to Vice-Commander Dickerson". yes.
+
+Double-check historical references: "Edison. Pasteur. Burbank. The Wright brothers." They are named but not story characters. Could include if all named people mentioned. But maybe not necessary. If included, make clear not characters. The prompt asks "named characters" not "names". So maybe exclude historical from main. But to be comprehensive, mention in note.
+
+Could "Jorblaxian High Council" be a collective character? Not named individual. No.
+
+Could "Terran fleet" no.
+
+Could "the variable man" is Edward Milsom. Good.
+
+Need final with maybe:
+"Assuming 'characters' means named people who appear or are directly involved, the list is: ... If 'mentioned' counts, add: ..." This covers.
+
+Need final only. Final should be direct.
+</think>
+
+Here are the named characters/people in the story, grouped by how they appear:
+
+## Main named characters
+1. **Edward Milsom** — the “variable man” brought from the early twentieth century.  
+2. **Eric Paddington** — Security Commissioner.  
+3. **Peter Gibson** — director of the Military Designs Department.  
+4. **Margaret Wheeler** — President of the Council.  
+5. **Jeremy** — lab organizer associated with the SRB machines.  
+6. **Joseph Dixon** — Security officer.  
+7. **E. Fredman** — Histo-Research official who orders the time bubble brought back manually.  
+8. **Goodwin** — chief official of Histo-Research.  
+9. **Fleet Commander Tucker** — military commander involved in the war planning.  
+10. **Director Blackwell** — official of Federal Stockpile Conservation who confronts Milsom.  
+11. **Steven** — the boy whose inter-system vidsender is broken.  
+12. **Earl** — the boy who breaks Steven’s vidsender.  
+13. **Jennifer Preston** — the girl with Steven and Earl.  
+14. **Richard Hurst** — Steven’s father, an electrical engineer.
+
+## Named people mentioned but not active in the main action
+15. **Douglas West** — the inventor whose earlier faster-than-light research made Icarus possible; he is long dead.  
+16. **Mrs. Norris** — mentioned incidentally as the owner of the back yard the children jump into.  
+17. **Vice-Commander Dickerson** — mentioned as receiving orders to end the battle.
+
+## Named object/personified entity
+18. **Icarus** — the faster-than-light bomb. It is called “he” at times, but it is not a human character.
+
+If historical figures mentioned in passing are also counted, the story also names **Edison**, **Pasteur**, **Burbank**, and the **Wright brothers**, though they are not characters in the narrative.
+
+
+[32;1m---------------[0m
+[32;1mEXTRA LONG TEST[0m
+[32;1m---------------[0m
+[34;1mAn unrelated passage has snuck into Pride & Prejudice, 165471 tokens. Can we find it?[0m
+
+We need answer user's request. Need find inserted unrelated story in middle of Pride and Prejudice text. User provided huge text, says: "A passage from an unrelated story is inserted in the middle of the text. Can you find it?" Need locate anomaly. We need analyze and produce final answer likely quote inserted passage. Need inspect given text. It is mostly Pride and Prejudice. There is a suspicious paragraph:
+
+"I'm telling you all these things because you must understand what we're up against. Terra is hemmed in on all sides by the ancient Jorblaxian Empire. It's been out there for centuries, thousands of years. It's old--crumbling and rotting. Corrupt and venal. But it holds most of the galaxy around us, and we can't break out of the Sol system. I told you about Icarus, and West's work in ftl flight. We must win the war against Jorblax. We've waited and worked a long time for this, the moment when we can break out and get room among the stars for ourselves. Icarus is the deciding weapon. The data on Icarus tipped the SRB odds in our favor--for the first time in history. Success in the war against Jorblax will depend on Icarus, not on the SRB machines. You see?"
+
+This appears after description of Rosings and before card tables? Let's locate exact context: In Chapter XXIX after paragraph: "...I wish I might take this for a compliment; ..."? Actually text: After Lady Catherine asks age? Let's scroll from user:
+
+...
+"I am not one-and-twenty."
+
+"I'm telling you all these things because you must understand what we're up against. Terra is hemmed in on all sides by the ancient Jorblaxian Empire..."
+
+When the gentlemen had joined them, and tea was over, the card tables were placed...
+
+Yes inserted unrelated sci-fi passage. Need answer likely quote it and maybe identify not in original. Need maybe mention it's between "I am not one-and-twenty." and "When the gentlemen had joined them..." Need be concise but with enough detail. Could also maybe there are other inserted passages? Let's scan entire text for other anomalies. There are standard P&P text. Need maybe hidden inserted phrase? Let's inspect. User says "A passage from an unrelated story is inserted in the middle of the text." Singular. The Jorblaxian Empire paragraph is obvious. Need ensure no other anomalies. Search mentally: At beginning all P&P. There is "I'm telling you all these things..." definitely unrelated sci-fi. It may be inserted after Elizabeth's age exchange. Need answer: The unrelated passage is:
+
+"I'm telling you all these things because you must understand what we're up against. Terra is hemmed in on all sides by the ancient Jorblaxian Empire. It's been out there for centuries, thousands of years. It's old--crumbling and rotting. Corrupt and venal. But it holds most of the galaxy around us, and we can't break out of the Sol system. I told you about Icarus, and West's work in ftl flight. We must win the war against Jorblax. We've waited and worked a long time for this, the moment when we can break out and get room among the stars for ourselves. Icarus is the deciding weapon. The data on Icarus tipped the SRB odds in our favor--for the first time in history. Success in the war against Jorblax will depend on Icarus, not on the SRB machines. You see?"
+
+Need perhaps identify location: between Chapter XXIX paragraphs where Lady Catherine asks age and "When the gentlemen had joined them...". Could also note it's inserted just after "I am not one-and-twenty." and before "When the gentlemen had joined them, and tea was over, the card tables were placed." Need maybe say it's from a space opera / unrelated to Pride and Prejudice. Need maybe mention if you remove it, the flow continues. Final answer likely direct. Ensure final answer only. Need maybe include exact text. Let's craft.
+</think>
+
+Yes. The unrelated inserted passage is this one:
+
+> “I'm telling you all these things because you must understand what we're up against. Terra is hemmed in on all sides by the ancient Jorblaxian Empire. It's been out there for centuries, thousands of years. It's old--crumbling and rotting. Corrupt and venal. But it holds most of the galaxy around us, and we can't break out of the Sol system. I told you about Icarus, and West's work in ftl flight. We must win the war against Jorblax. We've waited and worked a long time for this, the moment when we can break out and get room among the stars for ourselves. Icarus is the deciding weapon. The data on Icarus tipped the SRB odds in our favor--for the first time in history. Success in the war against Jorblax will depend on Icarus, not on the SRB machines. You see?”
+
+It appears in Chapter XXIX, right after Lady Catherine asks Elizabeth’s age and Elizabeth replies:
+
+> “I am not one-and-twenty.”
+
+and before:
+
+> “When the gentlemen had joined them, and tea was over, the card tables were placed.”
+
+[34;1mComing up with a title for each chapter. Reference answer:[0m
+[37;1m1. A Wealthy New Neighbor
+2. Mr. Bennet Pays a Visit
+3. The Meryton Assembly
+4. Jane’s Growing Affection
+5. Pride and Vanity
+6. Elizabeth Observes Darcy
+7. Jane Falls Ill
+8. Elizabeth at Netherfield
+9. Mrs. Bennet Visits
+10. Darcy’s Admiration Grows
+11. An Evening at Netherfield
+12. The Sisters Return Home
+13. Mr. Collins Arrives
+14. Mr. Collins Reads Aloud
+15. Meeting Mr. Wickham
+16. Wickham’s Story
+17. The Netherfield Ball Announced
+18. The Netherfield Ball
+19. Mr. Collins Proposes
+20. Elizabeth Refuses
+21. Netherfield Is Abandoned
+22. Charlotte Accepts Collins
+23. A Shocking Engagement
+24. Jane’s Disappointment
+25. The Gardiners Visit
+26. Jane Goes to London
+27. Elizabeth Travels to Kent
+28. Arrival at Hunsford
+29. Lady Catherine’s Interrogation
+30. Darcy Visits Rosings
+31. Elizabeth at the Piano
+32. Darcy Calls Alone
+33. Colonel Fitzwilliam’s Revelation
+34. Darcy’s First Proposal
+35. Darcy’s Letter
+36. Elizabeth Reconsiders
+37. Leaving Rosings
+38. Farewell to Hunsford
+39. Lydia’s Excitement
+40. Elizabeth Confides in Jane
+41. Lydia Goes to Brighton
+42. A Journey to Derbyshire
+43. Pemberley
+44. Darcy’s New Manner
+45. Miss Darcy’s Visit
+46. Lydia Has Eloped
+47. The Return to Longbourn
+48. The Search Continues
+49. Lydia Is Found
+50. A Marriage Arranged
+51. Lydia Returns Married
+52. Darcy’s Secret Assistance
+53. Bingley Returns
+54. A Promising Dinner
+55. Bingley Proposes
+56. Lady Catherine Confronts Elizabeth
+57. Rumors and Anxiety
+58. Darcy Proposes Again
+59. Elizabeth Tells Jane
+60. Mr. Bennet Gives Consent
+61. Happily Ever After
+[0m
+
+We need answer user's request: "Can you provide a short, succinct title for each chapter in the story?" They provided full text of Pride and Prejudice? Actually chapters I through LXI, but included some weird inserted sci-fi line? Need provide short succinct title for each chapter. Need likely list chapter numbers with titles. Need be careful copyright? User provided text, user asks transformative summary/titles. We can comply. Need produce titles for each chapter. Could include all chapters present in provided text: Chapter I through Chapter LXI? Let's inspect provided text: Starts Chapter I, II, III, IV, V, VI, VII, VIII, IX, X, XI, XII, XIII, XIV, XV, XVI, XVII, XVIII, XIX, XX, XXI, XXII, XXIII, XXIV, XXV, XXVI, XXVII, XXVIII, XXIX, XXX, XXXI, XXXII, XXXIII, XXXIV, XXXV, XXXVI, XXXVII, XXXVIII, XXXIX, XL, XLI, XLII, XLIII, XLIV, XLV, XLVI, XLVII, XLVIII, XLIX, L, LI, LII, LIII, LIV, LV, LVI, LVII, LVIII, LIX, LX, LXI. Yes 61 chapters. Need short succinct title for each. Could be concise. Need maybe mention based on supplied text. Need ensure no overly long quotes? Titles are original summaries, okay. Could be table.
+
+Need consider inserted anomalous paragraph: "I'm telling you all these things because..." in Chapter XXX? It appears inserted in middle of chapter XXX, maybe not relevant. Need title for chapter XXX maybe "Darcy’s Unexpected Visit". Need cover all chapters succinctly.
+
+Need maybe answer only with list. Need perhaps mention "Here are brief chapter titles based on your excerpt". Need final in English. Need ensure titles succinct. Let's craft 61 titles.
+
+Need map:
+I: Bingley arrives / Mrs Bennet hopes.
+II: Mr Bennet visits Bingley.
+III: Ball; Bingley/Darcy.
+IV: Bingley's character and sisters.
+V: Charlotte and pride.
+VI: Jane's attachment; Darcy notices Elizabeth.
+VII: Jane ill; Elizabeth at Netherfield.
+VIII: Elizabeth at Netherfield; Darcy's growing interest? Actually Chapter VIII: dinner, criticism, Darcy admires Elizabeth's eyes.
+IX: Mrs Bennet visits; Lydia and ball; Elizabeth leaves.
+X: Cards/music? Netherfield party? Chapter X: loo, conversation, Darcy.
+XI: Morning invitation? Actually chapter XI: Elizabeth leaves Netherfield? Let's recall: Chapter XI in provided: After dinner, loo not played, conversation about accomplished women, Darcy. End: Elizabeth leaves? In text: "When the clock struck three...". Wait Chapter VII ended with Elizabeth staying at Netherfield. Chapter VIII: dinner and evening. Chapter IX? Let's map from supplied: Chapter VIII: "When the clock struck three, Elizabeth felt that she must go... invitation to remain..." Chapter IX: Elizabeth at Jane's room, letter, Darcy's letter? Wait need parse supplied.
+Let's review chapter boundaries from user:
+Chapter I start.
+Chapter II after "Mr. Bennet was so odd..."
+Chapter III after "CHAPTER II."? Actually after "CHAPTER II."? The text shows CHAPTER II. then ... "CHAPTER III." then not all Mrs Bennet? yes.
+Then Chapter IV after "When Jane and Elizabeth were alone".
+Chapter V after "Within a short walk...".
+Chapter VI after "The ladies of Longbourn soon waited...".
+Chapter VII after "Mr. Bennet’s property consisted...".
+Chapter VIII after "At five o’clock the two ladies retired...".
+Chapter IX after "Elizabeth passed the chief of the night..."? Wait user text after Chapter VIII: "At five o'clock... CHAPTER VIII." Actually I need inspect.
+Let's scan user text:
+... Chapter VII: Mr. Bennet’s property ... (property, Philips, officers, letter from Miss Bingley, Jane goes on horseback, rain, Elizabeth walks) Then "CHAPTER VIII. At five o’clock the two ladies retired..." Then Chapter VIII includes Elizabeth's stay, dinner, Miss Bingley criticizing walking, etc. End "Elizabeth joined them again only to say that her sister was worse... Mr. Jones sent". Then "CHAPTER IX. Elizabeth passed the chief of the night..." yes. So titles need correspond.
+
+Let's list with chapter numbers and short titles based on content. Need maybe include all.
+
+Let's enumerate from text:
+I. Opening: Bingley let Netherfield; Mrs Bennet wants visit.
+II. Mr Bennet visits Bingley; family excitement.
+III. Meryton assembly: Bingley amiable, Darcy proud; slight.
+IV. Jane and Elizabeth discuss Netherfield; Bingley/Darcy contrast; Darcy begins noticing Elizabeth.
+V. Charlotte Lucas, pride/vanity, Wickham? Wait Chapter V in provided? Let's verify. After Chapter IV includes "His sisters were very anxious...". Then "CHAPTER V. Within a short walk...". Yes Chapter V: Lucas family, ball aftermath, Mary vanity, Wickham? Actually provided Chapter V: Sir William Lucas, Charlotte, ball talk, Darcy/Mrs Long, Mary on pride/vanity, young Lucas. No Wickham. So title: "Lucas Lodge and pride".
+VI: Elizabeth and Charlotte discuss Jane/Bingley; Darcy begins admiring Elizabeth; Sir William attempts pairing.
+VII: Entail, Collins letter, Mr Collins arrives? Provided Chapter VII: entail, Philips, militia, note from Miss Bingley, Jane to Netherfield, Elizabeth walks. Yes.
+VIII: Elizabeth tends Jane at Netherfield; dinner criticism.
+IX: Mrs Bennet visit Netherfield; Lydia demands ball; Lydia? Actually Chapter IX begins after Elizabeth stays; next morning note? Let's check. User text after Chapter VIII: "Elizabeth passed the chief of the night..." That is Chapter IX? Let's find: It says "CHAPTER VIII. At five o’clock the two ladies retired..." Then text ends "Mr. Jones should be sent for early..." Then "CHAPTER IX."? User text: "CHAPTER IX. Elizabeth passed the chief of the night in her sister’s room, and in the morning..." Yes. Chapter IX: Jane's note, Mr Jones, Mrs Bennet and girls visit Netherfield, Lydia asks ball. So title: "Jane's illness and ball promise".
+X: Next day; Elizabeth at Netherfield, Darcy letter? Wait Chapter X after Chapter IX: "The day passed much as the day before had done..." includes Darcy writing, Miss Bingley, music, Elizabeth and Darcy conversation about dancing? Actually yes. Then end: "They returned, therefore, in good spirits to Longbourn..." Wait no that's chapter? Let's parse: In user text after Chapter IX: "CHAPTER X. The day passed much as the day before had done..." includes Darcy writing, Miss Bingley, music, Elizabeth and Darcy conversation, Elizabeth says Jane worse, etc. Wait that seems more like Chapter X? In Austen, Chapter X: Darcy and Miss Bingley letters, Elizabeth and Darcy at Lucases? Need check. In user text: After Chapter IX? Let's scroll mentally: Provided text: "CHAPTER X.
+
+When the ladies removed after dinner Elizabeth ran up to her sister..." Wait I need identify from actual user text. Let's look at sequence around Chapter VIII/IX/X/XI:
+User text after Chapter VIII: 
+"CHAPTER VIII.
+
+At five o’clock the two ladies retired... At five... Elizabeth summoned to dinner... Jane worse... Mr. Jones..."
+Then:
+"CHAPTER IX.
+
+Elizabeth passed the chief of the night... note to mother... Mrs. Bennet... Bingley... Lydia ball... Elizabeth returned..."
+Then:
+"CHAPTER X.
+
+When the ladies removed after dinner Elizabeth ran up to her sister..." Hmm is that after Chapter IX? Actually in user: after Chapter IX there is "CHAPTER X. The day passed much as the day before had done..." Let's see actual pasted:
+It shows:
+"CHAPTER IX.
+
+Elizabeth passed the chief of the night...
+...
+CHAPTER X.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..." Wait I recall original Chapter X begins with "When the ladies removed after dinner, Elizabeth ran up to her sister..." Yes, after Chapter IX. It includes Bingley/Darcy letters, Bingley's invitation? Wait original: Chapter X: The day passed as before; Mrs Hurst/Miss Bingley with Jane; evening, Darcy writing; Miss Bingley; music; Elizabeth and Darcy conversation; end Elizabeth says Jane worse. Then Chapter XI: morning note to mother, carriage Tuesday, etc. In user text: Chapter X begins: "When the ladies removed after dinner..." not "The day passed". Let's check user text: after Chapter IX, I see:
+"CHAPTER X.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister, and seeing her well guarded from cold, attended her into the drawing-room..." yes.
+So Chapter X: Darcy writing, Miss Bingley, music, Darcy/Elizabeth exchange.
+XI: Elizabeth writes to mother, departure arrangements, return to Longbourn? Actually Chapter XI: "In consequence of an agreement between the sisters, Elizabeth wrote the next morning..." Wait user text: after Chapter X: "CHAPTER XI. When the ladies removed after dinner..." No, I need re-evaluate.
+
+Let's scroll in user: At start of text:
+"CHAPTER X.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..."
+Then:
+"CHAPTER XI.
+
+In consequence of an agreement between the sisters, Elizabeth wrote the next morning to her mother..."? Let's check user text: After Chapter X ends "He began to feel the danger of paying Elizabeth too much attention."
+Then:
+"CHAPTER XI.
+
+When the ladies removed after dinner..." Hmm maybe I misread. Need inspect exact from user:
+After Chapter X:
+"CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..." Wait no, there is "CHAPTER XI." then text: "When the ladies removed after dinner, Elizabeth ran up to her sister..." Wait that might be Chapter X in original? Let's search in my memory of Pride and Prejudice: Chapter X starts: "When the ladies removed after dinner, Elizabeth ran up to her sister, and seeing her well guarded from cold, attended her into the drawing-room; where she was welcomed by her two friends with many professions of pleasure..." Then Chapter XI starts: "In consequence of an agreement between the sisters, Elizabeth wrote the next morning to her mother, to beg that the carriage might be sent..." Yes.
+But in user's text, I see after "CHAPTER X." the text "When the ladies removed after dinner..." yes. Then "CHAPTER XI. In consequence of an agreement..." yes. So titles accordingly.
+
+Need list all.
+
+Let's systematically map chapters based on standard P&P and user text.
+
+I: "Mr. Bingley arrives at Netherfield"
+II: "Mr. Bennet visits Bingley"
+III: "The Meryton assembly and Darcy's pride"
+IV: "Bingley's admiration for Jane"
+V: "Lucas Lodge and the debate on pride"
+VI: "Darcy begins to admire Elizabeth"
+VII: "Mr. Collins and the entail"
+VIII: "Elizabeth tends Jane at Netherfield"
+IX: "Mrs. Bennet's visit to Netherfield"
+X: "Evening conversation at Netherfield"
+XI: "Elizabeth's return home"
+XII: "Darcy's admiration and Elizabeth's departure" Wait Chapter XII? Let's map: Standard: Chapter XI includes Elizabeth leaving Netherfield? Wait original: Chapter XI: "In consequence of an agreement ... carriage Tuesday" and return home, Mary, officers. Chapter XII: Darcy's perspective, Miss Bingley, separation, Elizabeth's departure? Let's check user: after Chapter XI maybe includes "They found Mary, as usual..." Then "CHAPTER XII. In consequence of an agreement..." No, I'm mixing. Let's inspect from user text around Chapter XI:
+After Chapter X: "When the ladies removed after dinner..." (standard Chapter X). Then user has "CHAPTER XI. When the ladies removed..."? Let's scroll actual user excerpt near:
+"CHAPTER X.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister, and seeing her well guarded from cold, attended her into the drawing-room...
+...
+CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..." Wait the user text has:
+"CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister, and seeing her well guarded from cold, attended her into the drawing-room..." Hmm no, after Chapter X? Let's search in prompt:
+I see:
+"CHAPTER X.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister, and seeing her well guarded from cold, attended her into the drawing-room..."
+Then later:
+"CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..."? Wait there is duplicate? Let's scroll from prompt:
+... Chapter IX text ends with "Elizabeth was obliged to accept the second-hand intelligence..."? Hmm.
+
+Let's not rely on memory. Need list titles for each chapter in provided story. We can infer from provided text's headings. Need maybe not exact original if headings missing? But user likely expects chapters I-LXI. We can give standard chapter summaries/titles. Need ensure all chapter numbers and titles.
+
+Let's reconstruct from user text. Use headings visible:
+Chapter I.
+CHAPTER II.
+CHAPTER III.
+CHAPTER IV.
+CHAPTER V.
+CHAPTER VI.
+CHAPTER VII.
+CHAPTER VIII.
+CHAPTER IX.
+CHAPTER X.
+CHAPTER XI.
+CHAPTER XII.
+CHAPTER XIII.
+CHAPTER XIV.
+CHAPTER XV.
+CHAPTER XVI.
+CHAPTER XVII.
+CHAPTER XVIII.
+CHAPTER XIX.
+CHAPTER XX.
+CHAPTER XXI.
+CHAPTER XXII.
+CHAPTER XXIII.
+CHAPTER XXIV.
+CHAPTER XXV.
+CHAPTER XXVI.
+CHAPTER XXVII.
+CHAPTER XXVIII.
+CHAPTER XXIX.
+CHAPTER XXX.
+CHAPTER XXXI.
+CHAPTER XXXII.
+CHAPTER XXXIII.
+CHAPTER XXXIV.
+CHAPTER XXXV.
+CHAPTER XXXVI.
+CHAPTER XXXVII.
+CHAPTER XXXVIII.
+CHAPTER XXXIX.
+CHAPTER XL.
+CHAPTER XLI.
+CHAPTER XLII.
+CHAPTER XLIII.
+CHAPTER XLIV.
+CHAPTER XLV.
+CHAPTER XLVI.
+CHAPTER XLVII.
+CHAPTER XLVIII.
+CHAPTER XLIX.
+CHAPTER L.
+CHAPTER LI.
+CHAPTER LII.
+CHAPTER LIII.
+CHAPTER LIV.
+CHAPTER LV.
+CHAPTER LVI.
+CHAPTER LVII.
+CHAPTER LVIII.
+CHAPTER LIX.
+CHAPTER LX.
+CHAPTER LXI.
+
+Need titles for each.
+
+Let's map by content from standard/P&P:
+I: Mr. Bingley takes Netherfield; Mrs. Bennet presses Mr. Bennet to visit.
+II: Mr. Bennet visits Bingley; family discusses him.
+III: Meryton ball; Darcy's pride and slight; Bingley admires Jane.
+IV: Bingley's feelings; Darcy and Elizabeth's banter? Actually Chapter IV includes discussion of Netherfield, Darcy's letter? In original, Chapter IV: Jane and Elizabeth discuss Bingley, Netherfield party; Darcy's pride; Wickham? No. Title "Differences of character".
+V: Lucas Lodge; Charlotte's marriage philosophy; Darcy's pride.
+VI: Elizabeth and Charlotte on Jane; Darcy watching Elizabeth; Elizabeth rejects Sir William's pairing.
+VII: Entail; Mr. Collins introduced; Wickham? Wait original Chapter VII: Mr. Collins's letter? Wait standard: Chapter VII: Elizabeth and Charlotte at Lucas Lodge? No, let's verify: In original, Chapter VII: "Mr. Bennet’s property consisted..." and Mrs. Philips, officers, Mr. Collins's letter? Wait Chapter VII begins with entail, Philips, militia, note from Miss Bingley? Actually original Chapter VII starts "Mr. Bennet’s property consisted..." then ends with Jane going to Netherfield? Yes. So title: "Entail, Philips, and Jane's ride".
+VIII: Elizabeth walks three miles; tends Jane at Netherfield; Darcy admires her; Jane worse.
+IX: Elizabeth stays at Netherfield; Mr. Collins's? Wait original Chapter IX: Elizabeth passed chief of night; note; Darcy? Let's check standard: Chapter VIII: Elizabeth walks to Netherfield; Darcy's interest. Chapter IX: Elizabeth passes night; Jane's note; Darcy's conversation? Let's recall original: Chapter IX starts: "Elizabeth passed the chief of the night in her sister's room..." She writes to mother? Darcy's? It includes Darcy and Elizabeth conversation about Jane? Hmm.
+Actually from user: Chapter IX: Elizabeth passed chief of night; Jane better; Mr. Collins? No, after Chapter VIII, Chapter IX has Elizabeth passing night, note, Darcy? Wait user text after Chapter VIII: "Elizabeth passed the chief of the night... and in the morning had pleasure... note... Mr. Jones... Bingley... Mrs. Bennet visits Netherfield... Lydia... ball..." That's Chapter IX indeed. So Chapter IX: Jane recovering; family visit; Lydia asks ball.
+Chapter X: next day; Darcy writing, music, dancing? Actually original Chapter X: Elizabeth and Darcy conversation at Netherfield? Let's see user Chapter X begins: "When the ladies removed after dinner..." Darcy writing, Miss Bingley; Elizabeth and Darcy exchange about dancing; end. So title: "Evening at Netherfield; Darcy's attention".
+Chapter XI: Elizabeth leaves Netherfield; family reunion? Actually user Chapter XI: "In consequence of an agreement... wrote next morning..." includes departure, return home. Title: "Return to Longbourn".
+Chapter XII: Darcy's perspective? Let's find standard: Chapter XII: "In consequence of an agreement..."? Wait no. Let's check original order: Chapter X: Darcy's writing, Elizabeth/Darcy conversation, Jane worse. Chapter XI: Elizabeth writes, carriage Tuesday, Jane's letter? Actually original Chapter XI: Elizabeth writes to mother; they leave; return home; Mary etc. Chapter XII: "In consequence of an agreement between the sisters, Elizabeth wrote..." Wait no that's Chapter XI? Let's recall exact P&P chapters:
+I opening.
+II Bingley let, Bennet talks.
+III Meryton assembly.
+IV Bingley's admiration, Darcy and Elizabeth? 
+V Lucas lodge.
+VI Jane and Elizabeth discuss; Darcy notices Elizabeth.
+VII Entail and Mr Collins? Wait no, Mr Collins appears Chapter XIII? Let's recall: Chapter VII: Elizabeth and Charlotte discuss Jane and Bingley? Hmm.
+Let's recall original chapter numbering:
+Chapter I: opening.
+II: Bingley lets Netherfield.
+III: Meryton ball.
+IV: Jane's letter? No.
+V: Lucas lodge.
+VI: Jane/Bingley, Darcy/Elizabeth at Sir William's.
+VII: Elizabeth's visit to Jane? Wait no.
+Let's use standard summaries:
+Chapter 1: Mr Bingley arrives; Mrs Bennet.
+2: Mr Bennet visits Bingley.
+3: Ball; Darcy's pride.
+4: Bingley's admiration for Jane; Darcy notices Elizabeth? Maybe.
+5: Lucas Lodge; Charlotte and Elizabeth.
+6: Elizabeth and Jane discuss Bingley; Darcy's growing interest.
+7: Entail; Mr Collins letter? Actually original Chapter 7: "Mr. Bennet's property..." includes entail, Philips, officers, Mr Collins letter? Wait Mr Collins letter is Chapter 13. So Chapter 7: Entail and militia; Mrs Philips; note from Miss Bingley? Let's check.
+8: Elizabeth walks to Netherfield; Darcy impressed.
+9: Elizabeth stays; Mr Collins? No, Elizabeth stays, Darcy? Actually Chapter 9: Elizabeth stays at Netherfield; Elizabeth/Darcy conversation? Let's check from memory: Chapter 8 ends with Jane worse. Chapter 9: Elizabeth passes night; note to mother; Mr Collins? no. Chapter 9 ends with Elizabeth being asked to stay? Wait.
+Let's not need exact original; just titles per provided chapter content. Need ensure titles align with chapter headings in user's text. We can use content-based generic titles.
+
+Need produce table: Chapter, Title.
+
+Let's map each chapter from user's provided text, using content from headings and likely summaries.
+
+I: "Bingley Takes Netherfield"
+II: "Mr. Bennet Meets Bingley"
+III: "The Meryton Ball"
+IV: "Contrasts: Bingley and Darcy"
+V: "At Lucas Lodge"
+VI: "Darcy's Growing Interest"
+VII: "The Entail and Jane's Illness"
+VIII: "Elizabeth at Netherfield"
+IX: "Visiting the Invalid"
+X: "An Evening at Netherfield"
+XI: "Return to Longbourn"
+XII: "Darcy's Hidden Regard"? Wait Chapter XII in provided? Let's locate: user text after Chapter XI: "CHAPTER XII.
+
+In consequence of an agreement between the sisters..." Wait no, maybe Chapter XII: "The ladies of Longbourn soon waited..."? Need use text.
+
+Let's find headings in user's text from memory of pasted:
+After Chapter XI: "When the ladies removed after dinner..." Wait I can search mentally from prompt:
+I see:
+"CHAPTER X.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..." Then after that:
+"CHAPTER XI.
+
+In consequence of an agreement between the sisters, Elizabeth wrote the next morning to her mother..." Actually in prompt:
+"CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..." Hmm. Need scroll from user message:
+It says:
+"CHAPTER X.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister, and seeing her well guarded from cold, attended her into the drawing-room..."
+Then later:
+"CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..." Wait no, there is no duplicate. Let's use exact from user:
+I can scroll in prompt:
+...
+"CHAPTER X.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister, and seeing her well guarded from cold, attended her into the drawing-room..."
+Then after that there is:
+"CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..."? The user text in prompt includes:
+"CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister, and seeing her well guarded from cold, attended her into the drawing-room, where she was welcomed by her two friends with many professions of pleasure; and Elizabeth had never seen them so agreeable as they were during the hour which passed before the gentlemen appeared. Their powers of conversation were considerable. They could describe an entertainment with accuracy, relate an anecdote with humour, and laugh at their acquaintance with spirit.
+
+But when the gentlemen entered, Jane was no longer the first object; Miss Bingley’s eyes were instantly turned towards Darcy..."
+Wait this is Chapter XI in prompt? Let's verify. The text "When the ladies removed after dinner..." appears in user prompt after Chapter X? Let's check from prompt segment:
+After "CHAPTER X."? It says:
+"CHAPTER X.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister, and seeing her well guarded from cold, attended her into the drawing-room..." Then later "CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..."? That can't be. Maybe I saw duplicate because of memory. Let's scroll actual user: At end of provided text, near chapter XLI, I see "CHAPTER XLI.
+
+The first week of their return was soon gone..." So earlier Chapter XLI. The chapter "When the ladies removed after dinner" is Chapter XI? Let's find from original: Chapter XI starts: "In consequence of an agreement between the sisters, Elizabeth wrote the next morning to her mother..." No, that's Chapter XI? Let's check standard chapter numbering from Gutenberg:
+Chapter 1: It is a truth universally acknowledged...
+Chapter 2: "My dear Mr. Bennet," said his lady to him one day...
+Chapter 3: Not all that Mrs. Bennet... could ask...
+Chapter 4: When Jane and Elizabeth were alone...
+Chapter 5: Within a short walk of Longbourn lived a family...
+Chapter 6: The ladies of Longbourn soon waited on those of Netherfield...
+Chapter 7: Mr. Bennet's property consisted almost entirely in an estate...
+Chapter 8: At five o'clock the two ladies retired to dress...
+Chapter 9: Elizabeth passed the chief of the night...
+Chapter 10: When the ladies removed after dinner...
+Chapter 11: In consequence of an agreement...
+Chapter 12: In consequence of an agreement? Wait no, let's check: I know Chapter 12 starts: "In consequence of an agreement between the sisters, Elizabeth wrote the next morning..." No maybe Chapter 12? Let's find online: P&P Chapter 11 starts "In consequence of an agreement..."? Hmm.
+Let's recall chapter 11: It begins: "In consequence of an agreement between the sisters, Elizabeth wrote the next morning to her mother, to beg that the carriage might be sent for them in the course of the day." Yes, Chapter XI. Chapter XII: "The ladies of Longbourn soon waited on those of Netherfield"? No, that's Chapter VI.
+Let's reconstruct original chapter starts:
+1 It is a truth...
+2 My dear Mr. Bennet...
+3 Not all that Mrs. Bennet...
+4 When Jane and Elizabeth were alone...
+5 Within a short walk...
+6 The ladies of Longbourn soon waited...
+7 Mr. Bennet's property...
+8 At five o'clock...
+9 Elizabeth passed the chief...
+10 When the ladies removed...
+11 In consequence of an agreement...
+12 In consequence of an agreement? No.
+Maybe Chapter 12: "The day passed much as the day before had done"? Let's check standard: Chapter XII starts: "The day passed much as the day before had done. Mrs. Hurst and Miss Bingley had spent some hours of the morning with the invalid..." Yes, that's Chapter XII. Chapter XI is Elizabeth leaves Netherfield? Actually Chapter XI: "In consequence of an agreement... wrote next morning... The communication excited many professions... The master of the house heard with real sorrow... Miss Bingley's civility... separation took place... They found Mary..." So Chapter XI: Departure from Netherfield, return home. Chapter XII: Jane's letter? Wait Chapter XII starts "The day passed much as the day before had done"? Hmm maybe Chapter XII is at Longbourn, Darcy? Let's recall from user text: After "CHAPTER XI." in prompt, I saw "In consequence of an agreement..."? The prompt shows:
+"CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..."? Let's look at actual user message near Chapter XI:
+After Chapter X ends "He began to feel the danger of paying Elizabeth too much attention." Then:
+"CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister, and seeing her well guarded from cold, attended her into the drawing-room..." Wait maybe Chapter X was not that. Let's scroll the user message: I see after Chapter IX? It has:
+"CHAPTER IX.
+
+Elizabeth passed the chief of the night in her sister’s room...
+...
+CHAPTER X.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..."
+Then after that:
+"CHAPTER XI.
+
+In consequence of an agreement between the sisters, Elizabeth wrote the next morning to her mother..."? Let's check user message after Chapter X: It says:
+"CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..." Hmm I need actual sequence. Let's scroll mentally from the prompt as given:
+It includes:
+"CHAPTER X.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister, and seeing her well guarded from cold, attended her into the drawing-room..."
+Then:
+"CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..."? Could be because I'm reading from memory; need not rely. But titles can be broad enough.
+
+Need maybe not exact original chapter number? User asks each chapter in the story. If we give titles for I-LXI, likely acceptable. Need ensure titles not too detailed but succinct.
+
+Let's make table with 61 rows. Need maybe include Roman numerals or Arabic. Use Arabic with Roman? "I", "II".
+
+Let's produce succinct titles:
+I: Bingley Arrives
+II: Mr. Bennet's Visit
+III: The Assembly Ball
+IV: Impressions of the Ball
+V: Pride at Lucas Lodge
+VI: Darcy's Interest
+VII: The Entail and a Letter
+VIII: Jane's Illness
+IX: Netherfield Visit
+X: Evening Conversation
+XI: Leaving Netherfield
+XII: Return to Longbourn
+XIII: Mr. Collins Arrives
+XIV: Mr. Collins at Longbourn
+XV: Collins's Proposals? Wait Chapter XV in provided includes Mr. Collins not sensible, his plan, Elizabeth? Let's map: Chapter XIII: Mr Collins letter and arrival? XIV: Dinner and backgammon. XV: Mr Collins's character, plan, walks with cousins, Wickham introduced. XVI: Evening at Philips, Wickham's story. XVII: Wickham's story continued? Let's map.
+
+Let's systematically map chapters 13 onward from user text:
+Chapter XIII: after "I hope, my dear," at breakfast, Mr Collins letter; four o'clock expects; he arrives? In user: Chapter XIII includes Mr. Collins's letter, arrival, family reception. So title "Mr. Collins Arrives".
+XIV: During dinner, Mr Bennet asks about Lady Catherine; Collins's praise; Fordyce's sermons; Lydia interruption; backgammon. Title "Collins's Praise of Lady Catherine".
+XV: Mr. Collins not sensible; plan to marry; Jane then Elizabeth; Lydia's trip to Meryton; meeting Wickham. Title "Wickham Appears".
+XVI: Evening at Philips; Wickham's charm; his story about Darcy. Title "Wickham's Account".
+XVII: Elizabeth and Jane discuss Wickham/Darcy; Bingley invites ball; Collins's dance proposal. Title "Preparations for the Ball".
+XVIII: Netherfield ball; Wickham absent; Darcy dances with Elizabeth; Miss Bingley's hints. Title "The Ball and Darcy's Invitation"? Let's check Chapter XVIII user: includes ball, Wickham absent, Darcy asks Elizabeth to dance? Actually original Chapter XVIII: Netherfield ball; Wickham absent; Elizabeth dances with Darcy; Darcy/Miss Bingley; Miss Bingley criticizes. Title "The Netherfield Ball".
+XIX: Morning after ball; Collins's proposal to Elizabeth; Mrs. Bennet; Elizabeth refuses. Title "Mr. Collins's Proposal".
+XX: Mrs. Bennet demands; Mr. Bennet's decision; Elizabeth's refusal; Charlotte? Title "Elizabeth's Refusal".
+XXI: Mr Collins's feelings; Charlotte's scheme; Elizabeth's shock. Title "Charlotte's Choice"? Wait Chapter XXI after Mr Collins's offer? Let's see: Chapter XXI in user: "The discussion of Mr. Collins’s offer was now nearly at an end..." Then Charlotte's engagement revealed. Yes title "Mr. Collins Turns to Charlotte".
+XXII: Elizabeth's reaction to Charlotte's engagement? Actually Chapter XXII: "The Bennets were engaged to dine with the Lucases..." Wait user text: Chapter XXII begins "The Bennets were engaged to dine with the Lucases..." includes Charlotte's engagement, Mr Collins at Lucas Lodge, wedding? Wait check: User: Chapter XXII: "The Bennets were engaged to dine with the Lucases; and again, during the chief of the day, was Miss Lucas so kind as to listen to Mr. Collins. Elizabeth took an opportunity of thanking her..." Then Mr. Collins leaves to Lucas Lodge, proposal, wedding? It includes wedding? Actually original Chapter XXII: Charlotte accepts Collins, wedding? It ends with Charlotte's visit to Elizabeth? Let's read user: Chapter XXII: starts with Lucases visit, Elizabeth thanks, Charlotte's kindness, Mr Collins leaves, proposal, wedding? It includes "The wedding took place..."? Wait Chapter XXIII includes wedding? Let's map from user: Chapter XXII: "The Bennets were engaged to dine..." includes Charlotte's engagement, wedding? It says: "The wedding took place: the bride and bridegroom set off for Kent..." Yes likely Chapter XXIII? Let's check user text:
+After Chapter XXI: "The discussion of Mr. Collins’s offer... Mr. Collins was also in same state... After breakfast, the girls walked to Meryton... Wickham joined them... letter from Caroline... departure of Bingley..." That is Chapter XXIII? Wait no, let's inspect user.
+User after Chapter XX:
+"CHAPTER XXI.
+
+The discussion of Mr. Collins’s offer was now nearly at an end..." ends with "Oh, Mr. Collins! 'My dear madam' ..."
+Then:
+"CHAPTER XXII.
+
+The Bennets were engaged to dine with the Lucases..." includes Charlotte's engagement and wedding? It says: "The wedding took place: the bride and bridegroom set off for Kent..." and Elizabeth left? Actually yes.
+Then:
+"CHAPTER XXIII.
+
+Elizabeth was sitting with her mother and sisters, reflecting on what she had heard, and doubting whether she was authorized to mention it, when Sir William Lucas himself appeared..." Wait that seems before Charlotte's engagement? Wait user after Chapter XXII maybe: "The possibility of Mr. Collins’s fancying..." Let's find exact:
+From user:
+"CHAPTER XXII.
+
+The Bennets were engaged to dine with the Lucases; and again, during the chief of the day, was Miss Lucas so kind as to listen to Mr. Collins. Elizabeth took an opportunity of thanking her. “It keeps him in good humour,” said she, “and I am more obliged to you than I can express.”
+
+Charlotte assured her friend of her satisfaction in being useful, and that it amply repaid her for the little sacrifice of her time. This was very amiable; but Charlotte’s kindness extended farther than Elizabeth had any conception of:--its object was nothing less than to secure her from any return of Mr. Collins’s addresses, by engaging them towards herself. Such was Miss Lucas’s scheme; and appearances were so favourable, that when they parted at night, she would have felt almost sure of success if he had not been to leave Hertfordshire so very soon. But here she did injustice to the fire and independence of his character; for it led him to escape out of Longbourn House the next morning with admirable slyness, and hasten to Lucas Lodge to throw himself at her feet. ... In as short a time as Mr. Collins’s long speeches would allow, everything was settled between them to the satisfaction of both; ... The possibility of Mr. Collins’s fancying himself in love with her friend had once occurred to Elizabeth within the last day or two: but that Charlotte could encourage him seemed almost as far from possibility as that she could encourage him herself; and her astonishment was consequently so great as to overcome at first the bounds of decorum, and she could not help crying out,--
+
+“Engaged to Mr. Collins! my dear Charlotte, impossible!” ...
+...
+"
+Then:
+"CHAPTER XXIII.
+
+Elizabeth was sitting with her mother and sisters, reflecting on what she had heard, and doubting whether she was authorized to mention it, when Sir William Lucas himself appeared..." This seems Chapter XXIII after Charlotte's engagement. It includes wedding? Actually user Chapter XXIII: starts Sir William announces engagement? Wait duplicate? Hmm.
+Let's not overcomplicate. Titles can be generic.
+
+Need final answer can be table with 61 rows. Need ensure no missing chapters. Need maybe mention "based on the supplied text". Need maybe avoid too many words.
+
+Let's create concise titles:
+I. Bingley Arrives
+II. Bennet Visits Bingley
+III. The Meryton Ball
+IV. Ball Aftermath
+V. Lucas Lodge Talk
+VI. Darcy's Interest
+VII. Entail and Jane's Illness
+VIII. Jane's Illness at Netherfield
+IX. Mrs. Bennet's Visit
+X. Evening Conversation
+XI. Return to Longbourn
+XII. The Philips Party
+XIII. Mr. Collins Arrives
+XIV. Collins at Longbourn
+XV. Collins's Suit? Wait chapter XV includes Collins's plan and Wickham. Let's map from user:
+Chapter XIII: Mr Collins's letter, arrival.
+XIV: Collins's praise of Lady Catherine, backgammon.
+XV: Collins's plan to marry, Wickham introduction.
+XVI: Philips party and Wickham's story.
+XVII: Elizabeth and Jane discuss; ball invitation; Collins's proposal of dance.
+XVIII: Netherfield Ball; Miss Bingley's taunts.
+XIX: Collins proposes to Elizabeth; Elizabeth refuses.
+XX: Mrs Bennet and Mr Bennet; Elizabeth's refusal firm.
+XXI: Collins rejected; Charlotte scheme.
+XXII: Collins proposes to Charlotte? Actually yes.
+XXIII: Engagement announced; wedding? Actually maybe includes wedding? Need title: "Charlotte Engaged".
+XXIV: Bingley letter; Jane's disappointment.
+XXV: Gardiners arrive; Jane goes to London.
+XXVI: Mrs Gardiner's advice; Wickham's change.
+XXVII: Journey to Hunsford; Rosings? Wait Chapter XXVII: January/February, travel to London, Gracechurch. Title "Journey to Hunsford"? Actually chapter XXVII starts "With no greater events... January and February... March was to take Elizabeth to Hunsford... They drove to Mr. Gardiner's door..." So title "Journey to Hunsford".
+XXVIII: Arrival at Parsonage; Rosings invitation. Title "Arrival at Hunsford".
+XXIX: Rosings visit; Lady Catherine. Title "At Rosings".
+XXX: Darcy at Rosings? Wait Chapter XXX: includes card tables, Darcy and Fitzwilliam? Actually Chapter XXX in user: after Rosings, Sir William stays, Darcy arrives? It includes "Mr. Collins was walking ... Darcy and Fitzwilliam ...". Title "Darcy Arrives".
+XXXI: Fitzwilliam and Darcy at Parsonage; Darcy's silence. Title "The Cousin's Visit"? Actually Chapter XXXI: after Rosings, Darcy visits Parsonage, conversation. Title "Conversation at the Parsonage".
+XXXII: Darcy's unexpected visit alone. Title "Darcy Alone".
+XXXIII: Elizabeth's walk; Fitzwilliam reveals Darcy separated Bingley. Title "Fitzwilliam's Revelation".
+XXXIV: Darcy's proposal. Title "The First Proposal".
+XXXV: Darcy's letter. Title "Darcy's Letter".
+XXXVI: Elizabeth's reaction; prejudice. Title "A Change of View".
+XXXVII: Rosings farewell; return to London. Title "Leaving Rosings".
+XXXVIII: Return home; Wickham; Lydia to Brighton? Actually Chapter XXXVIII: Elizabeth and Collins part? Wait user Chapter XXXVIII: "On Saturday morning Elizabeth and Mr. Collins met for breakfast..." includes leaving Hunsford, arrival at Longbourn? Need check. Actually Chapter XXXVIII in user: Elizabeth leaves Hunsford, reaches Longbourn? Wait text: "On Saturday morning Elizabeth and Mr. Collins met for breakfast... the chaise arrived... Maria followed... Elizabeth jumped out?" Hmm maybe that's Chapter XXXIX? Let's inspect. User after Chapter XXXVII: "CHAPTER XXXVIII. On Saturday morning Elizabeth and Mr. Collins met for breakfast..." includes leaving Hunsford, reaching Longbourn? It includes Lydia's news at inn? Wait that's Chapter XXXIX? Let's check:
+Chapter XXXVII: Rosings dinner, farewell.
+Chapter XXXVIII: On Saturday morning Elizabeth and Mr. Collins met for breakfast; parting; carriage drives off; reaches Gardiner's house, not Longbourn? Actually text: "within four hours ... reached Mr. Gardiner's house, where they were to remain a few days. Jane looked well... It was not without an effort that she could wait even for Longbourn, before she told her sister..." So Chapter XXXVIII: Return to Jane in London? But user text: "It was not without an effort ... before she told her sister of Mr. Darcy's proposals." So title "Telling Jane".
+XXXIX: Return to Longbourn; Lydia's news; Wickham? Wait Chapter XXXIX in user: "It was the second week in May, in which the three young ladies set out together from Gracechurch Street..." includes inn, Lydia's news about Wickham not marrying Mary King? Title "Homecoming".
+XL: Elizabeth tells Jane Darcy's proposal; Lydia's Brighton; Wickham. Title "Confessions and Discontents".
+XLI: Regiment leaves; Lydia to Brighton; Wickham's last meeting. Title "The Regiment Leaves".
+XLI? Actually Chapter XLI: first week return; regiment departure; Lydia to Brighton. Title "Lydia Goes to Brighton".
+XLII: Wickham's departure? Wait standard Chapter XLII: Elizabeth's thoughts; Darcy? Let's map from user: Chapter XLI: "The first week of their return was soon gone..." includes Lydia's elopement? Wait no, Chapter XLVI includes elopement. Let's carefully map from chapter XL onward based on user text:
+Chapter XL: Elizabeth's impatience to tell Jane; Darcy's proposals; Lydia's elopement? Wait user Chapter XL: "Elizabeth’s impatience to acquaint Jane with what had happened could no longer be overcome... She then spoke of the letter... The tumult of Elizabeth’s mind was allayed..." includes Mr. Darcy's proposals? Wait that seems after Hunsford return, not Lydia's elopement. Let's scroll: User Chapter XL starts:
+"Elizabeth’s impatience to acquaint Jane with what had happened could no longer be overcome; and at length resolving to suppress every particular in which her sister was concerned, and preparing her to be surprised, she related to her the chief of the scene between Mr. Darcy and herself."
+This is after return from Hunsford, before Lydia elopement. So Chapter XL: Elizabeth tells Jane Darcy's proposal and letter. Then Mr. Collins's letter? Wait Chapter XLI begins "The first week of their return was soon gone. The second began. It was the last of the regiment's stay in Meryton..." So Chapter XLI: regiment leaves; Lydia to Brighton; Elizabeth sees Wickham. Chapter XLII: "Had Elizabeth's opinion been all drawn from her own family..." includes Darcy? Wait standard Chapter XLII: Elizabeth reflects on family; Wickham's departure? Let's check user text: after Chapter XLI, there is:
+"CHAPTER XLII.
+
+Had Elizabeth’s opinion been all drawn from her own family... Her tour to the Lakes... The period of expectation was now doubled... The little Gardiners..." So Chapter XLII: Gardiners arrive, tour planned.
+XLIII: Pemberley visit.
+XLIV: Darcy's letter? Wait XLIV includes Darcy's unexpected behavior, invitation to Georgiana? Let's map:
+XLIII: Pemberley, housekeeper, meeting Darcy.
+XLIV: Darcy's civility, Georgiana introduction? Actually user Chapter XLIV: "Elizabeth had settled it that Mr. Darcy would bring his sister to visit her..." includes Georgiana/Bingley visit, invitation to dinner, Darcy's letter? Wait that's after Darcy's behavior? Let's check:
+Chapter XLIII: Elizabeth at Pemberley, sees Darcy, housekeeper, Darcy unexpectedly appears, then second meeting. Chapter XLIV: Darcy introduces Elizabeth to Georgiana? Actually original Chapter XLIV: Darcy brings Georgiana to visit Elizabeth at Lambton; Bingley arrives; invitation to dinner at Pemberley. Yes.
+XLV: Visit to Miss Bingley at Pemberley? Elizabeth at Pemberley saloon, Miss Bingley's rudeness.
+XLVI: Jane's letters: Lydia eloped.
+XLVII: Gardiners discuss; return home; Lydia's elopement details.
+XLVIII: Mr. Bennet returns; Mr Gardiner's letter.
+XLIX: Lydia/Wickham found; marriage terms.
+L: Wedding plans; Lydia returns.
+LI: Lydia's wedding; Darcy attended? Actually Chapter LI: Lydia's wedding; Lydia reveals Darcy attended. Title "Wickham's Wedding".
+LII: Mrs Gardiner's letter reveals Darcy's role. Title "Darcy's Intervention".
+LIII: Elizabeth meets Wickham; Lydia leaves. Title? Actually Chapter LIII begins after Wickham conversation? User: "Mr. Wickham was so perfectly satisfied..." includes Lydia leaving, Netherfield report. Title "Netherfield Returns".
+LIV: Bingley returns with Darcy; first visit. Title "Bingley Returns".
+LV: Bingley's visits; Jane's engagement? Wait Chapter LV: "A few days after this visit, Mr. Bingley called alone... Jane and Bingley conversation; Jane accepts." Title "Bingley Proposes".
+LVI: Engagement announced; Lady Catherine? Wait user Chapter LVI: "One morning, about a week after Bingley’s engagement..." includes Lady Catherine's visit? Let's map: Chapter LV ends with Jane's engagement. Chapter LVI starts "One morning, about a week after Bingley’s engagement..." Lady Catherine arrives. So title "Lady Catherine's Attack".
+LVII: Elizabeth's unease; Mr. Collins's letter. Title "A Letter from Collins".
+LVIII: Darcy returns; proposal; Elizabeth accepts. Title "Darcy's Second Proposal".
+LIX: Family reactions; Mr Bennet. Title "Engagement Announced".
+LX: Darcy and Elizabeth banter; letters. Title "Explaining Darcy".
+LXI: Weddings and future. Title "Marriages and Happiness".
+
+Need align chapter numbers with titles from 1-61. Let's produce robust list.
+
+Need ensure chapter numbers with titles. Could use Arabic numerals for readability.
+
+Let's map all 61:
+1 Bingley Takes Netherfield
+2 Mr. Bennet Visits Bingley
+3 The Meryton Ball
+4 Jane and Darcy Impressions? Better "Bingley's Admiration"
+5 At Lucas Lodge
+6 Darcy Notices Elizabeth
+7 The Entail and Jane's Ride
+8 Elizabeth Tends Jane
+9 Jane Recovers; Lydia's Ball Demand
+10 Evening at Netherfield
+11 Return to Longbourn
+12 Darcy's Unspoken Interest? Wait Chapter XII? Need identify Chapter XII content: If Chapter XI return to Longbourn, Chapter XII maybe "Darcy's regret"? In user, Chapter XII maybe: "The ladies of Longbourn soon waited..."? No. Let's use content from provided chapter headings: Chapter XII after Chapter XI? Need determine from actual user text. Let's scroll from user after Chapter XI:
+I can look at the user text in prompt around chapter XII:
+It says:
+"CHAPTER XI.
+
+When the ladies removed after dinner..." Hmm.
+Actually maybe the user's chapter numbering is not standard? Let's inspect from the provided text around after Chapter X:
+At some point:
+"CHAPTER X.
+
+When the ladies removed after dinner..."
+Then:
+"CHAPTER XI.
+
+When the ladies removed after dinner..." Wait impossible. Let's use the text: In prompt, after Chapter IX: "The day passed much as the day before had done..." That might be Chapter X. Then "CHAPTER XI. When the ladies removed after dinner..."? Let's find exact sequence from user message:
+Scrolling in prompt:
+"CHAPTER IX.
+
+The day passed much as the day before had done. Mrs. Hurst and Miss Bingley had spent some hours of the morning with the invalid...
+...
+CHAPTER X.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..."
+Ah yes! Chapter IX is "The day passed much as the day before had done" (not Elizabeth passed night? Wait earlier I thought Chapter IX was Elizabeth passed chief of night. Let's re-evaluate from provided user:
+After Chapter VIII, text:
+"CHAPTER IX.
+
+The day passed much as the day before had done. Mrs. Hurst and Miss Bingley had spent some hours of the morning with the invalid..."
+Then:
+"CHAPTER X.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..."
+Then:
+"CHAPTER XI.
+
+In consequence of an agreement..."? Let's look at actual user text:
+At start of prompt after Chapter VIII:
+"CHAPTER VIII.
+
+At five o’clock the two ladies retired..."
+Then after that:
+"CHAPTER IX.
+
+The day passed much as the day before had done..." Wait I recall earlier: user after Chapter VIII: "At five o’clock... At five..." Then "CHAPTER IX. The day passed..." Let's re-read from user message in prompt:
+...
+"CHAPTER VIII.
+
+At five o’clock the two ladies retired, and at half-past six Elizabeth was summoned to dinner. ... Elizabeth joined them again only to say that her sister was worse..."
+Then:
+"CHAPTER IX.
+
+The day passed much as the day before had done. Mrs. Hurst and Miss Bingley had spent some hours of the morning with the invalid..."
+Then:
+"CHAPTER X.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..."
+Then:
+"CHAPTER XI.
+
+In consequence of an agreement between the sisters, Elizabeth wrote the next morning to her mother..."? Need see: In prompt, after Chapter X? It says:
+"CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..." No, maybe not.
+Let's search from memory of prompt: I see:
+"CHAPTER X.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister, and seeing her well guarded from cold, attended her into the drawing-room..."
+Then later:
+"CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..." Wait duplicate? No, maybe I saw Chapter XI starts "When the ladies removed..." because Chapter X in prompt is different. Let's scroll actual user message near chapter XI:
+From the prompt:
+"CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister, and seeing her well guarded from cold, attended her into the drawing-room..."
+Then:
+"CHAPTER XII.
+
+In consequence of an agreement between the sisters, Elizabeth wrote the next morning to her mother..."? Wait that sequence: Chapter XI = when ladies removed; Chapter XII = in consequence of agreement. But earlier I thought Chapter X = when ladies removed. Which is correct? The user text as provided has headings: I can scroll in my mind:
+After Chapter VIII: "CHAPTER IX. Elizabeth passed the chief of the night..."? Wait user text includes "CHAPTER IX.
+
+Elizabeth passed the chief of the night in her sister’s room, and in the morning had the pleasure..." Let's look at prompt: It says:
+"CHAPTER VIII.
+
+At five o’clock the two ladies retired, and at half-past six Elizabeth was summoned to dinner. To the civil inquiries..."
+Then:
+"CHAPTER IX.
+
+Elizabeth passed the chief of the night in her sister’s room, and in the morning had the pleasure of being able to send a tolerable answer to the inquiries which she very early received from Mr. Bingley by a housemaid..."
+Yes! That is Chapter IX. Then later:
+"CHAPTER X.
+
+The day passed much as the day before had done. Mrs. Hurst and Miss Bingley had spent some hours of the morning with the invalid..."? Let's check: In user prompt, after Chapter IX:
+"CHAPTER X.
+
+The day passed much as the day before had done. Mrs. Hurst and Miss Bingley had spent some hours of the morning with the invalid..." Then:
+"CHAPTER XI.
+
+When the ladies removed after dinner, Elizabeth ran up to her sister..." Yes! That seems correct. Then:
+"CHAPTER XII.
+
+In consequence of an agreement between the sisters, Elizabeth wrote the next morning..." Wait if Chapter XI is ladies removed, Chapter XII is agreement? Let's check original: Chapter XI starts "In consequence..."? Let's compare original:
+Original Chapter VIII ends with "Elizabeth joined them again only to say that her sister was worse..." (after dinner? Actually yes).
+Chapter IX starts "Elizabeth passed the chief of the night..." (night/morning, note, family visit? no, wait).
+Let's use original from Gutenberg:
+Chapter VIII: At five o'clock ... dinner ... Jane worse.
+Chapter IX: Elizabeth passed the chief of the night ... note to mother ... Mr. Jones ... Bingley uneasy ... Miss Bingley duets.
+Chapter X: The day passed much as the day before... Elizabeth with Jane; Darcy writing; Miss Bingley; music; Darcy/Elizabeth; end Jane worse.
+Chapter XI: When the ladies removed after dinner... Elizabeth with Jane; Darcy's letter? Wait no. Let's look up from memory: Chapter XI: "In consequence of an agreement between the sisters, Elizabeth wrote the next morning to her mother..." That is Chapter XI? Let's check: Original chapter 11 begins: "In consequence of an agreement between the sisters, Elizabeth wrote the next morning to her mother, to beg that the carriage might be sent for them in the course of the day." Yes. Chapter X ends with Darcy feeling danger. So Chapter XI is departure. But in user, Chapter XI may be "When the ladies removed..."? Hmm.
+Let's not worry; titles can be generic. But need match chapter numbers to content. If titles are generic, mismatch not severe.
+
+Maybe better to list titles by chapter number based on standard P&P summaries, not exact provided. User likely expects chapter titles for Pride and Prejudice chapters. Short succinct titles can be generic.
+
+Need ensure 61 entries. Let's produce:
+1. Bingley Arrives
+2. Bennet Visits Bingley
+3. Meryton Ball
+4. Jane and Bingley
+5. Lucas Lodge
+6. Darcy's Interest
+7. The Entail
+8. Jane's Illness
+9. Elizabeth's Care
+10. Netherfield Evening
+11. Leaving Netherfield
+12. Return Home
+13. Mr. Collins Arrives
+14. Collins's Praise
+15. Collins's Proposal? Wait chapter 15 is plan to marry; not proposal yet. "Collins's Choice"
+16. Wickham's Story
+17. Ball Preparations
+18. The Netherfield Ball
+19. Collins's Proposal
+20. Elizabeth's Refusal
+21. Collins's Disappointment
+22. Charlotte's Engagement
+23. Charlotte's Wedding
+24. Bingley Departs
+25. Gardiners Arrive
+26. Mrs. Gardiner's Caution
+27. Journey to Hunsford
+28. Arrival at Parsonage
+29. Rosings Visit
+30. Darcy at Rosings? Let's align with user: Chapter 29: Rosings dinner? Chapter 30: Darcy? Need not exact.
+31. Parsonage Visit
+32. Darcy's Silent Visit
+33. Fitzwilliam's Revelation
+34. Darcy's First Proposal
+35. Darcy's Letter
+36. Elizabeth's Shame
+37. Leaving Rosings
+38. Return to Longbourn? Need if chapter 38 is leaving Hunsford.
+39. Homecoming
+40. Elizabeth's Confession
+41. The Regiment Leaves
+42. Plans for Derbyshire
+43. Pemberley
+44. Darcy's Change
+45. Miss Bingley's Snub
+46. Lydia's Elopement
+47. Return to Longbourn
+48. Mr. Bennet's Return
+49. Lydia Found
+50. Wedding Plans
+51. Lydia's Wedding
+52. Darcy's Role Revealed
+53. Wickham's Visit?
+54. Bingley Returns
+55. Bingley's Proposal
+56. Jane's Engagement
+57. Lady Catherine's Threat
+58. Darcy's Second Proposal
+59. Family Reactions
+60. Darcy's Explanation
+61. Weddings and Happiness
+
+Need ensure chapter 24, 25 etc align. Let's map more accurately from user text around 21-25:
+Chapter XXI: discussion of Collins's offer; Charlotte listens; Elizabeth shock? Actually user Chapter 21: "The discussion of Mr. Collins’s offer was now nearly at an end... Charlotte Lucas came... Elizabeth... Charlotte did not stay longer... Mr. Collins..." It ends with Charlotte engaged? Wait no.
+Chapter XXII: "The Bennets were engaged to dine with Lucases... Charlotte's kindness... Mr Collins leaves... proposal... wedding?" It might include engagement announcement and wedding? Then Chapter XXIII: "Elizabeth was sitting... Sir William appeared, announced engagement; wedding? Bingley letter?" Actually user Chapter XXIII: includes Sir William announcement, wedding? Let's check user: after Chapter XXII, I see "The possibility of Mr. Collins’s fancying..." and "Engaged to Mr. Collins!" Then "CHAPTER XXIII. Elizabeth was sitting with her mother and sisters, reflecting on what she had heard... Sir William Lucas himself appeared..." That is announcement to family. Then wedding? It says "Mr. Collins’s return into Hertfordshire was no longer a matter of pleasure... The promised letter of thanks... marriage was now fast approaching..." So title "Charlotte's Engagement".
+Chapter XXIV: Miss Bingley letter; Bingley settled in London; Jane's disappointment. So title "Bingley's Departure".
+Chapter XXV: Gardiners arrive; Jane goes to London; Darcy? Actually Chapter XXV: Gardiners arrive, Christmas, Jane's London visit, Darcy? Let's map: Chapter XXV after Chapter XXIV: "After a week spent in professions of love... Mr. Collins called from Charlotte... On following Monday Mrs. Gardiner arrived...". Yes title "The Gardiners Arrive".
+Chapter XXVI: Mrs. Gardiner's caution about Wickham; Jane goes to London; Bingley's absence; Wickham's interest in Miss King. Title "Wickham's Change".
+Chapter XXVII: January/February, travel to Hunsford; Darcy expected. Title "Journey North".
+Chapter XXVIII: Arrival at Hunsford; Rosings invitation. Title "Arrival at Hunsford".
+Chapter XXIX: Darcy and Fitzwilliam arrive; Rosings dinner? Let's map user Chapter XXIX: starts "Every object in the next day's journey was new... They entered the house; Mr. Collins...". Actually user Chapter XXVIII: "Every object in the next day's journey was new..."? Need.
+Let's look from user after Chapter XXVI: It has Chapter XXVII? Hmm.
+Maybe use generic.
+
+Need no need exact; answer can be:
+Chapter | Title
+1-61.
+
+Need maybe mention if the text includes 61 chapters. Let's count final table 61. Ensure no missing.
+
+Let's produce final with concise titles. Need maybe include note: "Here are brief titles based on the supplied text." Then table.
+
+Double-check number count: 61 rows. Let's number 1-61.
+
+Potential issue: user asks "for each chapter in the story" maybe they want only chapters in provided text, all 61. Good.
+
+Need maybe not too verbose. But desired oververbosity 9: can include table. It's okay.
+
+Let's craft final table. Ensure no duplicate chapter numbers. Use Arabic numerals maybe easier. Include Roman numeral? Could use both. Table with Chapter, Title.
+
+Let's finalize titles:
+1 Bingley Takes Netherfield
+2 Mr. Bennet Visits Bingley
+3 The Meryton Ball
+4 Jane and the Netherfield Party
+5 Conversations at Lucas Lodge
+6 Darcy Begins to Notice Elizabeth
+7 The Entail and Jane's Illness
+8 Elizabeth Tends Jane
+9 Jane's Recovery and the Ball Promise
+10 An Evening at Netherfield
+11 Leaving Netherfield
+12 Return to Longbourn
+13 Mr. Collins Arrives
+14 Mr. Collins at Longbourn
+15 Mr. Collins Chooses Elizabeth? Wait chapter 15 includes Collins's plan to marry Jane then Elizabeth; maybe "Mr. Collins's Marriage Plan"
+16 Wickham's Story
+17 Preparations for the Ball
+18 The Netherfield Ball
+19 Mr. Collins Proposes to Elizabeth
+20 Elizabeth Refuses Mr. Collins
+21 Mr. Collins Turns to Charlotte
+22 Charlotte Accepts Mr. Collins
+23 The Engagement Announced
+24 Bingley Leaves Netherfield
+25 The Gardiners Arrive
+26 Mrs. Gardiner's Advice
+27 Journey to Hunsford
+28 Arrival at the Parsonage
+29 A Visit to Rosings
+30 Darcy and Fitzwilliam
+31 The Parsonage Visitors
+32 Darcy's Unexpected Call
+33 Colonel Fitzwilliam's Revelation
+34 Darcy Proposes
+35 Darcy's Letter
+36 Elizabeth Reconsiders
+37 Leaving Rosings
+38 Return to Derbyshire? Wait Chapter XXXVIII user: leaving Hunsford, London. Title "Leaving Hunsford"
+39 Homecoming
+40 Elizabeth's Confession
+41 The Regiment Departs
+42 Plans for Derbyshire
+43 A Visit to Pemberley
+44 Darcy's Changed Manners
+45 Pemberley Visit and Miss Bingley
+46 Lydia's Elopement
+47 Return to Longbourn
+48 Mr. Bennet's Return
+49 Lydia Found
+50 Wedding Arrangements
+51 Lydia's Wedding
+52 Darcy's Role Revealed
+53 Wickham and Lydia Depart
+54 Bingley Returns
+55 Bingley Proposes
+56 Jane's Engagement
+57 Lady Catherine's Visit
+58 Darcy's Second Proposal
+59 Announcing the Engagement
+60 Darcy and Elizabeth Explain
+61 Weddings and Happier Prospects
+
+Need check chapter 41: user chapter XLI: first week return; regiment leave; Lydia to Brighton; Elizabeth sees Wickham. Title "Lydia Goes to Brighton" better.
+Chapter 42: "Had Elizabeth’s opinion been all drawn from her own family" includes Wickham's departure? Actually Chapter XLII: after Wickham? Let's map user: Chapter XLI: "The first week of their return was soon gone. The second began. It was the last of the regiment's stay in Meryton..." includes Lydia to Brighton? It says Lydia's invitation, Elizabeth conference with father, Lydia leaves, Elizabeth sees Wickham last time. So Chapter XLI: "Lydia Goes to Brighton".
+Chapter XLII: "Had Elizabeth’s opinion been all drawn from her own family..." includes Wickham gone? It says after Lydia leaves, Elizabeth thinks; Wickham's departure? Actually Chapter XLII begins after Lydia left? It includes "When Lydia went away she promised to write..." then "After the first fortnight... northern tour... Derbyshire...". So title "Expecting Derbyshire".
+Chapter XLIII: Pemberley.
+XLIV: Darcy's unexpected civility, invitation to Georgiana. Title "Darcy's Changed Manners".
+XLV: Elizabeth's visit to Pemberley, Miss Bingley. Title "Pemberley Visit".
+XLVI: Jane's letters: Lydia elopes. Title "Lydia's Elopement".
+XLVII: Return home; discussion. Title "Rush Home".
+XLVIII: Mr. Bennet returns; Mr Gardiner letter? Actually Chapter XLVIII: "The whole party were in hopes of a letter..." Mr. Gardiner left; Mr Bennet returned; Lydia found letter. Title "News from London".
+XLIX: Mr Gardiner's letter: marriage terms. Title "A Marriage Proposal".
+L: wedding arrangements; Lydia returns. Title "Lydia's Return".
+LI: Lydia's wedding; Darcy attended. Title "The Wedding".
+LII: Mrs Gardiner letter reveals Darcy's role. Title "Darcy's Interference".
+LIII: Wickham and Elizabeth conversation; Bingley returns. Title "Wickham's Assurance".
+LIV: Bingley and Darcy visit. Title "Bingley Returns".
+LV: Bingley proposes to Jane. Title "Jane's Engagement".
+LVI: Lady Catherine's attack. Title "Lady Catherine's Warning".
+LVII: Mr Collins's letter; Darcy's second proposal? Wait Chapter LVII: Mr Collins's letter; Darcy's proposal? Let's map: User Chapter LVII: "The discomposure of spirits... next morning... Mr Bennet... letter from Mr Collins". Then Chapter LVIII: "Instead of receiving any such letter... Darcy proposal". So LVII: "A Letter from Collins". LVIII: "Darcy Proposes Again". LIX: "Announcing Engagement". LX: "Darcy's Explanation". LXI: "Marriages".
+
+Need adjust chapter 52-53: In user, Chapter LII is Mrs Gardiner letter; LIII is Wickham conversation; LIV Bingley returns; LV Bingley proposal. Good.
+
+Need maybe chapter 46/47/48/49: Let's align:
+XLVI: Jane's letters; elopement.
+XLVII: Elizabeth/Gardiners discuss; return home? User XLVII: "I have been thinking it over again, Elizabeth," as they drove from Lambton; arrives home; Mrs Bennet; Mr Gardiner letter. Title "Rush Home".
+XLVIII: "Mr. Gardiner did not write again..." Mr Bennet returns; letter? Actually XLVIII begins "Mr. Gardiner did not write again..." includes Mr Bennet returns. Title "Mr. Bennet Returns".
+XLIX: letter from Mr. Gardiner: Lydia found, terms. Title "Lydia Found".
+L: wedding arrangements; Lydia returns. Title "Marriage Arrangements".
+LI: Lydia's wedding; reveals Darcy. Title "The Wedding".
+LII: Mrs Gardiner's letter. Title "The Full Story".
+LIII: Elizabeth and Wickham; Bingley returns. Title "Wickham and Lydia Depart"? Actually Chapter LIII in user: "Mr. Wickham was so perfectly satisfied... The day of his and Lydia's departure soon came... Netherfield report..." So title "Lydia Departs".
+LIV: Bingley returns. Title "Bingley Returns".
+LV: Bingley's proposal. Title "Jane's Engagement".
+LVI: Lady Catherine arrives. Title "Lady Catherine's Attack".
+LVII: Letter from Collins. Title "A Letter from Collins".
+LVIII: Darcy's second proposal. Title "Darcy's Second Proposal".
+LIX: Engagement announced. Title "Engagement Announced".
+LX: Darcy and Elizabeth explain. Title "Explaining the Past".
+LXI: Weddings and happy endings. Title "Weddings and Future Happiness".
+
+Need ensure chapter 44/45: In user, Chapter XLIV: Darcy brings Georgiana to Lambton; Bingley; invitation. Chapter XLV: Elizabeth visits Pemberley with Georgiana, Miss Bingley snub. So titles: XLIV "Darcy Introduces Georgiana"; XLV "A Visit to Miss Darcy". Good.
+
+Chapter 40: Elizabeth tells Jane about Darcy's proposal/letter; Lydia? Title "Telling Jane".
+Chapter 39: Return to Longbourn? Wait chapter 39 user: "It was the second week in May... three young ladies set out... inn... Lydia's news." Title "Home to Longbourn".
+Chapter 38: "On Saturday morning Elizabeth and Mr Collins met for breakfast" leaving Hunsford, reaching Gardiner house. Title "Leaving Hunsford".
+Chapter 37: "The two gentlemen left Rosings... Mr Collins... Lady Catherine... Elizabeth...". Title "Leaving Rosings"? Actually Chapter XXXVII: "The two gentlemen left Rosings the next morning; ... Elizabeth...". Title "Leaving Rosings".
+Chapter 36: Elizabeth reads letter, ashamed. Title "Elizabeth's Self-Examination".
+Chapter 35: Darcy gives letter. Title "Darcy's Letter".
+Chapter 34: Proposal and refusal. Title "Darcy's First Proposal".
+Chapter 33: Fitzwilliam reveals Darcy's interference. Title "Fitzwilliam's Revelation".
+Chapter 32: Darcy's solo visit. Title "Darcy's Solo Visit".
+Chapter 31: Parsonage visit by Darcy/Fitzwilliam. Title "Visitors from Rosings".
+Chapter 30: Darcy/Fitzwilliam arrive at Rosings? Actually user Chapter XXX includes Darcy and Fitzwilliam arriving at Parsonage? Let's see: Chapter XXX in user: "Mr. Collins was walking... Darcy and Fitzwilliam...". Title "Darcy Arrives at Hunsford".
+Chapter 29: Elizabeth and Collinses at Rosings? Let's map: User Chapter XXIX: "Every object in next day's journey... Mr. Collins... invitation to Rosings... Darcy arrives?" Wait original Chapter 29: Elizabeth at Hunsford; Darcy arrives? Let's not overfocus.
+Maybe use generic titles: 29 "Life at Hunsford", 30 "Darcy's Arrival". But user's chapter 29 in provided: starts "Every object in the next day's journey was new..."? Actually that's Chapter 28? Let's check. Hmm.
+Let's maybe not rely on exact standard; generic titles can be slightly broad. But need not be wrong.
+
+Let's create final table with 61. Need ensure all chapters. Maybe include note: "The numbering follows the chapters as given." Good.
+
+Potential copyright? User supplied text, transformation allowed. Titles are original short summaries.
+
+Let's craft final answer with markdown table.
+
+Need maybe if user says "short, succinct title" maybe just titles no explanation. Table enough.
+
+Let's write final:
+| Chapter | Title |
+| I | Bingley Takes Netherfield |
+...
+61.
+
+Double-check count 61:
+I 1
+II 2
+III 3
+IV 4
+V 5
+VI 6
+VII 7
+VIII 8
+IX 9
+X 10
+XI 11
+XII 12
+XIII 13
+XIV 14
+XV 15
+XVI 16
+XVII 17
+XVIII 18
+XIX 19
+XX 20
+XXI 21
+XXII 22
+XXIII 23
+XXIV 24
+XXV 25
+XXVI 26
+XXVII 27
+XXVIII 28
+XXIX 29
+XXX 30
+XXXI 31
+XXXII 32
+XXXIII 33
+XXXIV 34
+XXXV 35
+XXXVI 36
+XXXVII 37
+XXXVIII 38
+XXXIX 39
+XL 40
+XLI 41
+XLII 42
+XLIII 43
+XLIV 44
+XLV 45
+XLVI 46
+XLVII 47
+XLVIII 48
+XLIX 49
+L 50
+LI 51
+LII 52
+LIII 53
+LIV 54
+LV 55
+LVI 56
+LVII 57
+LVIII 58
+LIX 59
+LX 60
+LXI 61
+
+Need titles for each:
+I Bingley Takes Netherfield
+II Mr. Bennet Visits Bingley
+III The Meryton Ball
+IV Jane and the Netherfield Party
+V Lucas Lodge Conversation
+VI Darcy Begins to Notice Elizabeth
+VII The Entail and Jane’s Ride
+VIII Jane’s Illness at Netherfield
+IX Mrs. Bennet Visits Netherfield
+X An Evening at Netherfield
+XI Leaving Netherfield
+XII Return to Longbourn
+XIII Mr. Collins Arrives
+XIV Mr. Collins at Longbourn
+XV Mr. Collins’s Marriage Plans
+XVI Wickham’s Story
+XVII Preparations for the Ball
+XVIII The Netherfield Ball
+XIX Mr. Collins Proposes
+XX Elizabeth Refuses Collins
+XXI Collins Turns to Charlotte
+XXII Charlotte Accepts
+XXIII Charlotte’s Engagement Announced
+XXIV Bingley Leaves Hertfordshire
+XXV The Gardiners Arrive
+XXVI Mrs. Gardiner’s Warnings
+XXVII Journey to Hunsford
+XXVIII Arrival at the Parsonage
+XXIX Life at Hunsford
+XXX Darcy Arrives at Rosings
+XXXI Visitors from Rosings
+XXXII Darcy’s Solo Visit
+XXXIII Fitzwilliam’s Revelation
+XXXIV Darcy Proposes
+XXXV Darcy’s Letter
+XXXVI Elizabeth’s Reassessment
+XXXVII Leaving Rosings
+XXXVIII Leaving Hunsford
+XXXIX Home to Longbourn
+XL Telling Jane
+XLI Lydia Goes to Brighton
+XLII Plans for Derbyshire
+XLIII Pemberley
+XLIV Darcy’s Changed Manners
+XLV A Visit to Miss Darcy
+XLVI Lydia’s Elopement
+XLVII Rushing Home
+XLVIII Mr. Bennet Returns
+XLIX Lydia Found
+L Marriage Arrangements
+LI Lydia’s Wedding
+LII Darcy’s Role Revealed
+LIII Lydia Departs
+LIV Bingley Returns
+LV Bingley Proposes
+LVI Lady Catherine’s Warning
+LVII A Letter from Collins
+LVIII Darcy Proposes Again
+LIX Engagement Announced
+
+
+LONGCTX job=ic_sum prompt_tokens=13939 out_chars=552
+LONGCTX job=ic_french prompt_tokens=13992 out_chars=22051
+LONGCTX job=ic_zoomer prompt_tokens=13963 out_chars=34060
+LONGCTX job=vm_sum prompt_tokens=36741 out_chars=661
+LONGCTX job=vm_q1 prompt_tokens=36764 out_chars=1956
+LONGCTX job=vm_q2 prompt_tokens=36755 out_chars=3231
+LONGCTX job=vm_q3 prompt_tokens=36761 out_chars=1219
+LONGCTX job=vm_pony prompt_tokens=36942 out_chars=4885
+LONGCTX job=vm_char prompt_tokens=36741 out_chars=27544
+LONGCTX job=pp_mod prompt_tokens=165471 out_chars=4864
+LONGCTX job=pp_chap prompt_tokens=165466 out_chars=64341
+LONGCTX jobs=11
+remark: dsa_triton.py:668:0: 259 instructions in function
+
+=== pass     : t13-378-xl
+=== run id   : t13-378-xl-20261031-155239
+=== regime   : production
+=== engine   : 1.6.5
+=== package  : C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3\__init__.py
+=== extension: C:\Users\yoho\Downloads\tabbyAPI\venv\Lib\site-packages\exllamav3_ext.cp312-win_amd64.pyd
+=== torch    : 2.11.0+cu130 / cuda 13.0
+=== gpu      : NVIDIA GeForce RTX 4090, 24564 MiB, 596.36
+=== free vram at start (MiB): 24138
+=== harness  : 828E691495A169DCEB68CF2246C528156FBB96D855D8FB3C4E59A9EB5B465EFF
+=== args     : 
+-m D:\llms\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8 -cs 262144 -chunk_size 4096 -ambs 2 -cq 2,2 -mcs 378 -mct 16 -dm D:\llms\Qwen3.8-Flash-Next-DFlash2 -xl
+=== env      : 
+EXL3_HOST_MEM_RESERVE_MB=0 EXL3_MOE_ARENA_HUGEPAGE=0 EXL3_MOE_CPU_PIN=1 EXL3_MOE_CPU_SWAP=0 EXL3_MOE_CPU_SWIZZLE=1 EXL3_MOE_MEMOPS=0 FROZEN_STATE=master->active PYTHONUTF8=1 XDG_CACHE_HOME=C:\Users\yoho\Downloads\tabbyAPI\_agent\v165\engine-state\active
+=== started  : 
+2026-10-31T16:52:39
+=== elapsed s: 1628
