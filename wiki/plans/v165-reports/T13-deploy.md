@@ -251,3 +251,68 @@ server restarted. Verified on the new port: `/v1/models` → `n_ctx=262144`, one
 60.2 tok/s with 114/148 draft tokens accepted, floor watcher re-attached (2193 MB VRAM free).
 
 Nothing else changed: the port is a config value, and 4099 was never a measurement decision.
+
+## Step 9 — the level moves between sessions, and coding is the workload that counts
+
+Two corrections, both measured after the operator pushed back on the campaign's own shortcuts.
+
+### (a) "Do not compare across days" was the wrong rule
+
+Called out as too blunt, and the objection is right: a calendar day is not a variable. Re-running the
+archive's exact regime (split 376, `-cs 262144`, no frozen profile) on three days:
+
+| date | TG 130816 | note |
+|---|---|---|
+| 2026-10-29 | 49.79 | the archive |
+| 2026-10-30 | 37.47 | the day every T6/T8/T9/T11/T12 arm ran |
+| **2026-10-31** | **52.33** | `xday-repro376`, +5 % on the archive |
+
+So the box reproduces the archive two days later, and **2026-10-30 was the outlier** (28 % low), not
+"cross-day comparison" being invalid. The rule that survives is: carry a reference measured in the
+same session, and when a cross-day comparison is unavoidable, re-measure the reference first and
+compare differences — not absolute levels carried across sessions.
+
+What that invalidates: any absolute claim taken only on 2026-10-30. The **huge-page verdict**
+(39.57 against 40.37 median) was measured entirely on that day and should be re-earned on a normal
+day before it is treated as settled. Every *ratio* measured within that day remains valid, because
+all its arms shared the day's level.
+
+The expert-profile content was tested as the explanation and is not it: the same corpus at 378 with
+the frozen master profile gives 58.54, with the live profile 56.42 — the frozen profile is if anything
+the better one, and both are warm (48/48 layers).
+
+### (b) Coding is the operator's main traffic, so the ranking is computed on it
+
+Coding and Agentic-code columns across every drafting arm measured (same corpus throughout):
+
+| arm | Coding | Agentic; code | mean |
+|---|---|---|---|
+| **DFlash2 w4 @378/262144 (deployed)** | **82.8** | **75.0** | 58.54 |
+| DFlash2 w6 @376/131072 | 81.9 | 76.3 | 55.45 |
+| DFlash2 w4 @376/131072 | 80.5 | 73.5 | 56.58 |
+| MTP @364/262144 (its split floor) | 60.9 | 52.1 | 46.77 |
+| **MTP + `-dds`** | **60.5** | 50.5 | 46.50 |
+| MTP w2 (nd2, the old winner) | 59.0 | 53.0 | 46.48 |
+| MTP, `-sdh 0` | 58.7 | 50.8 | 45.86 |
+| sidecar 2.6 bpw w2 | 57.8 | 50.9 | 45.53 |
+| MTP + `-hdt 24` | 57.3 | 49.6 | 49.10 |
+| MTP w4 | 55.0 | 46.8 | 40.45 |
+| MTP + `-sdh 65536` | 54.9 | 51.5 | 43.16 |
+| MTP + `-sdh 32768` | 54.3 | 49.2 | 42.87 |
+
+**What changes under coding weighting, and what does not:**
+
+- **The drafter verdict gets stronger**, not weaker: DFlash2 is 1.36× the stock MTP head on Coding
+  and 1.44× on Agentic code, and its one known regression (translation) is not this traffic.
+- **The draft-cache switch does not survive.** "Q4 is a defensible switch for coding-heavy traffic"
+  rested on a *single* coding prompt (85.2 % against 78.5 %). Re-measured on six coding/agentic
+  prompts, 1.6 k draft tokens per arm: **Q2 66.3 % (1093/1648) and 56.9 tok/s against Q4 66.6 %
+  (1074/1612) and 56.5 tok/s** — the same number twice. The deployed cache stays `"2,2"`, and the
+  earlier recommendation is withdrawn.
+- **`-dds` is the most interesting MTP knob for this traffic** (60.5 against 59.0 on Coding) but it
+  has never been run on DFlash2, and with DFlash2's coding acceptance at ~85 % a window ceiling of 4
+  that can only shorten is unlikely to help. Open, not recommended.
+- **`-hdt` and `-sdh` stay off**: `-hdt 24` is 3 % down on Coding, and both `-sdh` sizes are 6–8 %
+  down, so the repetition-only argument is not needed to reject them here.
+- **Split 378 confirmed on the coding case**: Coding 82.8 against 392's 77.03 in the same protocol,
+  +7.5 %, in line with the +7.8 % corpus mean.
