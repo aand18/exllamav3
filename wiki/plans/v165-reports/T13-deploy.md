@@ -242,3 +242,12 @@ At 165 k tokens of context: Q4 56.5 % cold / 53.2 % cached; Q2 46.4 % / 54.6 % (
 it: Q2 versus Q4 is a wash too. The deployed config stays **`"2,2"`** because it costs half the
 VRAM (248 MB against ~500 MB) with no measured penalty — and Q4 remains a defensible switch for
 coding-heavy traffic, where it measured +6.7 pp acceptance on code.
+
+## Step 8 — port
+
+`network.port` was **4099** in the operator's `config.yml`; the operator asked for their usual
+**5000**. 5000 had no listener and a connect attempt was refused, so the change was made and the
+server restarted. Verified on the new port: `/v1/models` → `n_ctx=262144`, one chat request →
+60.2 tok/s with 114/148 draft tokens accepted, floor watcher re-attached (2193 MB VRAM free).
+
+Nothing else changed: the port is a config value, and 4099 was never a measurement decision.
