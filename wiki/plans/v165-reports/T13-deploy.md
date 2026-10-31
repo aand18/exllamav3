@@ -192,3 +192,53 @@ silences the clamp warning). Boot 31.7 s, warmup 18.5 s.
 The answer was correct — it located the inserted passage "between Chapters XXIX and XXX" and quoted
 its first two sentences — and the floor watcher recorded **1393 MB** free VRAM at the minimum, seven
 times the floor.
+
+## Step 6 — does a smaller drafter buy a lower split? (operator's hypothesis)
+
+The drafter's VRAM is not free for the drafter alone: every byte it does not take is an expert the
+trunk can keep on the GPU. The campaign had compared drafters at fixed splits and splits at a fixed
+drafter, never the two together, so both were measured across the interaction.
+
+| drafter (262 144 cache) | lowest split that loads | corpus tok/s | accepted/round | min free VRAM |
+|---|---|---|---|---|
+| DFlash2 BF16 | **378** (377 refuses) | **58.54** | 2.46 / 4 | 763 MB |
+| MTP head (`-ndt 2`) | **364** (360 refuses) | 46.77 | 1.34 / 2 | 595 MB |
+
+**A smaller drafter does buy a lower split — 14 experts of it — and the split is not worth having.**
+MTP's lighter head (~640 MB of cache+weights against DFlash2's ~1.4 GB) lets the trunk keep 14 more
+experts on the card, and the corpus moves 46.48 → 46.77 tok/s (+0.6 %) while the *drafting* gap is
+12 tok/s (58.54 vs 46.77, −20 % for MTP). The split curve had already flattened by 376 (T10: 368 ≈
+372 ≈ 376 at 131 072), so VRAM freed at the bottom of the ladder buys almost nothing; the value is in
+tokens per verification round (2.46 against 1.34), which the head choice controls.
+
+Consequence: DFlash2 at 378 stays. A smaller drafter is worth considering only if a *future* one
+keeps the window/acceptance, not for the VRAM.
+
+## Step 7 — draft-cache quantisation: what was actually tested, and the Q2-vs-Q4 answer
+
+The campaign's drafting arms never separated the two caches. `model_init.py` builds the draft cache
+with **the same `k_bits`/`v_bits` as the trunk** (`-cq`), so every `run_pass.ps1` arm ran trunk and
+draft cache at the same quant — Q2 ("2,2"). tabbyAPI *can* separate them (`draft_cache_mode`), and
+the deployed config had been set to `"2,2"` by analogy with the trunk, **without a measurement**.
+
+Measured now through the live API (the only instrument that can express it), same six prompts,
+only `draft_cache_mode` changed:
+
+| prompt | Q2 draft cache | Q4 draft cache |
+|---|---|---|
+| coding | 78.5 % | **85.2 %** |
+| json | 57.6 % | **62.5 %** |
+| reasoning | 50.3 % | **59.2 %** |
+| translation | **52.1 %** | 42.4 % |
+| creative | **33.2 %** | 29.7 % |
+| list | **89.5 %** | 87.9 % |
+| **total** | **52.2 %** | 50.4 % |
+| tok/s | 56.0 | 56.1 |
+
+At 165 k tokens of context: Q4 56.5 % cold / 53.2 % cached; Q2 46.4 % / 54.6 % (single samples).
+
+**Verdict: Q2 and Q4 are unresolved at both short and long context, and throughput is identical to
+0.2 %.** That matches the earlier box finding that BF16 versus Q4 draft cache is a wash and extends
+it: Q2 versus Q4 is a wash too. The deployed config stays **`"2,2"`** because it costs half the
+VRAM (248 MB against ~500 MB) with no measured penalty — and Q4 remains a defensible switch for
+coding-heavy traffic, where it measured +6.7 pp acceptance on code.

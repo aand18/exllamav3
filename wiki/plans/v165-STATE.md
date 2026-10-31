@@ -352,6 +352,13 @@ T4 (`T04-armA.md` — reference + thresholds), T5 (`T05-memops.md` — MEMOPS_WI
   one-workload 128-token smoke had said they were equal, so the corpus run decided it.
   End-to-end through the API: 165 433-token prompt prefill **1726 tok/s** (95.8 s), decode 56.6
   tok/s, cached repeat 503 tokens in 9.5 s, min free VRAM 1393 MB, correct answer.
+  **Two follow-ups 2026-10-31:** (a) the drafter's VRAM vs the split was measured together for the
+  first time — MTP's lighter head loads at split **364** (DFlash2's floor is 378) but the corpus moves
+  only 46.48 → 46.77 tok/s (+0.6 %) while the drafting gap is 12 tok/s, so **the split curve is flat
+  there and a smaller drafter is not worth it**; (b) the **draft-cache quant was never separated from
+  the trunk's** — `model_init` uses one `-cq` for both, so every arm was Q2/Q2. Measured through the
+  API instead: Q2 52.2 % vs Q4 50.4 % acceptance on six prompts (mixed signs, identical tok/s) and
+  46.4/54.6 % vs 56.5/53.2 % at 165 k — **unresolved either way**, so `"2,2"` stays (half the VRAM).
   Exact files: `wiki/plans/v165-reports/artifacts/deployed/{config.yml,start_tuned.ps1}`.
   **Two deployment findings:** tabbyAPI has no `Q2` cache mode — it validates
   `FP16|Q8|Q6|Q4` or a numeric pair, so Q2 is spelled `"2,2"` (the first boot died on it); and

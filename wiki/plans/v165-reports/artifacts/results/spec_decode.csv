@@ -274,3 +274,13 @@ t13-378-corpus,t13-378-corpus-20261031-162616,Creative (reasoning),DFlash (greed
 t13-378-corpus,t13-378-corpus-20261031-162616,Translation,DFlash (greedy),44.58,0.000,1.87,4.00
 t13-378-corpus,t13-378-corpus-20261031-162616,Translation (reasoning),DFlash (greedy),39.45,0.000,1.54,4.00
 t13-378-corpus,t13-378-corpus-20261031-162616,Trivial repetition,DFlash (greedy),70.49,0.000,3.97,4.00
+t13-mtp368-smoke,t13-mtp368-smoke-20261031-172655,Coding,MTP (greedy),58.19,0.000,1.33,2.00
+t13-mtp364-smoke,t13-mtp364-smoke-20261031-172804,Coding,MTP (greedy),59.46,0.000,1.36,2.00
+t13-mtp364-corpus,t13-mtp364-corpus-20261031-173709,Agentic; code,MTP (greedy),52.14,0.000,1.48,2.00
+t13-mtp364-corpus,t13-mtp364-corpus-20261031-173709,Agentic; curl,MTP (greedy),49.39,0.000,1.33,2.00
+t13-mtp364-corpus,t13-mtp364-corpus-20261031-173709,Coding,MTP (greedy),60.89,0.000,1.50,2.00
+t13-mtp364-corpus,t13-mtp364-corpus-20261031-173709,Creative,MTP (greedy),37.88,0.000,1.06,2.00
+t13-mtp364-corpus,t13-mtp364-corpus-20261031-173709,Creative (reasoning),MTP (greedy),40.41,0.000,1.14,2.00
+t13-mtp364-corpus,t13-mtp364-corpus-20261031-173709,Translation,MTP (greedy),42.99,0.000,1.33,2.00
+t13-mtp364-corpus,t13-mtp364-corpus-20261031-173709,Translation (reasoning),MTP (greedy),42.33,0.000,1.28,2.00
+t13-mtp364-corpus,t13-mtp364-corpus-20261031-173709,Trivial repetition,MTP (greedy),48.13,0.000,1.60,2.00
