@@ -23,7 +23,7 @@
 # On a floor breach it writes BREACH-<Tag>.txt and kills the watched process tree.
 #
 # Outputs (in -OutDir):
-#   watch-<Tag>.csv      t_iso,free_vram_mb,used_vram_mb,free_ram_mb,proc_ws_mb
+#   watch-<Tag>.csv      t_iso,free_vram_mb,used_vram_mb,avail_ram_mb,proc_ws_mb
 #                        (proc_ws_mb is the sum over the watched process AND its descendants:
 #                         the CPU-MoE expert arena lives in a child worker)
 #   BREACH-<Tag>.txt     only on breach: time, measured values, action taken
@@ -49,7 +49,7 @@ $csv        = Join-Path $OutDir "watch-$Tag.csv"
 $stopPath   = Join-Path $OutDir "stop-$Tag.flag"
 $breachPath = Join-Path $OutDir "BREACH-$Tag.txt"
 Remove-Item $csv, $stopPath, $breachPath -ErrorAction SilentlyContinue
-Set-Content -Path $csv -Value "t_iso,free_vram_mb,used_vram_mb,free_ram_mb,proc_ws_mb" -Encoding ASCII
+Set-Content -Path $csv -Value "t_iso,free_vram_mb,used_vram_mb,avail_ram_mb,proc_ws_mb" -Encoding ASCII
 
 $minVram    = [int]::MaxValue
 $minRam     = [int]::MaxValue
@@ -100,11 +100,16 @@ while ($true)
         }
     }
 
-    $freeRam = -1
+    # AVAILABLE, not free: FreePhysicalMemory excludes the standby list, and standby is exactly the
+    # streamed n-gram table (51.8 GB) filling the file cache - memory the OS gives back in
+    # milliseconds. Measured 2026-11-01: the free-RAM floor killed a healthy server at 1699 MB
+    # "free" while its working set had not moved all session (39 111 MB flat) and the cache held
+    # the difference. AvailableMBytes is what a new allocation can actually get.
+    $availRam = -1
     try
     {
-        $os = Get-CimInstance Win32_OperatingSystem -Property FreePhysicalMemory -ErrorAction Stop
-        $freeRam = [int]($os.FreePhysicalMemory / 1024)
+        $mem = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory -Property AvailableMBytes -ErrorAction Stop
+        $availRam = [int]$mem.AvailableMBytes
     }
     catch { }
 
@@ -142,21 +147,21 @@ while ($true)
 
     $samples++
     if ($freeVram -ge 0 -and $freeVram -lt $minVram) { $minVram = $freeVram }
-    if ($freeRam  -ge 0 -and $freeRam  -lt $minRam)  { $minRam  = $freeRam }
+    if ($availRam -ge 0 -and $availRam -lt $minRam)  { $minRam  = $availRam }
     if ($ws -gt $peakWs) { $peakWs = $ws }
 
-    $row = "{0},{1},{2},{3},{4}" -f (Get-Date).ToString("s"), $freeVram, $usedVram, $freeRam, $ws
+    $row = "{0},{1},{2},{3},{4}" -f (Get-Date).ToString("s"), $freeVram, $usedVram, $availRam, $ws
     Add-Content -Path $csv -Value $row -Encoding ASCII
 
     $vramLow = ($freeVram -ge 0 -and $freeVram -lt $MinFreeVramMB)
-    $ramLow  = ($freeRam  -ge 0 -and $freeRam  -lt $MinFreeRamMB)
+    $ramLow  = ($availRam -ge 0 -and $availRam -lt $MinFreeRamMB)
     if ($vramLow -or $ramLow)
     {
         $breach = $true
         $msg = @(
             ("BREACH tag={0} at {1}" -f $Tag, (Get-Date).ToString("s")),
             ("free_vram_mb={0} floor={1} low={2}" -f $freeVram, $MinFreeVramMB, $vramLow),
-            ("free_ram_mb={0} floor={1} low={2}" -f $freeRam, $MinFreeRamMB, $ramLow),
+            ("avail_ram_mb={0} floor={1} low={2}" -f $availRam, $MinFreeRamMB, $ramLow),
             ("watched_pid={0} launcher_pid={1}" -f $watchPid, $TargetPid)
         )
         if ($watchPid -gt 0)
@@ -175,6 +180,6 @@ while ($true)
 $minVramOut = if ($minVram -eq [int]::MaxValue) { -1 } else { $minVram }
 $minRamOut  = if ($minRam  -eq [int]::MaxValue) { -1 } else { $minRam }
 $breachInt  = if ($breach) { 1 } else { 0 }
-Write-Output "WATCH tag=$Tag samples=$samples watched_pid=$watchPid min_free_vram_mb=$minVramOut min_free_ram_mb=$minRamOut peak_proc_ws_mb=$peakWs breach=$breachInt"
+Write-Output "WATCH tag=$Tag samples=$samples watched_pid=$watchPid min_free_vram_mb=$minVramOut min_avail_ram_mb=$minRamOut peak_proc_ws_mb=$peakWs breach=$breachInt"
 if ($breach) { Write-Output ("BREACH_FILE=" + $breachPath) }
 exit $(if ($breach) { 4 } else { 0 })

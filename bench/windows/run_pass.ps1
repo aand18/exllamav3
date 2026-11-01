@@ -572,7 +572,7 @@ elseif ($Runner -eq "longctx" -and $lcRows.Count -eq 0) { $status = "fail" }
 # --- Persist -----------------------------------------------------------------------------------
 $passesCsv = Join-Path $RES "passes.csv"
 if (-not (Test-Path $passesCsv)) {
-    Set-Content -Path $passesCsv -Value "tag,run_id,finished_utc,regime,status,engine,ext,elapsed_s,max_length,min_free_vram_mb,min_free_ram_mb,peak_proc_ws_mb,samples,breach,env,split,threads,args,harness_sha256,log,runner,peak_alloc_mb,peak_reserved_mb" -Encoding ASCII
+    Set-Content -Path $passesCsv -Value "tag,run_id,finished_utc,regime,status,engine,ext,elapsed_s,max_length,min_free_vram_mb,min_avail_ram_mb,peak_proc_ws_mb,samples,breach,env,split,threads,args,harness_sha256,log,runner,peak_alloc_mb,peak_reserved_mb" -Encoding ASCII
 }
 $envStr = (($envApplied.Keys | Sort-Object | ForEach-Object { "$_=$($envApplied[$_])" }) -join " ")
 $argStr = (($argsList -join " ") -replace ",", ";")
@@ -634,7 +634,7 @@ foreach ($r in $tgRows) {
 Write-Output ("HARNESS sha256=$harnessHash")
 Write-Output ("PASS tag=$Tag regime=$Regime status=$status elapsed_s=$elapsed engine=$engine ext=$extName")
 Write-Output ("GPU  $gpu")
-Write-Output ("FLOORS min_free_vram_mb=$minVram min_free_ram_mb=$minRam peak_proc_ws_mb=$peakWs samples=$samples breach=$breachInt")
+Write-Output ("FLOORS min_free_vram_mb=$minVram min_avail_ram_mb=$minRam peak_proc_ws_mb=$peakWs samples=$samples breach=$breachInt")
 if ($peakAlloc -gt 0) { Write-Output ("ALLOC  peak_allocated_mb=" + [string]::Format($inv, "{0:F0}", $peakAlloc) + " peak_reserved_mb=" + [string]::Format($inv, "{0:F0}", $peakReserved)) }
 foreach ($r in $armRows) { Write-Output ("ARM {0} tok_s={1} acc={2}/{3} rounds={4}" -f $r[0], [string]::Format($inv, "{0:F2}", $r[1]), [string]::Format($inv, "{0:F2}", $r[2]), [string]::Format($inv, "{0:F2}", $r[3]), $r[4]) }
 if ($ppRows.Count -gt 0) {

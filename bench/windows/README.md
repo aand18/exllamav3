@@ -20,7 +20,10 @@ model, run `eval/perf.py`". These scripts make that repeatable.
 ## Floors: non-negotiable
 
 Every run — pass, build, boot, deployment smoke test — holds **100 MB free VRAM** and **1200 MB
-free system RAM** at every sample: the operator's floors, `floors` in `state.json` for a pass and
+**available** system RAM at every sample (available, not free: standby is the streamed n-gram table's
+file cache and the OS hands it back on demand — a free-RAM floor killed a healthy server on
+2026-11-01 whose working set had not moved, see T13 step 10): the operator's floors, `floors` in
+`state.json` for a pass and
 `-MinFreeVramMB`/`-MinFreeRamMB` for a build. `watch.ps1` is the only sanctioned way to enforce
 that, and a run whose report has no `FLOORS` line is not evidence. On breach the watcher kills the
 process tree, writes `results/BREACH-<tag>-<utc>.txt`, and `run_pass.ps1` returns status `breach`
@@ -116,13 +119,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File \
 
 | Path | Contents |
 |---|---|
-| `results/passes.csv` | `tag, run_id, finished_utc, regime, status, engine, ext, elapsed_s, max_length, min_free_vram_mb, min_free_ram_mb, peak_proc_ws_mb, samples, breach, env, split, threads, args, harness_sha256, log, runner, peak_alloc_mb, peak_reserved_mb` |
+| `results/passes.csv` | `tag, run_id, finished_utc, regime, status, engine, ext, elapsed_s, max_length, min_free_vram_mb, min_avail_ram_mb, peak_proc_ws_mb, samples, breach, env, split, threads, args, harness_sha256, log, runner, peak_alloc_mb, peak_reserved_mb` |
 | `results/pp.csv` | `tag, run_id, band, pp_tok_s` |
 | `results/tg.csv` | `tag, run_id, context, s1, s2, s3, s4` |
 | `results/spec_decode.csv` | `tag, run_id, category, arm, tok_s, ratio, acc, draft` — a drafting pass's per-category table |
 | `results/arms.csv` | `tag, run_id, arm, tok_s, acc, draft, rounds` — the `ARM` lines, one row per arm |
 | `results/longctx.csv` | `tag, run_id, job, prompt_tokens, out_chars` — the `LONGCTX` lines, one row per retrieval test |
-| `results/watch-<tag>-<utc>.csv` | `t_iso, free_vram_mb, used_vram_mb, free_ram_mb, proc_ws_mb` |
+| `results/watch-<tag>-<utc>.csv` | `t_iso, free_vram_mb, used_vram_mb, avail_ram_mb, proc_ws_mb` |
 | `results/builds.csv` | `tag, run_id, finished_utc, src, exit, elapsed_s, wheel, wheel_mb, harness_sha256, log` — one row per build, and `log` names `logs/build-<tag>-<utc>.log` |
 | `logs/perf-<tag>-<utc>.log` | runner stdout+stderr, identity header appended last (partial metrics survive a kill); `.err.log` beside it keeps the raw stderr |
 | `results/BREACH-<tag>-<utc>.txt` | floor violation: values, action taken |

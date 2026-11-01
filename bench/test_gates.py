@@ -709,7 +709,7 @@ class CitesFailureGate(unittest.TestCase):
         with open(os.path.join(res, "passes.csv"), "w", newline="") as f:
             w = csv.writer(f)
             w.writerow(["tag","run_id","finished_utc","regime","status","engine","ext","elapsed_s",
-                        "max_length","min_free_vram_mb","min_free_ram_mb","peak_proc_ws_mb","samples",
+                        "max_length","min_free_vram_mb","min_avail_ram_mb","peak_proc_ws_mb","samples",
                         "breach","env","split","threads","args","harness_sha256","log","runner",
                         "peak_alloc_mb","peak_reserved_mb"])
             w.writerow(["bad","bad-20261030-000001","t","production","fail","1.6.5","x.pyd","6","131072",
