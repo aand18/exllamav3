@@ -17,10 +17,13 @@ Usage:
   bench/size_check.py --model ... --mcs 376 --cs 262144 --draft mtp --json
   bench/size_check.py --model ... --min-cs 34560 1024        # min cache for prompt+generation
 
-Calibration: the cache model reproduces the measured 2.093 GiB at `-cs 262144`, slots 2,
-`-cq 2,2` (KV 1.875 GiB over 12 full-attention layers = 640 B/token/layer, plus 0.218 GiB of GDN
-recurrent state). Bit widths scale linearly from that point; the 640 B figure already carries the
-Q2 group scales, so treat other widths as estimates.
+Cache model: the engine's own tensor shapes, not a scaled measurement. A QSA layer
+(`cache/qsa.py`) stores K and V at the requested width plus fp16 indexer side planes (raw key
+per token, pooled key per compress-ratio block), and those planes do NOT scale with the cache
+width. At `-cq 2,2` that is 320 B of packed K/V + 320 B of planes = 640 B/token/layer, which is
+the measured 2.093 GiB at `-cs 262144`, slots 2 (12 full-attention layers) plus 0.218 GiB of GDN
+recurrent state. Earlier versions scaled that 640 B linearly to 16 bits and so overestimated the
+fp16 cache 2.3x (15.8 GiB instead of 6.9 GiB at 262k).
 """
 
 from __future__ import annotations
@@ -33,8 +36,8 @@ import os
 import struct
 import sys
 
-KV_BYTES_PER_TOKEN_PER_LAYER_2BIT = 640.0   # measured, see module docstring
-RECURRENT_GIB_2_SLOTS_2BIT = 0.218          # measured (GDN states, 48 layers, 2 slots)
+KV_BYTES_PER_TOKEN_PER_LAYER_2BIT = 640.0   # measured, see module docstring (fallback only)
+RECURRENT_GIB_2_SLOTS = 0.218               # measured (GDN states, 48 layers, 2 slots)
 PAGE = 256
 
 
@@ -87,11 +90,28 @@ def split_costs(sizes: dict[str, int], num_experts: int, mcs: int) -> dict:
     return {"gpu_bytes": trunk, "arena_bytes": arena, "has_experts": bool(expert_all)}
 
 
-def cache_bytes(cfg: dict, cs: int, bits: float, slots: int) -> dict:
+def cache_bytes(cfg: dict, cs: int, bits_k: float, bits_v: float, slots: int) -> dict:
+    """Bytes the engine allocates: cache/quant.py + cache/qsa.py shapes (see module docstring)."""
     layer_types = cfg.get("layer_types") or []
     kv_layers = sum(1 for t in layer_types if t == "full_attention") or 1
-    kv = int(KV_BYTES_PER_TOKEN_PER_LAYER_2BIT * (bits / 2.0) * cs * kv_layers)
-    rec = int(RECURRENT_GIB_2_SLOTS_2BIT * (1024 ** 3) * (bits / 2.0) * slots / 2)
+    token_dim = int(cfg.get("num_key_value_heads") or 0) * int(cfg.get("head_dim") or 0)
+    idx_dim = int(cfg.get("indexer_head_dim") or 0)
+    idx_ratio = int(cfg.get("indexer_compress_ratio") or 1) or 1
+    if not token_dim:
+        # config without the fields this model has: fall back to the one calibrated point
+        bits = (bits_k + bits_v) / 2.0
+        kv = int(KV_BYTES_PER_TOKEN_PER_LAYER_2BIT * (bits / 2.0) * cs * kv_layers)
+    else:
+        # fp16 planes: one raw indexer key per token plus one pooled key per compress-ratio block
+        planes = (idx_dim + idx_dim // idx_ratio) * 2 if idx_dim else 0
+        groups = token_dim // 32
+        if bits_k >= 16 and bits_v >= 16:
+            per_token_layer = token_dim * 2 * 2 + planes           # k, v fp16
+        else:
+            # packed words: token_dim//32 groups of k_bits (and v_bits) int32, plus fp16 scales
+            per_token_layer = groups * (bits_k + bits_v) * 4 + 2 * groups * 2 + planes
+        kv = int(per_token_layer * cs * kv_layers)
+    rec = int(RECURRENT_GIB_2_SLOTS * (1024 ** 3) * slots / 2)
     return {"kv_bytes": kv, "recurrent_bytes": rec, "kv_layers": kv_layers,
             "bytes": kv + rec}
 
@@ -147,7 +167,6 @@ def main(argv: list[str]) -> int:
         ap.error("--mcs and --cs are required unless --min-cs is used")
 
     bits_k, bits_v = (float(x) for x in args.cq.split(","))
-    bits = (bits_k + bits_v) / 2
 
     host_streamed = {n: b for n, b in sizes.items() if "ngram_embedding" in n}
     mtp = {n: b for n, b in sizes.items() if n.startswith("mtp.")}
@@ -157,7 +176,7 @@ def main(argv: list[str]) -> int:
     out: dict = {"model": args.model, "mcs": args.mcs, "cs": args.cs, "cq": args.cq}
 
     trunk = split_costs(trunk_sizes, num_experts, args.mcs)
-    cache = cache_bytes(tcfg, args.cs, bits, args.slots)
+    cache = cache_bytes(tcfg, args.cs, bits_k, bits_v, args.slots)
     vram = trunk["gpu_bytes"] + cache["bytes"]
     ram = trunk["arena_bytes"]
 
@@ -182,7 +201,25 @@ def main(argv: list[str]) -> int:
         dlayers = {layer_of(n) for n in dsizes if layer_of(n) is not None}
         dcount = (max(dlayers) + 1) if dlayers else 1
         draft = split_costs(dsizes, num_experts, args.mcs)
-        dcache = cache_bytes({"layer_types": ["full_attention"] * dcount}, args.cs, bits, args.slots)
+        dcfg_path = os.path.join(ddir, "config.json")
+        dcfg = {}
+        if os.path.exists(dcfg_path):
+            with open(dcfg_path, encoding="utf-8") as f:
+                dcfg = json.load(f)
+            dcfg = dcfg.get("text_config", dcfg)
+        if "dflash_config" in dcfg or "dspark" in str(dcfg.get("model_type") or ""):
+            # DFlash/DSpark stores ONE shared KV row of head_dim per token per layer
+            # (cache/dsa.py: CacheLayer_dspark), not num_kv_heads rows
+            dcache = {"bytes": int(dcfg.get("head_dim") or 0) * 2 * dcount * args.cs}
+        else:
+            # MTP head: one plain full-attention layer with the trunk's K/V geometry
+            fields = {"num_key_value_heads": tcfg.get("num_key_value_heads"),
+                      "head_dim": tcfg.get("head_dim"),
+                      "indexer_head_dim": None, "indexer_compress_ratio": None}
+            if ddir == args.model:
+                pass
+            dcache = cache_bytes({**fields, "layer_types": ["full_attention"] * dcount},
+                                 args.cs, bits_k, bits_v, args.slots)
         vram += draft["gpu_bytes"] + dcache["bytes"]
         ram += draft["arena_bytes"]
         out["draft"] = {"kind": args.draft,

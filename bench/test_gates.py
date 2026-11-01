@@ -678,6 +678,38 @@ class SizeCheckArgv(unittest.TestCase):
                 self.assertNotIn("--draft", verify_task.size_check_argv(self.state(draft)))
 
 
+size_check = load_tool(os.path.join(HERE, "size_check.py"), "size_check_gates")
+
+
+class CacheModelShapes(unittest.TestCase):
+    """The cache model follows the engine's tensor shapes, not one measurement scaled.
+
+    A QSA layer stores K and V at the requested width plus fp16 indexer planes, and the planes do
+    not shrink when the cache does. Scaling the measured 2-bit point linearly to 16 bits overstated
+    the fp16 cache 2.3x (15.8 GiB instead of 6.9 GiB at 262k) and hid a configuration that fits.
+    """
+
+    CFG = {"layer_types": ["linear_attention"] * 36 + ["full_attention"] * 12,
+           "num_key_value_heads": 2, "head_dim": 256,
+           "indexer_head_dim": 128, "indexer_compress_ratio": 4}
+
+    def test_two_bit_reproduces_the_measured_point(self):
+        cache = size_check.cache_bytes(self.CFG, 262144, 2, 2, 2)
+        self.assertEqual(cache["kv_layers"], 12)
+        self.assertEqual(cache["kv_bytes"] // (262144 * 12), 640)     # measured 2.093 GiB, all slots
+        self.assertEqual(round(size_check.mib(cache["bytes"])), 2143)
+
+    def test_fp16_is_the_tensor_shape_not_eight_times_two_bit(self):
+        cache = size_check.cache_bytes(self.CFG, 262144, 16, 16, 2)
+        self.assertEqual(cache["kv_bytes"] // (262144 * 12), 2048 + 320)   # k+v fp16, then the planes
+        self.assertEqual(round(size_check.mib(cache["kv_bytes"]) / 1024, 2), 6.94)
+
+    def test_the_planes_do_not_depend_on_the_cache_width(self):
+        widths = [size_check.cache_bytes(self.CFG, 262144, b, b, 2)["kv_bytes"] // (262144 * 12)
+                  for b in (2, 4, 6, 16)]
+        self.assertEqual(widths, [640, 896, 1152, 2368])   # 16 groups: packed words + scales + planes
+
+
 class PassesCsvCells(unittest.TestCase):
     """A column named for one quantity may not carry another, or a value the run never received."""
 
