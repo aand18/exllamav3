@@ -364,6 +364,10 @@ T4 (`T04-armA.md` — reference + thresholds), T5 (`T05-memops.md` — MEMOPS_WI
   (1487 MB); the shortfall was the standby list holding the streamed n-gram table. `watch.ps1` now
   floors on **available** RAM (`AvailableMBytes`), column renamed `avail_ram_mb`, passes.csv cell
   `min_avail_ram_mb` (commit `784f8b44`). Server restarted on the same config and serving.
+  **2026-11-01 08:52:** killed a second time, on the corrected metric — available RAM 2037 MB
+  against the 2048 MB floor, working set 43.0 GB, VRAM fine. That is the workload's normal footprint,
+  not a fault. **The production server now runs with no watcher**; the floors stay for measurement
+  passes only. Restarted 10:31 UTC, load 32.1 s, `n_ctx=262144`.
   Exact files: `wiki/plans/v165-reports/artifacts/deployed/{config.yml,start_tuned.ps1}`.
   **Two deployment findings:** tabbyAPI has no `Q2` cache mode — it validates
   `FP16|Q8|Q6|Q4` or a numeric pair, so Q2 is spelled `"2,2"` (the first boot died on it); and

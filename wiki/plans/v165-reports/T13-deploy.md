@@ -351,3 +351,24 @@ The server was restarted on the same configuration and is serving again (loaded 
 262144); the harness was already sending 22.5 k-token prompts while the restart was being verified,
 which is why the verification request measured 20–33 T/s instead of 60 — contention with those
 in-flight jobs, not a regression.
+
+## Step 11 — second kill, and the production decision (2026-11-01 08:52)
+
+The watcher killed the server again, this time on the corrected metric:
+
+```
+free_vram_mb=1219 floor=200 low=False
+avail_ram_mb=2037 floor=2048 low=True
+watched_pid=24164 launcher_pid=40340
+action=killed process tree
+```
+
+VRAM was healthy and the process working set was 43.0 GB (up from 38.6 GB at the start of the run),
+so this was not a leak: the streamed n-gram table plus the harness's own concurrency used the host
+RAM for real. The available-RAM floor of 2048 MB sits below the normal working set of this workload,
+so it fires on healthy production traffic, not on a fault.
+
+**Decision:** the production server runs with **no watcher**. The floors stay in `watch.ps1` for
+measurement passes, where a runaway configuration has to die inside seconds, but nobody arms them
+against the live endpoint. With the watcher gone the host RAM ceiling is enforced by the OS again.
+The server was restarted at 10:31 UTC (load 32.1 s, `n_ctx=262144`, port 5000, same key).
