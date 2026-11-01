@@ -198,7 +198,7 @@ the RAM floor is the component shrunk instead.
 
 ## Provenance
 
-Dated record, superseded decisions and the measurements behind the winners:
-`wiki/plans/v165-STATE-history.md`. Earlier revisions: `git log -p wiki/plans/v165-STATE.md`.
-Per-task evidence is in `wiki/plans/v165-reports/`.
+Dated record and the measurements behind each winner:
+`git show 305f75fb:wiki/plans/v165-STATE.md`, plus the per-task reports in
+`wiki/plans/v165-reports/`. Earlier revisions: `git log -p wiki/plans/v165-STATE.md`.
 
