@@ -316,3 +316,38 @@ Coding and Agentic-code columns across every drafting arm measured (same corpus 
   down, so the repetition-only argument is not needed to reject them here.
 - **Split 378 confirmed on the coding case**: Coding 82.8 against 392's 77.03 in the same protocol,
   +7.5 %, in line with the +7.8 % corpus mean.
+
+## Step 10 — the watcher killed a healthy server (2026-11-01): free RAM is not available RAM
+
+At 00:44:06 the floor watcher killed the process tree. Verbatim from `BREACH-server262.txt`:
+
+```
+free_vram_mb=1487 floor=200 low=False
+free_ram_mb=1699 floor=2048 low=True
+action=killed process tree
+```
+
+The server had been serving for five hours (18 k-token prompts at 40–56 T/s, 35–59 % draft
+acceptance) and the kill was **wrong**. Three facts, all from the same session's samples:
+
+- **VRAM was nowhere near its floor** — 1487 MB free against 200 MB.
+- **The process's working set never moved**: 39 111 MB at the first sample and 39 111 MB at the last.
+  Nothing was growing inside the server.
+- **Free RAM fell 4610 → 3134 → 1699 MB in three seconds** while the working set was flat. That is
+  the **standby list** — the OS file cache, which by then held much of the 51.8 GB streamed n-gram
+  table. `Win32_OperatingSystem.FreePhysicalMemory` excludes standby, so the watcher counted
+  reclaimable cache as a shortage.
+
+Right now the same box reports `FreePhysicalMemory` 45 277 MB against `AvailableMBytes` 48 506 MB,
+i.e. a standing ~3 GB that free-RAM accounting hides, and during service the gap is far larger.
+
+**Fix (commit `784f8b44`):** `watch.ps1` reads `Win32_PerfFormattedData_PerfOS_Memory.AvailableMBytes`
+— what a new allocation can actually get, and what Task Manager calls Available. The CSV column is
+renamed `free_ram_mb` → `avail_ram_mb` and the `passes.csv` cell `min_free_ram_mb` →
+`min_avail_ram_mb` (truthful names; the header on the box was repadded), and the floor keeps its
+2048 MB value, which is now a real shortage rather than a cache artefact.
+
+The server was restarted on the same configuration and is serving again (loaded 31.6 s, n_ctx
+262144); the harness was already sending 22.5 k-token prompts while the restart was being verified,
+which is why the verification request measured 20–33 T/s instead of 60 — contention with those
+in-flight jobs, not a regression.
