@@ -744,8 +744,9 @@ class NeedlesRunner(unittest.TestCase):
         # needle as found. The cut at the first NEEDLE line is what makes the score mean anything.
         with open(self.RUN_PASS, encoding = "utf-8") as f:
             text = f.read()
-        self.assertIn("$firstNeedle = [regex]::Match($raw, '\\r?\\nNEEDLE name=')", text)
-        self.assertIn("$answerText = $raw.Substring(0, $firstNeedle.Index)", text)
+        self.assertIn("$_ -notmatch '^NEEDLE'", text, "every truth line is stripped, not just the first")
+        self.assertNotIn("$firstNeedle", text,
+                         "cutting at the first truth line loses the second haystack")
 
 
 class ChunkSizeDelta(unittest.TestCase):

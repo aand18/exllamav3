@@ -562,10 +562,10 @@ foreach ($rawLine in (($raw -replace "`r", "`n") -split "`n")) {
 # Needle runs: the pairs are printed by the runner, and the hit is computed here against the answer
 # text so a run carries its own score instead of needing a second pass over the log.
 $ndRows = New-Object System.Collections.ArrayList
-$answerText = $raw
-$firstNeedle = [regex]::Match($raw, '\r?\nNEEDLE name=')
-if ($firstNeedle.Success) { $answerText = $raw.Substring(0, $firstNeedle.Index) }
-$answerText = ($answerText -replace "`r", "`n")
+# Strip EVERY truth line, not just the first one: with -nt 2 the answers and the truth lines
+# interleave, so cutting at the first NEEDLE line scored the second haystack against nothing and
+# reported 20/40 for a run that found 40/40 (measured 2026-11-02).
+$answerText = ((($raw -replace "`r", "`n") -split "`n") | Where-Object { $_ -notmatch '^NEEDLE' }) -join "`n"
 foreach ($rawLine in (($raw -replace "`r", "`n") -split "`n")) {
     $l = ($rawLine -replace $ansi, "").Trim()
     if ($l -match '^NEEDLE name=(\S+)\s+code=(\d+)$') {
