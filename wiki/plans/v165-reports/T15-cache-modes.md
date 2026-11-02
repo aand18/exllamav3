@@ -235,3 +235,30 @@ it sends fewer tokens where acceptance is already at the ceiling.
 **tabbyAPI needs no patch.** `config.yml` already carries `dynamic_draft: false` in the draft block
 and the server passes `dynamic_draft_tokens` to the engine; `draft_num_tokens: 4` is the ceiling.
 The earlier note that a patch was necessary was wrong. Deployment is one config change.
+
+## Concurrency: two slots share the GPU, they do not multiply it
+
+`eval/concurrency.py` puts N jobs in flight before the first token, so `max_batch_size 2` finally
+gets measured. Q2 at 262 k, 256 tokens per job, greedy.
+
+| arm | wall | job 1 prefill / decode | job 2 prefill / decode | aggregate |
+|---|---|---|---|---|
+| 1 x 20 k | 20.0 s | 10.9 s / 9.2 s (27.9 T/s) | — | 12.77 t/s |
+| 2 x 20 k | 40.3 s | 22.4 s / 18.0 s (14.2 T/s) | 20.2 s / 17.7 s (14.5 T/s) | 12.69 t/s |
+| 1 x 131 k | 80.0 s | 70.6 s / 8.8 s (29.0 T/s) | — | 3.20 t/s |
+| 2 x 131 k | 158.9 s | 69.5 s / 9.2 s (27.8 T/s) | 69.9 s / 9.6 s (26.7 T/s) | 3.22 t/s |
+
+**Two 20 k prompts co-reside and share the card.** Each one's prefill doubles (10.9 → 22.4 s) and
+each one's decode halves (27.9 → 14.2 T/s), so every request takes twice as long and the aggregate
+does not move: 12.69 against 12.77 t/s. That is fair sharing, not throughput. It is what a
+memory-bandwidth-bound decode should do on one GPU, and it matches what the engine is famous for:
+requests make progress together, they do not go faster together.
+
+**Two 131 k prompts cannot co-reside.** They need 262 209 tokens against a 262 144 cache, so the
+second job waits and the pair runs strictly one after the other (159 s against 80 s for the same
+work alone). Each job's prefill runs at the full solo rate (69.5 s, the same as 70.6 s), which is
+the fingerprint of serialization rather than overlap.
+
+Practical reading for two agents on this box: parallelism buys latency hiding for work that mixes
+tool calls with generation, and it buys nothing in tokens per second. At 131 k each, plan on
+sequential service.
