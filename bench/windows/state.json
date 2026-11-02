@@ -42,7 +42,8 @@
     ],
     "frozen_state_master": "C:\\Users\\yoho\\Downloads\\tabbyAPI\\_agent\\v165\\engine-state\\master",
     "chunk_size": 4096,
-    "updated_utc": "2026-11-02"
+    "updated_utc": "2026-11-02",
+    "fit_headroom_mb": 512
   },
   "history": [
     {

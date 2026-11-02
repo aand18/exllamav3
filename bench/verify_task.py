@@ -89,6 +89,11 @@ def size_check_argv(state: dict) -> list[str]:
         # machine that does not exist: at the deployed 381/262144/4,4 the fit check said FITS while
         # the run loaded 839 MiB against a 1024 MiB headroom (closing audit, 2026-11-02).
         argv += ["--draft", wsl_path(str(draft["draft_model"]))]
+    # The tool's default headroom (1024 MiB) is stricter than the engine's own accounting: the served
+    # 381/262144/4,4 boots with 839 MiB after its reserve and runs in production. A state may state
+    # the headroom it is held to, so the pre-gate measures that contract instead of the tool's default.
+    if state.get("fit_headroom_mb") is not None:
+        argv += ["--headroom-mb", str(int(state["fit_headroom_mb"]))]
     return argv
 
 
