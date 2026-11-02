@@ -208,7 +208,35 @@ the RAM floor is the component shrunk instead.
 - DFlash2 quantisation remains the last speed compromise: ~0.8 GB, about nine experts, and the
   drafter's own break-even near 1.5 accepted per round. Needs the Windows converter and a window.
 
-## Provenance## Provenance
+## Closing audit (2026-11-02)
+
+A clean-context auditor checked the campaign against its own record. Closed by evidence: the Q4/Q2
+comparison at one split (`t16-q2-389-…`), the post gate on T13–T16, `state.json` pinned to the
+deployed copy by `test_gates.ProductionState`, and the drafter path emitted from the regime. Fixed
+after the audit: two mistyped cells and an unsourced row in `T16`, three compromises stated more
+favour-ably than the data, `size_check_argv` leaving the sidecar out of the fit pre-gate, and the
+pre-gate now honouring a declared `fit_headroom_mb` because the tool's 1024 MiB default is stricter
+than the engine's own accounting (the served config boots with 839 MiB).
+
+Still open and disclosed: production acceptance (1.58/4 against a corpus 58.5 %), per-category noise
+(two identical references differ 3.3 % on Coding), and the served placement never measured with the
+drafter attached.
+
+## Provenance## Closing audit (2026-11-02)
+
+A clean-context auditor checked the campaign against its own record. Closed by evidence: the Q4/Q2
+comparison at one split (`t16-q2-389-…`), the post gate on T13–T16, `state.json` pinned to the
+deployed copy by `test_gates.ProductionState`, and the drafter path emitted from the regime. Fixed
+after the audit: two mistyped cells and an unsourced row in `T16`, three compromises stated more
+favour-ably than the data, `size_check_argv` leaving the sidecar out of the fit pre-gate, and the
+pre-gate now honouring a declared `fit_headroom_mb` because the tool's 1024 MiB default is stricter
+than the engine's own accounting (the served config boots with 839 MiB).
+
+Still open and disclosed: production acceptance (1.58/4 against a corpus 58.5 %), per-category noise
+(two identical references differ 3.3 % on Coding), and the served placement never measured with the
+drafter attached.
+
+## Provenance
 
 Dated record and the measurements behind each winner:
 `git show 305f75fb:wiki/plans/v165-STATE.md`, plus the per-task reports in
