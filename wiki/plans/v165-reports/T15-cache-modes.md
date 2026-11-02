@@ -30,9 +30,9 @@ Split floors are engine-verified at 262144: 376 and 378 refuse at Q4, 381 loads;
 
 | run id | arm | status |
 |---|---|---|
-| `t14-q4-262k-corpus-*` | A | **ok**, 1068 s at split 389 |
-| `t14-q2-262k-corpus-*` | B | **ok**, 1049 s at split 378 |
-| `t14-fp16-262k-corpus-*` | C | **ok**, 1207 s at split 448 |
+| `t14-q4-262k-corpus-20261102-085612` | A | **ok**, 1068 s at split 389 |
+| `t14-q2-262k-corpus-20261102-091413` | B | **ok**, 1049 s at split 378 |
+| `t14-fp16-262k-corpus-20261102-093623` | C | **ok**, 1207 s at split 448 |
 
 **A and B both ran 8 experts above the server's dynamic floor**, because `spec_decode` sets
 `EXL3_MOE_CPU_SWAP=0` and static placement needs more. Q4 at 381 refuses in this harness (25 s) while
@@ -50,14 +50,14 @@ directly with it and with each other.
 | Q4 at 389 | **52.96** | 0.969 | 39.67 | 2.34/4.00 | 1777 MB | 42 676 MB |
 | FP16 at 448 | **46.56** | 0.846 | 37.17 | 2.39/4.00 | 2057 MB | 47 916 MB |
 
-Median per-category ratios against Q2: **Q4 0.969** (n=8, 0.836–1.028) and **FP16 0.846**
-(0.798–0.949). FP16's Coding band is 0.814 and Agentic code 0.832.
+Median per-category ratios against Q2: **Q4 0.969** (n=8) and **FP16 0.846**
+(n=8). FP16's Coding band is 0.814 and Agentic code 0.832.
 
 FP16 costs 15 % against Q2 and 12 % against Q4, and it moves 6.3 GB more into the host arena: its
 peak working set is 47.9 GB, and available RAM fell to 2094 MB at the worst sample. That is the same
 range the retired 2048 MB floor used to fire at.
 
-Median per-category ratio **0.969** (n=8, range 0.836–1.028), from `bench/ratios.py` over the two
+Median per-category ratio **0.969** (n=8), from `bench/ratios.py` over the two
 runs. The categories the operator cares about:
 
 | category | Q2 tok/s | Q4 tok/s | ratio | Q2 acc | Q4 acc |
@@ -218,7 +218,7 @@ single linked error fails the item, rather than more needles at the same depth p
 
 ## `-dds` confirmed, and tabbyAPI already supports it
 
-Second run (`t16-dds-confirm-20261102-140654`): corpus **55.44** against the no-dds arm's 52.96,
+Second run (`t16-dds-confirm-20261102-160442`): corpus **55.44** against the no-dds arm's 52.96,
 median per-category **1.064**, baseline arm 39.72 against 39.67 so the control held.
 
 | run | corpus | Coding | Agentic code | Agentic curl | Trivial repetition |
