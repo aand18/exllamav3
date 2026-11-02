@@ -119,28 +119,37 @@ def main(args):
     )
     texts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval_texts")
     source = load_source(texts_dir)
-    total = 0
+
+    jobs, total = [], 0
     for t in range(args.tests):
         seed = args.seed + t
         haystack = build_haystack(source, tokenizer, args.length)
         body, pairs = insert_needles(haystack, args.keys, seed)
-        prompt = prompt_for(body, [n for n, _ in pairs])
+        chat = [{"role": "user", "content": prompt_for(body, [n for n, _ in pairs])}]
+        # No thinking: the answer is a list of codes, and a reasoning trace would spend the token
+        # budget before the list and add numbers to the text the scorer has to read.
+        input_ids = tokenizer.hf_chat_template(chat, add_generation_prompt = True, enable_thinking = False)
         job = Job(
-            generator = generator,
-            prompt = prompt,
+            input_ids = input_ids,
             max_new_tokens = args.max_new_tokens,
+            stop_conditions = config.eos_token_id_list,
             sampler = GreedySampler(),
-            stop_conditions = ["\n\n\n"],
         )
-        job.begin()
+        jobs.append((t, job, pairs, int(input_ids.shape[-1])))
+        total += len(pairs)
+
+    generator.enqueue([job for _, job, _, _ in jobs])
+    while generator.num_remaining_jobs():
+        generator.iterate()
+
+    for t, job, pairs, plen in jobs:
         out = (job.full_completion or "").strip()
         hits = sum(1 for _, code in pairs if code in out)
-        print(f"\n--- test {t + 1}/{args.tests} seed {seed}: {len(pairs)} keys, {hits} codes present ---")
+        print(f"\n--- test {t + 1}/{args.tests}: {len(pairs)} keys, {hits} codes present, prompt {plen} tokens ---")
         print(out[:4000])
         for name, code in pairs:
             print(f"NEEDLE name={name} code={code}")
-        total += len(pairs)
-    print(f"NEEDLE_DONE keys={total} prompt_tokens={job.prompt_length} tests={args.tests}")
+    print(f"NEEDLE_DONE keys={total} prompt_tokens={jobs[-1][3]} tests={args.tests}")
 
 
 if __name__ == "__main__":
