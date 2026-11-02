@@ -135,14 +135,26 @@ deployable.
 Q4 at split 389, 262144 cache, prefill ladder only (`-SkipGen`: decode processes one token per step
 and never sees the chunk size, so it is not part of this measurement).
 
-| chunk | PP @4k | PP @32k | PP @262 k | min free VRAM | elapsed |
+| chunk | PP @4k | PP @32k | PP @64k | PP @262 k | min free VRAM |
 |---|---|---|---|---|---|
-| 256 | 282.7 | 271.3 | 278.4 | 3817 MB | 980 s |
-| 512 | 439.6 | 441.2 | 449.1 | 3821 MB | 625 s |
-| 1024 | 752.5 | 722.3 | 739.3 | 3675 MB | 398 s |
-| 4096 (was deployed) | 1921.7 | 1836.9 | 1880.8 | 2983 MB | 189 s |
-| **8192** | 1912.5 | 2714.4 | **2702.4** | 2187 MB | 155 s |
-| 16384 | — | — | — | — | refused at load, 24 s |
+| 256 | 282.7 | 271.3 | — | 278.4 | 3817 MB |
+| 512 | 439.6 | 441.2 | — | 449.1 | 3821 MB |
+| 1024 | 752.5 | 722.3 | 739.7 | 739.3 | 3675 MB |
+| 4096 (deployed) | 1921.7 | 1836.9 | 1887.3 | 1880.8 | 2983 MB |
+| 6144 | 1914.4 | 2012.5 | 2120.4 | 2217.1 | 2831 MB |
+| 8192 | 1912.5 | 2714.4 | 2738.7 | 2702.4 | 2187 MB |
+| **10240** | 1877.6 | 2702.7 | 2732.6 | **2828.2** | 1107 MB |
+| 12288 | 1459.6 | 1567.8 | 1711.3 | 2167.4 | 719 MB |
+| 14336 | — | — | — | refused at load | — |
+
+**The peak is 10240, not 8192**: 2828 T/s at 262 k, 50 % above the deployed 4096, for 1107 MB of
+headroom. 8192 gives 2702 for twice the headroom. 12288 loads but collapses (2167, and it is worse
+than 8192 at every band below 262 k), and 14336 refuses. Below 4096 every step is a double loss.
+
+**Deployment is still blocked.** With the drafter attached at split 381 the server refuses even
+8192 (`Insufficient VRAM in split for model and cache`, measured 2026-11-02), so any of these needs
+a split step to 389 - and the 389 arms above ran without the drafter, so whether 8192 fits there
+with it is untested.
 
 **8192 is 44 % faster at 262 k than 4096** (2702 against 1881) and costs about 800 MB of headroom.
 Shrinking the chunk is a bad trade in every direction: 1024 is 2.5x slower for 700 MB, 256 is 6.8x
