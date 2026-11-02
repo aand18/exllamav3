@@ -32,7 +32,7 @@ Split floors are engine-verified at 262144: 376 and 378 refuse at Q4, 381 loads;
 |---|---|---|
 | `t14-q4-262k-corpus-*` | A | **ok**, 1068 s at split 389 |
 | `t14-q2-262k-corpus-*` | B | **ok**, 1049 s at split 378 |
-| `t14-fp16-262k-corpus-*` | C | running at split 448 |
+| `t14-fp16-262k-corpus-*` | C | **ok**, 1207 s at split 448 |
 
 **A and B both ran 8 experts above the server's dynamic floor**, because `spec_decode` sets
 `EXL3_MOE_CPU_SWAP=0` and static placement needs more. Q4 at 381 refuses in this harness (25 s) while
@@ -42,12 +42,20 @@ applies to both arms, so the ratio stands, but the absolute numbers are not the 
 The corpus is the same runner that produced the 58.54 tok/s Q2 figure in T14, so A and B compare
 directly with it and with each other.
 
-## Results — Q2 versus Q4 (same session, 2026-11-02)
+## Results — three cache modes, one session (2026-11-02)
 
-| arm | corpus tok/s | baseline tok/s | acceptance | min free VRAM |
-|---|---|---|---|---|
-| Q2 at 378 | **54.78** | 40.65 | 2.39/4.00 | 777 MB |
-| Q4 at 389 | **52.96** | 39.67 | 2.34/4.00 | 1777 MB |
+| arm | corpus tok/s | vs Q2 | baseline tok/s | acceptance | min free VRAM | peak working set |
+|---|---|---|---|---|---|---|
+| Q2 at 378 | **54.78** | — | 40.65 | 2.39/4.00 | 777 MB | 41 650 MB |
+| Q4 at 389 | **52.96** | 0.969 | 39.67 | 2.34/4.00 | 1777 MB | 42 676 MB |
+| FP16 at 448 | **46.56** | 0.846 | 37.17 | 2.39/4.00 | 2057 MB | 47 916 MB |
+
+Median per-category ratios against Q2: **Q4 0.969** (n=8, 0.836–1.028) and **FP16 0.846**
+(0.798–0.949). FP16's Coding band is 0.814 and Agentic code 0.832.
+
+FP16 costs 15 % against Q2 and 12 % against Q4, and it moves 6.3 GB more into the host arena: its
+peak working set is 47.9 GB, and available RAM fell to 2094 MB at the worst sample. That is the same
+range the retired 2048 MB floor used to fire at.
 
 Median per-category ratio **0.969** (n=8, range 0.836–1.028), from `bench/ratios.py` over the two
 runs. The categories the operator cares about:
