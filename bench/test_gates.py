@@ -710,6 +710,22 @@ class CacheModelShapes(unittest.TestCase):
         self.assertEqual(widths, [640, 896, 1152, 2368])   # 16 groups: packed words + scales + planes
 
 
+class SizeCheckDraft(unittest.TestCase):
+    """The fit check has to model the machine that will load, drafter included."""
+
+    def test_sidecar_drafter_and_fp16_are_translated(self):
+        state = {"model": "D:\\llms\\m", "split": 381, "cache_size": 262144, "cache_quant": "4,4",
+                 "draft": {"mode": "model", "draft_model": "D:\\llms\\Qwen3.8-Flash-Next-DFlash2"}}
+        argv = verify_task.size_check_argv(state)
+        self.assertIn("--draft", argv, "a sidecar drafter has its own VRAM and arena")
+        self.assertTrue(argv[argv.index("--draft") + 1].endswith("DFlash2"))
+
+        fp16 = dict(state, cache_quant = "FP16")
+        argv = verify_task.size_check_argv(fp16)
+        self.assertEqual(argv[argv.index("--cq") + 1], "16,16",
+                         "the engine spells FP16 as no flag; the fit tool needs a width")
+
+
 class CacheQuantSpelling(unittest.TestCase):
     """FP16 is a cache mode with no flag; -cq 16,16 aborts inside the engine's own assert."""
 

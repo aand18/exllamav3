@@ -74,10 +74,21 @@ def size_check_argv(state: dict) -> list[str]:
     loaded: the head brings its own GPU share, its own pinned host arena and its own one-layer
     cache (~500 MiB VRAM and ~680 MiB of arena at 3.18/376), which is the margin a pass breaches on.
     """
+    quant = str(state["cache_quant"])
+    # The engine spells FP16 as the absence of -cq; size_check wants a width, so translate the word
+    # rather than hand it a float parser it cannot read.
+    if quant.lower() == "fp16":
+        quant = "16,16"
     argv = ["--model", wsl_path(state["model"]), "--mcs", str(state["split"]),
-            "--cs", str(state["cache_size"]), "--cq", state["cache_quant"]]
-    if (state.get("draft") or {}).get("mode") == "mtp":
+            "--cs", str(state["cache_size"]), "--cq", quant]
+    draft = state.get("draft") or {}
+    if draft.get("mode") == "mtp":
         argv += ["--draft", "mtp"]
+    elif draft.get("mode") == "model" and draft.get("draft_model"):
+        # A sidecar drafter brings its own weights, cache and arena, and leaving it off measured a
+        # machine that does not exist: at the deployed 381/262144/4,4 the fit check said FITS while
+        # the run loaded 839 MiB against a 1024 MiB headroom (closing audit, 2026-11-02).
+        argv += ["--draft", wsl_path(str(draft["draft_model"]))]
     return argv
 
 
