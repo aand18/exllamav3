@@ -710,6 +710,21 @@ class CacheModelShapes(unittest.TestCase):
         self.assertEqual(widths, [640, 896, 1152, 2368])   # 16 groups: packed words + scales + planes
 
 
+class CacheQuantSpelling(unittest.TestCase):
+    """FP16 is a cache mode with no flag; -cq 16,16 aborts inside the engine's own assert."""
+
+    RUN_PASS = os.path.join(REPO, "bench", "windows", "run_pass.ps1")
+
+    def test_fp16_is_a_word_the_argv_omits(self):
+        with open(self.RUN_PASS, encoding = "utf-8") as f:
+            text = f.read()
+        self.assertIn("$CacheQuant -notmatch '^(?i)fp16$'", text,
+                      "an FP16 state has to suppress -cq, not send 16,16")
+        self.assertIn("$cqArgs = @()", text, "the cache-quant args are built conditionally")
+        self.assertIn('"$CacheSize", "-chunk_size", "4096", "-ambs", "2") + $cqArgs', text,
+                      "the conditional args must sit in the regime argv")
+
+
 class PassesCsvCells(unittest.TestCase):
     """A column named for one quantity may not carry another, or a value the run never received."""
 

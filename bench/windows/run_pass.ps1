@@ -216,8 +216,13 @@ if ($null -ne $Draft -and $Runner -eq "spec_decode") {
 # The regime's own argv, kept apart from the deltas: the duplicate guard below has to see exactly what
 # state.json decided, including the draft flags when they were emitted, and it has to see it BEFORE the
 # spec_decode -max_length strip can eat a restated copy.
-$regimeArgs = @("-m", $MODEL, "-cs", "$CacheSize", "-chunk_size", "4096", "-ambs", "2",
-                "-cq", $CacheQuant, "-max_length", "$MaxLength", "-mcs", "$Split", "-mct", "$Threads")
+# FP16 is a cache mode with no flag: the engine's quantised cache asserts 2..8 bits, so -cq 16,16
+# aborts at CacheLayer_quant's own assert (measured 2026-11-02: AssertionError after a 3 s load). The
+# word the server's config.yml uses is "FP16", so the state may say it and the argv says nothing.
+$cqArgs = @()
+if ($CacheQuant -ne "" -and $CacheQuant -notmatch '^(?i)fp16$') { $cqArgs = @("-cq", $CacheQuant) }
+$regimeArgs = @("-m", $MODEL, "-cs", "$CacheSize", "-chunk_size", "4096", "-ambs", "2") + $cqArgs +
+              @("-max_length", "$MaxLength", "-mcs", "$Split", "-mct", "$Threads")
 $regimeArgs += $draftArgs
 
 # Every spelling argparse accepts for the flags above, mapped to the canonical short name the regime
