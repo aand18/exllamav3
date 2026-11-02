@@ -30,17 +30,29 @@ def load_source(texts_dir: str) -> str:
 
 
 def slice_for(source: str, tokenizer, tokens: int, offset: int) -> str:
-    """A distinct window of the source with at least `tokens` tokens, by character bisection."""
-    lo, hi = 0, len(source)
-    start = offset % max(len(source) // 2, 1)
+    """A distinct window of the source with at least `tokens` tokens.
+
+    The window wraps around the end of the text: a plain offset ran out of source for the second job
+    and handed it 90 k tokens where the first had 131 k, which made the pair look like an overlap
+    test when it was a size test (measured 2026-11-02).
+    """
+    start = offset % len(source)
+    rotated = source[start:] + source[:start]
+    if tokenizer_count(tokenizer, rotated) < tokens:
+        rotated = rotated + source
+    lo, hi = 0, len(rotated)
     while lo < hi:
         mid = (lo + hi + 1) // 2
-        ids = tokenizer.encode(source[start:start + mid], add_bos = False)
-        if int(ids.shape[-1]) <= tokens:
+        if tokenizer_count(tokenizer, rotated[:mid]) <= tokens:
             lo = mid
         else:
             hi = mid - 1
-    return source[start:start + lo]
+    return rotated[:lo]
+
+
+def tokenizer_count(tokenizer, text: str) -> int:
+    ids = tokenizer.encode(text, add_bos = False)
+    return int(ids.shape[-1])
 
 
 @torch.inference_mode()
