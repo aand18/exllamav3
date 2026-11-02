@@ -281,3 +281,23 @@ Two different thresholds were being confused:
 So a quantised drafter that accepts less is still worth running, either because the VRAM buys a
 lower split or because the margin against 1.5 is large. The decision is a measurement: acceptance
 plus the split the freed VRAM reaches, not one threshold read off the old number.
+
+### The 65-token gap, resolved: co-residence is sharing, not speed
+
+The 131 k pair missed the shared cache by 65 tokens. Re-run at 130 k each (260 064 tokens against
+262 144), so both slots co-reside:
+
+| arm | wall | job 1 prefill / decode | job 2 prefill / decode | aggregate |
+|---|---|---|---|---|
+| 1 x 130 k | 80.2 s | 70.6 s / 9.2 s (27.9 T/s) | — | 3.19 t/s |
+| 2 x 130 k, both resident | 164.3 s | 143.2 s / 20.5 s (12.5 T/s) | 141.0 s / 20.1 s (12.7 T/s) | 3.12 t/s |
+| 2 x 131 k, 65 tokens over | 158.9 s | 69.5 s / 9.2 s (27.8 T/s) | 69.9 s / 9.6 s (26.7 T/s) | 3.22 t/s |
+
+So the answer to the open question is no: a split cache does not change the overlap. Both cases give
+the same aggregate and the same double wall time; the only difference is the fingerprint. With both
+jobs resident, each prefill doubles and each decode halves. With the cache 65 tokens short, each
+prefill runs at the full solo rate and the jobs simply queue.
+
+**Aggregate throughput is constant in every configuration measured** (20 k pair 12.69 against 12.77;
+130 k pair 3.12 against 3.19; 131 k pair 3.22 against 3.20). Concurrency on this box buys latency
+hiding, not tokens per second, and one slot is as fast in aggregate as two.
