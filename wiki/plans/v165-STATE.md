@@ -187,27 +187,28 @@ the RAM floor is the component shrunk instead.
 
 ## Open items
 
-- **T14 rows 2, 3, 5, 6 are predicted, not measured**: single slot; 262k Q4 at split ~416; 131k
-  FP16 at ~400; 262k FP16 at ~440. Each needs one `perf.py` ladder (~5 min) while the box is free.
-- `-dds` on DFlash2: measured 2026-11-02 at Q4, median 1.045 but bimodal — +19 to +22 % on the two
-  Translation bands, +2.6 % Coding, +6.4 % Agentic curl, flat Agentic code, **0.76 on Trivial
-  repetition** (T15). One pass, so a confirmation run decides, and tabbyAPI must forward
-  `dynamic_draft_tokens` before it can be deployed.
-- Huge pages: the `=1` versus `=0` passes sat on the 2026-10-30 outlier day, so "no benefit" needs
-  one run on a normal day.
-- DFlash2 quantisation: ~0.8 GB reclaimed, about 9 experts, +5 % decode at a fixed split. The
-  arithmetic that belongs to this trade: at the deployed 2.40 accepted per round, a fall to about
-  **2.2** still leaves the freed VRAM ahead. The drafter's own break-even against no drafting is
-  near **1.5** accepted per round (measured 1.34x at 2.34, speed ~ (1 + acceptance)), so a
-  quantised drafter with lower acceptance remains a net win. Needs a GPU window.
-- `max_batch_size` 2 versus 1 under two concurrent long prompts: never measured.
-- Cache precision does not separate on any probe in this harness (T15): acceptance flat, `longctx`
-  16/16, and 64/64 multi-key needles at 245 k on Q2, Q4 and FP16. The next escalation would be
-  RULER's variable tracking or aggregation, not more needles.
-- T13 step 5 (pinned arena / promote-on-miss) has not run.
-- Task plan and the T0–T13 list: `wiki/plans/2026-10-29-v165-retune.md`.
+- **Q4 against Q2 at one split.** Q4 was measured at 389 and Q2 at 378, and eight experts is about
+  4.3 % by the campaign's per-expert coefficient - larger than the 3.4 % gap. The Q2@389 arm is
+  staged (`bench/windows/arms/state-q2-389.json`); until it runs, "Q4 costs 3 %" is not separated
+  from "Q4 is free".
+- **Production acceptance is lower than the corpus.** The corpus accepts 58.5 % of drafts; the live
+  log of 760,980 drafts accepts 39.6 %, which is 1.58 of 4 against a break-even near 1.5. Every
+  drafting number is priced on a friendlier workload. Measuring it needs archived production
+  prompts, which the box does not keep.
+- `-dds` is deployed (`dynamic_draft: true`, ceiling `draft_num_tokens: 4`). Two arms beat the
+  reference on the corpus; a third reference run would make the pair a true ABBA.
+- **Cache precision does not separate on any probe in this harness** (T15): acceptance flat,
+  `longctx` 16/16, and 64/64 multi-key needles at 245 k on Q2, Q4 and FP16. The next escalation
+  would be RULER's variable tracking or aggregation, not more needles.
+- FP16 at 131 k is the last unmeasured cache option with real value; the run is in flight.
+- Huge pages: deployed value is zero and the day noise is 28 %, so a "normal day" re-run would not
+  resolve anything. Closed as not worth measuring.
+- `ambs 1` versus 2: the concurrency pairs are flat in aggregate (T15), so a single-slot arm buys
+  latency, not throughput. Low value.
+- DFlash2 quantisation remains the last speed compromise: ~0.8 GB, about nine experts, and the
+  drafter's own break-even near 1.5 accepted per round. Needs the Windows converter and a window.
 
-## Provenance
+## Provenance## Provenance
 
 Dated record and the measurements behind each winner:
 `git show 305f75fb:wiki/plans/v165-STATE.md`, plus the per-task reports in
