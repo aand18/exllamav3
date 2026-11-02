@@ -325,3 +325,31 @@ prefill runs at the full solo rate and the jobs simply queue.
 **Aggregate throughput is constant in every configuration measured** (20 k pair 12.69 against 12.77;
 130 k pair 3.12 against 3.19; 131 k pair 3.22 against 3.20). Concurrency on this box buys latency
 hiding, not tokens per second, and one slot is as fast in aggregate as two.
+
+## Drafter quantisation: viable, but only in combination with a bigger chunk
+
+DFlash2 converted to **4.01 bpw** with `convert.py` from the win-perf build tree: **472 MB against
+1.2 GB**, freeing about 730 MB. Every layer quantised cleanly (rmse ~0.0035 against g_sc ~0.71),
+conv projections included.
+
+**Harness arm** (`t19-qdrafter-381-20261102-204908`, Q4, 262 k, split 381): it loads where the BF16
+drafter refuses, which is already a result. Corpus 51.42 against the reference's 53.51, acceptance
+**2.17** against 2.34. Per category it is positive exactly where the operator works - Coding 1.047,
+Agentic code 1.050, Agentic curl 1.018 - and negative on repetition (0.771) and creative reasoning
+(0.889); the corpus mean is dragged down by those. That comparison mixes placements, so it is not
+the deployment answer.
+
+**Server answer**, same prompt of about 19.3 k tokens, three runs each, split 381 both:
+
+| configuration | prefill | decode, three runs | median decode |
+|---|---|---|---|
+| BF16 drafter, chunk 4096 | 1661 T/s (19,265 tokens in 11.6 s) | 53.8, 57.2, 56.7 | 56.7 |
+| 4-bit drafter, chunk 8192 | 2289 T/s (19,805 tokens in 8.65 s) | 50.6, 61.3, 57.2 | 57.2 |
+
+**Prefill +38 %, decode unchanged within noise, acceptance about the same.** The 730 MB the
+quantisation frees is what lets chunk 8192 fit at the deployed split 381, where the BF16 drafter
+refuses it. Neither change is worth much alone: the quantisation costs acceptance, and the chunk
+alone does not fit.
+
+Deployed 2026-11-02: `draft_model_name: Qwen3.8-Flash-Next-DFlash2-exl3`, `chunk_size: 8192`, split
+381, Q4, 262 k. Revert file `config.yml.bak-qdrafter-test`.
