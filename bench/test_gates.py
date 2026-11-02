@@ -725,6 +725,29 @@ class CacheQuantSpelling(unittest.TestCase):
                       "the conditional args must sit in the regime argv")
 
 
+class NeedlesRunner(unittest.TestCase):
+    """A retrieval run has to carry its own score, or two cache modes compare as prose."""
+
+    RUN_PASS = os.path.join(REPO, "bench", "windows", "run_pass.ps1")
+
+    def test_needles_dispatch_and_hit_count(self):
+        with open(self.RUN_PASS, encoding = "utf-8") as f:
+            text = f.read()
+        self.assertIn('$RunnerName = "needles"', text, "the runner has a dispatch branch")
+        self.assertIn("NEEDLE name=", text, "the runner's machine line is parsed")
+        self.assertIn("$answerText.Contains($cd)", text, "the hit is scored against the answer text")
+        self.assertIn('elseif ($Runner -eq "needles" -and $ndRows.Count -eq 0) { $status = "fail" }',
+                      text, "a run with no needles is a failure, not an ok row")
+
+    def test_needle_scoring_ignores_the_truth_lines(self):
+        # The codes are printed by the runner after the answer; scoring the whole log would mark every
+        # needle as found. The cut at the first NEEDLE line is what makes the score mean anything.
+        with open(self.RUN_PASS, encoding = "utf-8") as f:
+            text = f.read()
+        self.assertIn("$firstNeedle = [regex]::Match($raw, '\\r?\\nNEEDLE name=')", text)
+        self.assertIn("$answerText = $raw.Substring(0, $firstNeedle.Index)", text)
+
+
 class ChunkSizeDelta(unittest.TestCase):
     """The prefill chunk is a regime flag: a delta names it, -Extra may not restate it."""
 

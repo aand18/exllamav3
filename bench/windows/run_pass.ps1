@@ -127,6 +127,13 @@ if ($Runner -eq "spec_decode") {
     $PERF = Join-Path $Root "spec_decode.py"
     $MATCH_CMD = "spec_decode\.py"
     $RunnerName = "spec_decode"   # what -DryRun reports: the runner actually selected
+} elseif ($Runner -eq "needles") {
+    # Multi-key needle retrieval: K access codes planted at hashed depths, one prompt asks for all of
+    # them, and the hit count is the score. longctx saturates at 16/16 in every cache mode, so it
+    # cannot answer a cache-precision question; this runner can.
+    $PERF = Join-Path $Root "needles.py"
+    $MATCH_CMD = "needles\.py"
+    $RunnerName = "needles"
 } elseif ($Runner -eq "longctx") {
     # Retrieval at length: eval/longctx.py reads stories from eval_texts/ and prints one LONGCTX
     # line per test plus a count. Its verdict is a reader's, but the run has to prove which tests
@@ -552,6 +559,23 @@ foreach ($rawLine in (($raw -replace "`r", "`n") -split "`n")) {
     }
 }
 
+# Needle runs: the pairs are printed by the runner, and the hit is computed here against the answer
+# text so a run carries its own score instead of needing a second pass over the log.
+$ndRows = New-Object System.Collections.ArrayList
+$answerText = $raw
+$firstNeedle = [regex]::Match($raw, '\r?\nNEEDLE name=')
+if ($firstNeedle.Success) { $answerText = $raw.Substring(0, $firstNeedle.Index) }
+$answerText = ($answerText -replace "`r", "`n")
+foreach ($rawLine in (($raw -replace "`r", "`n") -split "`n")) {
+    $l = ($rawLine -replace $ansi, "").Trim()
+    if ($l -match '^NEEDLE name=(\S+)\s+code=(\d+)$') {
+        $nm = $Matches[1]; $cd = $Matches[2]
+        $hit = 0
+        if ($answerText.Contains($cd)) { $hit = 1 }
+        [void]$ndRows.Add(@($nm, $cd, $hit))
+    }
+}
+
 # torch allocator watermarks (improvement I3b): driver-free VRAM says nothing about how much of the
 # card PyTorch is holding in cached blocks, which is what actually kills runs at the floor
 $peakAlloc = 0.0
@@ -575,6 +599,7 @@ elseif ($Runner -eq "perf" -and $ppRows.Count -eq 0 -and $tgRows.Count -eq 0) { 
 # line, because arm_line() only runs for the baseline and draft arms, and that pass did measure.
 elseif ($Runner -eq "spec_decode" -and $armRows.Count -eq 0 -and $sdRows.Count -eq 0) { $status = "fail" }
 elseif ($Runner -eq "longctx" -and $lcRows.Count -eq 0) { $status = "fail" }
+elseif ($Runner -eq "needles" -and $ndRows.Count -eq 0) { $status = "fail" }
 
 # --- Persist -----------------------------------------------------------------------------------
 $passesCsv = Join-Path $RES "passes.csv"
@@ -628,6 +653,12 @@ foreach ($r in $lcRows) {
     Add-Content -Path $lcCsv -Value ("{0},{1},{2},{3},{4}" -f $Tag, $runId, $r[0], $r[1], $r[2]) -Encoding ASCII
 }
 
+$ndCsv = Join-Path $RES "needles.csv"
+if (-not (Test-Path $ndCsv)) { Set-Content -Path $ndCsv -Value "tag,run_id,name,code,hit" -Encoding ASCII }
+foreach ($r in $ndRows) {
+    Add-Content -Path $ndCsv -Value ("{0},{1},{2},{3},{4}" -f $Tag, $runId, $r[0], $r[1], $r[2]) -Encoding ASCII
+}
+
 $tgCsv = Join-Path $RES "tg.csv"
 if (-not (Test-Path $tgCsv)) { Set-Content -Path $tgCsv -Value "tag,run_id,context,s1,s2,s3,s4" -Encoding ASCII }
 foreach ($r in $tgRows) {
@@ -648,6 +679,11 @@ if ($ppRows.Count -gt 0) {
     $parts = @()
     foreach ($r in $ppRows) { $parts += ("{0}={1}" -f $r[0], [string]::Format($inv, "{0:F2}", $r[1])) }
     Write-Output ("PP   " + ($parts -join " "))
+}
+if ($ndRows.Count -gt 0) {
+    $hits = 0
+    foreach ($r in $ndRows) { if ($r[2] -eq 1) { $hits++ } }
+    Write-Output ("NEEDLES n=" + $ndRows.Count + " hits=" + $hits)
 }
 if ($lcRows.Count -gt 0) {
     $parts = @()
