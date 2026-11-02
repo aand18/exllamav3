@@ -147,8 +147,9 @@ and never sees the chunk size, so it is not part of this measurement).
 | 12288 | 1459.6 | 1567.8 | 1711.3 | 2167.4 | 719 MB |
 | 14336 | — | — | — | refused at load | — |
 
-**The peak is 10240, not 8192**: 2828 T/s at 262 k, 50 % above the deployed 4096, for 1107 MB of
-headroom. 8192 gives 2702 for twice the headroom. 12288 loads but collapses (2167, and it is worse
+**The peak is 10240, but the trade to take is 8192.** 10240 gives 2828 T/s at 262 k against 8192's
+2702 - **4.7 % more prefill for 1080 MB less headroom** - and headroom is the binding constraint on
+this card. 8192 is the one worth deploying: 44 % over the deployed 4096 for 2187 MB free. 12288 loads but collapses (2167, and it is worse
 than 8192 at every band below 262 k), and 14336 refuses. Below 4096 every step is a double loss.
 
 **Deployment is still blocked.** With the drafter attached at split 381 the server refuses even

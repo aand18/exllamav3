@@ -18,7 +18,7 @@ DFlash2 window 4, Qwen3.8-Flash-Next `3.18bpw_h6_ng8`.
 | `-dds` on Q4, run 1 | Q4 262k | 389 | **53.71** | +1.4 % vs ref1 | 1.95/2.74 | 1777 MB | 41.7 GB | 6638 MB | `t14-q4-dds-corpus-20261102-102211` |
 | `-dds` on Q4, run 2 | Q4 262k | 389 | **55.44** | +3.6 % vs ref2 | 2.07/2.90 | 1805 MB | 41.6 GB | 5632 MB | `t16-dds-confirm-20261102-160442` |
 | Q4 reference, run 2 | Q4 262k | 389 | **53.51** | +1.0 % | 2.35/4 | 1777 MB | 41.7 GB | 6465 MB | `t16-q4-ref2-20261102-172722` |
-| chunk 8192 | Q4 262k | 389 | 2702 T/s prefill | — | — | — | — | — | `t15-chunk8192-pp-20261102-123135`; the load at 381 refuses (server log of 12:35 UTC) |
+| chunk 8192 (recommended) | Q4 262k | 389 | 2702 T/s prefill, +44 % | — | — | 2187 MB | — | — | `t15-chunk8192-pp-20261102-123135`; the load at 381 refuses (server log of 12:35 UTC) |
 
 Two slots are deployed, and the evidence is thinner than the phrase "flat" suggests. Two pairs are
 valid, both at 256 generated tokens with no repeat: 1 × 20 k against 2 × 20 k is 12.77 against 12.69
