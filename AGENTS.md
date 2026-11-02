@@ -44,3 +44,28 @@ This fork is the measurement and serving stack for one production box: Windows, 
 
 - One report per task at `wiki/plans/v165-reports/TNN-*.md`. The live summary is `v165-STATE.md`.
 - A commit message states the measurement or the defect, not the activity.
+
+## Measurement integrity
+
+Two audits of the v165 campaign found the same failure mode repeatedly: every number traced to a real
+CSV cell, and the arithmetic on top mixed incompatible bases. Follow these and the class of error
+disappears.
+
+- **State the basis in the sentence.** A cache figure is KV or KV-plus-recurrent; a split floor is
+  static or dynamic placement; a size is GiB or GB decimal. Write which one.
+- **A coefficient belongs to the regime that produced it.** Per-expert, per-token and per-round
+  coefficients change with placement mode, draft width and context length. Re-derive at the boundary;
+  the static 0.56 %/expert was 5.6x the dynamic value on this box.
+- **A single draw supports no claim under 2 %.** Two identical Q4 runs differ 1.0 % on the corpus and
+  3.2 % on one category. Quote n per arm, and repeat before ranking.
+- **Pair each arm with the reference nearest in time and configuration.** ABBA means A-B-B-A. Pairing
+  an arm against a reference eight hours old flatters it.
+- **Pre-register the prediction.** Write the expected number and the miss threshold before the run.
+  The one time this was done here, the result matched to 0.5 % and the question closed in one run.
+- **Generate tables from the CSVs.** `bench/options_table.py` renders the measured rows; a quoted cell
+  that the generator does not produce is a typo waiting to be read as evidence.
+- **Run both gates.** `verify_task --pre` before a pass, `--post --report` before a number is quoted,
+  with `--cites-failure` for runs cited as refusals. The gates check citations; the rules above check
+  arithmetic.
+- **Say whether a floor was probed or merely loaded.** A split that worked once is not a floor, and
+  382-388 were never tried.
