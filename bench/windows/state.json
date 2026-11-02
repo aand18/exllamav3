@@ -1,14 +1,14 @@
 {
-  "_comment": "Single source of truth for the active measurement regime. run_pass.ps1 reads this (model, split, threads, cache, env, draft args, floors) and -Model/-Split/-Threads/-MaxLength/-Env/-Extra carry only the DELTA under test. When the model or a winner changes, change it here once; plans express steps as deltas against this file so a swap cannot leave stale hardcoded commands behind.",
+  "_comment": "Production regime, verified on the box 2026-11-02: Q4 cache at 262144, split 381 (the dynamic floor; the static harness floor at this cache is 389), DFlash2 window 4 with dynamic drafting on, chunk 4096, floors 200 MB VRAM / 2048 MB available RAM.",
   "updated_utc": "2026-10-30",
   "active": {
     "model": "D:\\llms\\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8",
     "screening_model": "D:\\llms\\Qwen3.8-Flash-Next-exl3-1.66bpw_h4_ng3",
-    "split": 376,
+    "split": 381,
     "threads": 16,
-    "max_length": 131072,
-    "cache_size": 131072,
-    "cache_quant": "2,2",
+    "max_length": 262144,
+    "cache_size": 262144,
+    "cache_quant": "4,4",
     "env": {
       "EXL3_MOE_MEMOPS": "0",
       "EXL3_MOE_CPU_PIN": "1",
@@ -18,16 +18,17 @@
       "PYTHONUTF8": "1"
     },
     "floors": {
-      "min_free_vram_mb": 100,
-      "min_free_ram_mb": 1200
+      "min_free_vram_mb": 200,
+      "min_free_ram_mb": 2048
     },
     "draft": {
-      "mode": "mtp",
-      "num_draft_tokens": 2,
+      "mode": "model",
+      "draft_model": "D:\\llms\\Qwen3.8-Flash-Next-DFlash2",
+      "num_draft_tokens": 4,
       "readback": "batched",
       "sparse_draft_head": 0,
       "hybrid_draft_tokens": 0,
-      "dynamic_draft": false,
+      "dynamic_draft": true,
       "spec_decode_cache_size": 40960
     },
     "frozen_state_dir": "C:\\Users\\yoho\\Downloads\\tabbyAPI\\_agent\\v165\\engine-state\\active",
@@ -39,7 +40,9 @@
       "frozen_state_dir is used as XDG_CACHE_HOME so expert/token profiles are identical for every arm",
       "run_pass copies frozen_state_master -> frozen_state_dir before every run and points XDG_CACHE_HOME there, so no arm inherits another arm's expert/token profile"
     ],
-    "frozen_state_master": "C:\\Users\\yoho\\Downloads\\tabbyAPI\\_agent\\v165\\engine-state\\master"
+    "frozen_state_master": "C:\\Users\\yoho\\Downloads\\tabbyAPI\\_agent\\v165\\engine-state\\master",
+    "chunk_size": 4096,
+    "updated_utc": "2026-11-02"
   },
   "history": [
     {

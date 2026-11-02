@@ -214,6 +214,12 @@ if ($null -ne $Draft -and $Runner -eq "spec_decode") {
     # acc=1.74/4.00 on four draft tokens while state.json said 2 is what this block exists to make
     # impossible.
     if ([string]$Draft.mode -eq "mtp") { $draftArgs += "-mtp" }
+    # A sidecar drafter's path belongs to the regime for the same reason the split does: passed
+    # through -Extra it was invisible to the guard and absent from state.json, so the file did not
+    # describe the run (audit 2026-11-02: every DFlash2 arm carried "-dm" by hand).
+    if ($null -ne $Draft.draft_model -and [string]$Draft.draft_model -ne "") {
+        $draftArgs += @("-dm", [string]$Draft.draft_model)
+    }
     # 0 (or absent) is treated as unset rather than sent as "-ndt 0": the engine's default is 4 draft
     # tokens, so a state value of 0 would silently run 4, and the way to see that from the outside is
     # the absence of -ndt in the argv (a real 0 is not a drafting regime anyone can measure).
@@ -259,6 +265,7 @@ $regimeSpellings = @{
     "-sdh" = "-sdh";              "--sparse_draft_head" = "-sdh"
     "-hdt" = "-hdt";              "--hybrid_draft_tokens" = "-hdt"
     "-dds" = "-dds";              "--dynamic_draft" = "-dds"
+    "-dm" = "-dm";                "--draft_model_dir" = "-dm"
 }
 # How to change an owned flag properly. A flag with no delta parameter is a state.json edit, and the
 # message says so instead of offering a parameter that does not exist.
@@ -276,6 +283,7 @@ $regimeRemedy = @{
     "-sdh"        = "edit state.json"
     "-hdt"        = "edit state.json"
     "-dds"        = "edit state.json"
+    "-dm"         = "edit state.json"
 }
 
 # Canonical short flag named by an argv token, or $null for a value ("131072", "2,2", "D:\llms\...").
@@ -294,6 +302,10 @@ foreach ($tok in $regimeArgs) {
     $flag = Get-RegimeFlag $tok
     if ($null -ne $flag) { $owned[$flag] = $true }
 }
+# Drafting is owned by the regime whether or not this state enables it: a flag that is merely off
+# today is still not an arm's to set, and "-dds" rode through -Extra twice while the state said off
+# (audit 2026-11-02).
+foreach ($flag in @("-mtp", "-ndt", "-sdh", "-hdt", "-dds", "-dm")) { $owned[$flag] = $true }
 $argsList = $regimeArgs   # the emitted argv starts as the regime's own; -Extra appends to a copy
 if ($Extra -ne "") {
     foreach ($tok in ($Extra -split '\s+')) {
