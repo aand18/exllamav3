@@ -153,7 +153,7 @@ Consequence for the campaign: every arm in T7–T13 must be described as a delta
 - host RAM and determinism: `EXL3_HOST_MEM_RESERVE_MB=0` and `EXL3_MOE_ARENA_HUGEPAGE=0`, so page
   backing cannot vary between runs. Watcher floors **200 MB VRAM / 2048 MB available RAM**, armed
   for measurement passes only.
-- drafting: DFlash2 BF16 window 4 (DRAFT_WINNER), with `-sdh 0` and `-hdt 0`; `-dds` unresolved.
+- drafting: DFlash2 BF16 window 4 (DRAFT_WINNER), with `-sdh 0`, `-hdt 0` and `-dds` on (`dynamic_draft: true`, ceiling 4). The two `-dds` arms sit +1.4 % and +3.6 % above the reference nearest each; the sign repeats, the size does not resolve.
 - NGRAM: ng8 table present, `ngram_ram` off (T12), vision off.
 
 ## Superseded (read this before quoting an old number)
@@ -197,10 +197,12 @@ the RAM floor is the component shrunk instead.
   prompts, which the box does not keep.
 - `-dds` is deployed (`dynamic_draft: true`, ceiling `draft_num_tokens: 4`). Two arms beat the
   reference on the corpus; a third reference run would make the pair a true ABBA.
-- **Cache precision does not separate on any probe in this harness** (T15): acceptance flat,
-  `longctx` 16/16, and 64/64 multi-key needles at 245 k on Q2, Q4 and FP16. The next escalation
-  would be RULER's variable tracking or aggregation, not more needles.
-- FP16 at 131 k is the last unmeasured cache option with real value; the run is in flight.
+- **Cache precision is bounded, not proven equal** (T15): acceptance is flat and non-diagnostic,
+  `longctx` saturates at 16/16 on both arms, and the needle probe returns 32/32 on all three modes.
+  All three probes sit at ceiling, so they bound a difference at about one missed item in 32. A probe
+  that can fail - RULER variable tracking or aggregation, with a degraded-cache positive control -
+  is what would settle it.
+- FP16 at 131 k measured (`t16-fp16-131k-corpus-20261102-164829`): 50.64 tok/s, Coding ratio 0.998 against Q4 at 262 k, but 3.0 of its 4.4-point gap is the trunk, so it is not the cache-free precise option it first looked like.
 - Huge pages: deployed value is zero and the day noise is 28 %, so a "normal day" re-run would not
   resolve anything. Closed as not worth measuring.
 - `ambs 1` versus 2: the concurrency pairs are flat in aggregate (T15), so a single-slot arm buys
@@ -209,20 +211,6 @@ the RAM floor is the component shrunk instead.
   drafter's own break-even near 1.5 accepted per round. Needs the Windows converter and a window.
 
 ## Closing audit (2026-11-02)
-
-A clean-context auditor checked the campaign against its own record. Closed by evidence: the Q4/Q2
-comparison at one split (`t16-q2-389-…`), the post gate on T13–T16, `state.json` pinned to the
-deployed copy by `test_gates.ProductionState`, and the drafter path emitted from the regime. Fixed
-after the audit: two mistyped cells and an unsourced row in `T16`, three compromises stated more
-favour-ably than the data, `size_check_argv` leaving the sidecar out of the fit pre-gate, and the
-pre-gate now honouring a declared `fit_headroom_mb` because the tool's 1024 MiB default is stricter
-than the engine's own accounting (the served config boots with 839 MiB).
-
-Still open and disclosed: production acceptance (1.58/4 against a corpus 58.5 %), per-category noise
-(two identical references differ 3.3 % on Coding), and the served placement never measured with the
-drafter attached.
-
-## Provenance## Closing audit (2026-11-02)
 
 A clean-context auditor checked the campaign against its own record. Closed by evidence: the Q4/Q2
 comparison at one split (`t16-q2-389-…`), the post gate on T13–T16, `state.json` pinned to the
