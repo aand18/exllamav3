@@ -657,6 +657,17 @@ pinned KV tiers): when registering a chunk fails for lack of it, the chunks alre
 keep the DMA path and the experts in the rest of the arena stream through the staged path, with
 one notice at load.
 
+### `EXL3_MOE_PINNED_ARENA_GIB` (default: `0`)
+
+Page-lock at most this many GiB of the arena instead of as much as the driver allows; `0` keeps the
+driver-decided behaviour. Two reasons to bound it deliberately. The arena's chunks are registered
+in order and the split load permutes the experts hottest first, so what gets pinned is the hot end
+of the CPU tier — the part promotions are drawn from — while the pinning stops at a point that does
+not depend on what the driver happened to allow that run. And page-locked memory is a budget the
+pinned KV tiers, the handoff ring (which the staged path runs on) and every other process draw on
+(WDDM and WSL2 allow about half of RAM), so a bound leaves room that the load would otherwise have
+had to take back chunk by chunk (see `_register_handoff`).
+
 ### `EXL3_MOE_CPU_PROMOTE` (default: `4`)
 
 Spare GPU expert slots per layer for promote-on-miss in `--moe_cpu_split` mode with the pinned
@@ -666,10 +677,53 @@ side stream, and once the copy has landed the placement map sends later routes t
 least-used resident that was not routed goes the other way into the worker slot the promotion
 freed, so the resident set follows the conversation token by token instead of once per sweep, and
 no transfer reads the checkpoint or stops the worker. Needs the pinned arena because the parent
-process DMAs the expert bytes straight between the GPU slots and the worker's memory. Up to six
-promotions per step over all layers (one per layer), and as many demotions; the spares' own experts
-start in the worker. `EXL3_MOE_CPU_SWAP_DEBUG=1` prints the transfer counts, the hit rate and the
-step's bookkeeping cost every 128 steps.
+process DMAs the expert bytes straight between the GPU slots and the worker's memory. Up to
+`EXL3_MOE_CPU_PROMOTE_BUDGET` promotions per step over all layers and as many demotions; the
+spares' own experts start in the worker. `EXL3_MOE_CPU_SWAP_DEBUG=1` prints the transfer counts,
+the hit rate and the step's bookkeeping cost every 128 steps, and `EXL3_MOE_TIER_STATS` reports the
+same coverage per generation.
+
+Only experts whose arena chunk is page-locked can be promoted (`MoeCpuHost.promote_ready`): where
+the driver runs out of pinned memory, or where `EXL3_MOE_PINNED_ARENA_GIB` caps it, the experts
+past that point stay CPU-computed and keep using the sweep. The arena is laid out hottest expert
+first (the split load permutes it by the saved frequency profile), so a pinned prefix is the part
+of the CPU tier most likely to be promoted.
+
+### `EXL3_MOE_CPU_PROMOTE_BUDGET` (default: `6`)
+
+Promotions issued per decode step over *all* split layers, and as many demotions. Each one moves an
+expert's trellis block (~1.95 MB at 3.18 bpw on Qwen3.8-Flash-Next) over PCIe on the promotion
+stream — about 73 us pinned at 26.8 GB/s — and each avoided host expert is worth about 41 us of
+worker time on this box, so one promotion pays for itself after roughly two reuses. Raise it in
+steps and watch the decode rate, not the promotion count: past the point where the pool shrinks,
+the transfers become the cost.
+
+### `EXL3_MOE_CPU_PROMOTE_RATIO` (default: `1.5`) / `EXL3_MOE_CPU_PROMOTE_DECAY` (default: `0.98`)
+
+A miss is promoted when its decayed selection count is this many times the count of the least-used
+unrouted resident it would displace, and the per-layer counts are multiplied by the decay each
+step. Together they set how fast the resident set follows a change of subject: a higher ratio (or
+a slower decay) keeps the tier steadier, a lower ratio churns it. The sweep path has its own pair
+in `EXL3_MOE_CPU_SWAP_HYST` / `EXL3_MOE_CPU_SWAP_FLOOR`.
+
+### `EXL3_MOE_TIER_STATS` (default: `0`)
+
+Report what the VRAM expert tier actually covered: once per generation, from the generator's
+queue-drained hook, one line
+
+```
+ -- expert tier: 63.4% coverage (18240 expert evaluations, 6676 on the CPU, 480 steps, 13.9 on the CPU/step); arena 8192 MiB pinned in 8 of 33 chunk(s), budget 8 GiB
+```
+
+where an evaluation is one routed (layer, expert) selection in a decode step, coverage is the share
+of them the GPU tier served, and the tail names the arena's pin state. `2` adds the six worst layers
+by CPU evaluations. The figures come from the per-layer hit histograms `moe_split_map` already
+maintains: a step's evaluations are the change in each histogram's sum, corrected for the decay the
+placement policy applies between two snapshots, which stays exact at any count magnitude. The
+histograms are snapshotted into pinned memory, one device-to-host copy per layer per step, and read
+one step later, so nothing synchronizes mid-decode — but that copy is also why this is a diagnostic
+and not a production setting. Not the same thing as `EXL3_MOE_CPU_SPLIT_STATS`, which is a *path* to
+an explicit per-layer frequency profile.
 
 Both dynamic modes save each layer's decayed expert selection counts to
 `~/.cache/exllamav3/expert_stats/<hash>.json` (`$XDG_CACHE_HOME` if set; the hash covers the model
