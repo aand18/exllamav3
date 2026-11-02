@@ -79,6 +79,25 @@ throughput. The 3.4 % gap measured earlier between Q2 at 378 and Q4 at 389 was t
 that Q4's extra 0.75 GiB pushes to the CPU, not the cache width itself. The operator's switch to Q4
 therefore costs one thing only: a little headroom on the card, which at 262 k is eleven experts.
 
+## The placement term, measured on the served setting
+
+Every earlier comparison priced the split from static arms. The served box runs **dynamic** expert
+placement, where the engine migrates hot experts to the card, so the split is supposed to matter
+less. Two `perf.py` ladders, no drafter, 262 144 cache, both with placement on:
+
+| split | PP @131 072 | TG @130 816 | min free VRAM |
+|---|---|---|---|
+| 381 (served) | 1923.93 | 39.98 | 2267 MB |
+| 389 | 1873.22 | 39.67 | 2983 MB |
+
+Ratios 1.03 on prefill and 1.01 on decode, and the per-band swings are wider than the difference
+itself: `bench/ratios.py` over these two runs prints both ranges. **Eight experts cost nothing measurable under dynamic placement**, against the
+0.56 %/expert the campaign had derived from static arms.
+
+That closes the chain the operator's choice rests on: Q4 costs VRAM, the VRAM costs up to three
+experts on the served placement, and three experts under dynamic placement cost about 0.3 %, inside
+the noise. The deployed Q4 is, for practical purposes, free.
+
 ## Evidence status
 
 `bench/options_table.py` regenerates the measured rows from `passes.csv` and `arms.csv`, and
