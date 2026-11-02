@@ -187,10 +187,10 @@ the RAM floor is the component shrunk instead.
 
 ## Open items
 
-- **Q4 against Q2 at one split.** Q4 was measured at 389 and Q2 at 378, and eight experts is about
-  4.3 % by the campaign's per-expert coefficient - larger than the 3.4 % gap. The Q2@389 arm is
-  staged (`bench/windows/arms/state-q2-389.json`); until it runs, "Q4 costs 3 %" is not separated
-  from "Q4 is free".
+- **Q4 against Q2 at one split: settled 2026-11-02.** Q2 at 389 runs 52.70 tok/s against Q4's
+  52.96 with identical 2.34/4 acceptance (median per-category 0.993,
+  `t16-q2-389-corpus-20261102-170933`). The cache width costs VRAM, not speed: the earlier 3.4 % gap
+  was the eleven experts Q4's extra 0.75 GiB pushes to the CPU.
 - **Production acceptance is lower than the corpus.** The corpus accepts 58.5 % of drafts; the live
   log of 760,980 drafts accepts 39.6 %, which is 1.58 of 4 against a break-even near 1.5. Every
   drafting number is priced on a friendlier workload. Measuring it needs archived production
