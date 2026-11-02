@@ -129,3 +129,26 @@ Agentic code.
 T06 note called this "unresolved, leaning +2 %"; today's shape explains why the earlier reading was
 noisy. A confirmation pass plus a check that tabbyAPI forwards `dynamic_draft_tokens` would make it
 deployable.
+
+## `-chunk_size`: prefill throughput against VRAM headroom
+
+Q4 at split 389, 262144 cache, prefill ladder only (`-SkipGen`: decode processes one token per step
+and never sees the chunk size, so it is not part of this measurement).
+
+| chunk | PP @4k | PP @32k | PP @262 k | min free VRAM | elapsed |
+|---|---|---|---|---|---|
+| 256 | 282.7 | 271.3 | 278.4 | 3817 MB | 980 s |
+| 512 | 439.6 | 441.2 | 449.1 | 3821 MB | 625 s |
+| 1024 | 752.5 | 722.3 | 739.3 | 3675 MB | 398 s |
+| 4096 (was deployed) | 1921.7 | 1836.9 | 1880.8 | 2983 MB | 189 s |
+| **8192** | 1912.5 | 2714.4 | **2702.4** | 2187 MB | 155 s |
+| 16384 | — | — | — | — | refused at load, 24 s |
+
+**8192 is 44 % faster at 262 k than 4096** (2702 against 1881) and costs about 800 MB of headroom.
+Shrinking the chunk is a bad trade in every direction: 1024 is 2.5x slower for 700 MB, 256 is 6.8x
+slower for 840 MB. 16384 does not fit at this split.
+
+The cost lands on the split, not on decode: if 800 MB forces nine more experts to the CPU, that is
+about 5 % decode, and a coding workload that hits its prefix cache 96 % of the time notices prefill
+rarely. So 8192 is worth deploying **only if the server still loads at split 381** - a pure prefill
+win, or a split step that eats it.
