@@ -262,3 +262,22 @@ the fingerprint of serialization rather than overlap.
 Practical reading for two agents on this box: parallelism buys latency hiding for work that mixes
 tool calls with generation, and it buys nothing in tokens per second. At 131 k each, plan on
 sequential service.
+
+## Correction: the drafter's break-even is not 2.34
+
+An earlier note in this file, and one line in the state file, read as if a drafter that accepts
+fewer than 2.34 of 4 draft tokens loses time. That is wrong, and the operator caught it.
+
+Two different thresholds were being confused:
+
+- **Drafter against no drafting.** Every round produces `1 + accepted` tokens for one trunk pass.
+  The measured DFlash2 arm gives 52.96 against a 39.67 baseline, a factor of 1.34 at 2.34 accepted.
+  With speed proportional to `1 + accepted`, that factor falls to 1.0 at about **1.5** accepted per
+  round. The deployed drafter sits far above its own break-even.
+- **The quantisation trade.** Removing 0.8 GiB from the drafter frees about nine experts, roughly
+  5 % decode at a fixed split. That 5 % is the budget the acceptance may spend: about 2.2 accepted
+  per round before the freed VRAM stops paying for itself.
+
+So a quantised drafter that accepts less is still worth running, either because the VRAM buys a
+lower split or because the margin against 1.5 is large. The decision is a measurement: acceptance
+plus the split the freed VRAM reaches, not one threshold read off the old number.

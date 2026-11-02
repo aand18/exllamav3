@@ -195,7 +195,11 @@ the RAM floor is the component shrunk instead.
   `dynamic_draft_tokens` before it can be deployed.
 - Huge pages: the `=1` versus `=0` passes sat on the 2026-10-30 outlier day, so "no benefit" needs
   one run on a normal day.
-- DFlash2 quantisation: ~0.8 GB reclaimed, break-even acceptance **2.34/4**, needs a GPU window.
+- DFlash2 quantisation: ~0.8 GB reclaimed, about 9 experts, +5 % decode at a fixed split. The
+  arithmetic that belongs to this trade: at the deployed 2.40 accepted per round, a fall to about
+  **2.2** still leaves the freed VRAM ahead. The drafter's own break-even against no drafting is
+  near **1.5** accepted per round (measured 1.34x at 2.34, speed ~ (1 + acceptance)), so a
+  quantised drafter with lower acceptance remains a net win. Needs a GPU window.
 - `max_batch_size` 2 versus 1 under two concurrent long prompts: never measured.
 - Cache precision does not separate on any probe in this harness (T15): acceptance flat, `longctx`
   16/16, and 64/64 multi-key needles at 245 k on Q2, Q4 and FP16. The next escalation would be
