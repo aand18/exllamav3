@@ -17,6 +17,7 @@ DFlash2 window 4, Qwen3.8-Flash-Next `3.18bpw_h6_ng8`.
 | **FP16 131k** | FP16 131k | 408 | **50.64** | −4.4 % | 2.35/4 | 2363 MB | 44.2 GB | 4415 MB | `t16-fp16-131k-corpus-20261102-164829` |
 | `-dds` on Q4, run 1 | Q4 262k | 389 | **53.71** | +1.4 % | 1.95/2.74 | 1777 MB | 41.7 GB | 6638 MB | `t14-q4-dds-corpus-20261102-102211` |
 | `-dds` on Q4, run 2 | Q4 262k | 389 | **55.44** | +4.7 % | 2.07/2.90 | 1805 MB | 41.6 GB | 5632 MB | `t16-dds-confirm-20261102-160442` |
+| Q4 reference, run 2 | Q4 262k | 389 | **53.51** | +1.0 % | 2.35/4 | 1777 MB | 41.7 GB | 6465 MB | `t16-q4-ref2-20261102-172722` |
 | chunk 8192 | Q4 262k | 389 | refused at 381 | — | — | — | — | — | `t15-chunk8192-pp` at 389, load refusal at 381 |
 
 Two slots are deployed. Aggregate throughput is flat in every pair measured (12.77 against 12.69 at
@@ -34,9 +35,10 @@ Two slots are deployed. Aggregate throughput is flat in every pair measured (12.
   a price the coding column barely notices. This is the best-value precise option measured.
 - **FP16 with the MTP head**: recovers half of the FP16 tax by dropping the split 14 experts, but its
   two-token drafts lose 19 % on Coding and Agentic code. Not viable for this traffic.
-- **`-dds`**: two runs above the reference on the corpus and on Agentic curl, flat on Coding, and
-  clearly negative on Trivial repetition. Deployed, because the workload that matters does not
-  repeat.
+- **`-dds`**: an ABBA at split 389 — reference 52.96, `-dds` 53.71, `-dds` 55.44, reference 53.51.
+  The two references spread 1.0 %, and the two `-dds` arms sit **+2.5 % above them** (1.014 and
+  1.036 pair-wise), which is outside that spread. Flat on Coding, positive on Agentic curl, clearly
+  negative on Trivial repetition (0.76 and 0.84). Deployed, because this workload does not repeat.
 - **Two slots** (deployed): aggregate throughput is flat in every pair measured, so the second slot
   buys latency hiding for two agents and nothing in tokens per second.
 - **Chunk 8192**: 44 % faster prefill, refused at the deployed split; the split step it would need
