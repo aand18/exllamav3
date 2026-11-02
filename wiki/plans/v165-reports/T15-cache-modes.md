@@ -193,11 +193,17 @@ drafter swap recovers speed but cannot recover 19 %.
 and asks for all of them in one prompt; the harness scores the answer against the codes. Built
 because `longctx` saturates at 11 questions and cannot fail.
 
-| arm | facts | found | status |
+| arm | items | found | status |
 |---|---|---|---|
-| Q2 at 378 | 64 | **64** | ok |
-| Q4 at 389 | 64 | **64** | ok |
-| FP16 at 448 | 64 | **64** | ok |
+| Q2 at 378 | 32 distinct codes, planted in two haystacks | **32/32** | ok |
+| Q4 at 389 | 32 distinct codes, planted in two haystacks | **32/32** | ok |
+| FP16 at 448 | 32 distinct codes, planted in two haystacks | **32/32** | ok |
+
+The 64 in `needles.csv` counts planted instances, not independent items: the same 32 codes appear in
+both haystacks. **An earlier attempt at 20 codes scored 20/40 on Q2 and on Q4** (`t15-needles-q2`,
+`t15-needles-q4`), a 50 % swing between repeats of the same configuration that a scorer defect
+explains - it cut the log at the first truth line and scored the second haystack against nothing -
+but the rows stay in `needles.csv` and the disagreement is part of the record.
 
 Two haystacks of 32 keys each, six digits of headroom, exact-form answers. Every mode returns every
 code. The probe is not saturated by construction - a model that drops a needle or transposes a digit
@@ -218,8 +224,10 @@ single linked error fails the item, rather than more needles at the same depth p
 
 ## `-dds` confirmed, and tabbyAPI already supports it
 
-Second run (`t16-dds-confirm-20261102-160442`): corpus **55.44** against the no-dds arm's 52.96,
-median per-category **1.064**, baseline arm 39.72 against 39.67 so the control held.
+Second run (`t16-dds-confirm-20261102-160442`): corpus **55.44**, paired against the reference
+measured 83 minutes later (`t16-q4-ref2`, 53.51) rather than the morning one: **+3.6 %**, median
+per-category 1.032. Pairing it against the morning reference gives 1.064 and flatters it, which is
+what an earlier revision of this section did.
 
 | run | corpus | Coding | Agentic code | Agentic curl | Trivial repetition |
 |---|---|---|---|---|---|
@@ -270,10 +278,13 @@ fewer than 2.34 of 4 draft tokens loses time. That is wrong, and the operator ca
 
 Two different thresholds were being confused:
 
-- **Drafter against no drafting.** Every round produces `1 + accepted` tokens for one trunk pass.
-  The measured DFlash2 arm gives 52.96 against a 39.67 baseline, a factor of 1.34 at 2.34 accepted.
-  With speed proportional to `1 + accepted`, that factor falls to 1.0 at about **1.5** accepted per
-  round. The deployed drafter sits far above its own break-even.
+- **Drafter against no drafting, at draft width 4.** Every round produces `1 + accepted` tokens for
+  one trunk pass. The DFlash2 arm gives 52.96 against a 39.67 baseline: 1.34 at 2.34 accepted, which
+  under speed proportional to `1 + accepted` puts break-even at **1.5** - but only at width 4. The
+  same identity on the other arms gives a per-round cost of 2.50 baseline-thousand-token-steps at
+  width 4, 2.18 at the window `-dds` picks, and **1.91 for the MTP head at width 2**, whose implied
+  break-even is **0.9**. So 1.5 belongs to the width and the cache regime, not to dragging in
+  general, and it must be re-derived whenever either changes.
 - **The quantisation trade.** Removing 0.8 GiB from the drafter frees about nine experts, roughly
   5 % decode at a fixed split. That 5 % is the budget the acceptance may spend: about 2.2 accepted
   per round before the freed VRAM stops paying for itself.
