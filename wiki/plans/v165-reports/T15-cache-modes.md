@@ -152,3 +152,14 @@ The cost lands on the split, not on decode: if 800 MB forces nine more experts t
 about 5 % decode, and a coding workload that hits its prefix cache 96 % of the time notices prefill
 rarely. So 8192 is worth deploying **only if the server still loads at split 381** - a pure prefill
 win, or a split step that eats it.
+
+### Deploy check: the server refuses 8192 at split 381
+
+Loading the production configuration with `chunk_size: 8192` fails with `Insufficient VRAM in split
+for model and cache`, so the 800 MB is not spare at 381: the prefill gain costs at least one split
+step, about 4.5 % decode. For this workload that is a net loss - a first-touch 20 k prompt saves
+about 3 s at 8192, while every cached turn pays 0.4 s on a 500-token answer, and 96 % of turns are
+cached. **4096 stays.**
+
+The knob's real shape: prefill throughput doubles from 4096 to 8192, and the configuration cannot
+afford it at 262k Q4 on this card.
