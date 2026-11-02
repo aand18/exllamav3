@@ -33,21 +33,33 @@ card they use.
 
 ## Live traffic, bucketed by prompt length
 
-Parsed from 289 real requests in the server log of 2026-10-31/11-01: the operator's own harness, so
-this is the workload that matters. Several jobs were in flight, which is why p90 sits well above the
-median.
+Parsed from **731 requests** across the two days the Q2 cache served with the deployed profile
+(2026-10-31 14:19 UTC to 2026-11-02 05:30 UTC). This is the operator's own harness, so it is the
+workload that matters. Several jobs were in flight, which is why p90 sits above the median.
 
-| prompt bucket | n | decode T/s median | p90 | prefill T/s median | draft acceptance |
-|---|---|---|---|---|---|
-| <16k | 3 | 51.7 | 51.7 | 987 | 79.8 % |
-| 16–64k | 73 | 52.4 | 62.4 | 574 | 55.9 % |
-| 64–128k | 93 | 52.3 | 63.2 | 666 | 50.6 % |
-| 128–200k | 73 | 46.1 | 57.2 | 468 | 44.3 % |
-| >200k | 47 | 53.1 | 63.0 | 439 | 56.7 % |
+| prompt bucket | n | decode T/s median | p90 | prefill T/s median | draft acceptance median | acceptance p10 |
+|---|---|---|---|---|---|---|
+| <16k | 34 | 54.8 | 65.5 | — | 64.7 % | 34.5 % |
+| 16–64k | 125 | 42.0 | 63.5 | 1166 | 48.9 % | 35.5 % |
+| 64–128k | 272 | 55.2 | 73.4 | 1437 | 43.1 % | 31.9 % |
+| 128–200k | 232 | 56.9 | 72.9 | 1398 | 42.4 % | 30.7 % |
+| >200k | 68 | 51.5 | 67.1 | 1645 | 39.5 % | 31.5 % |
 
-Decode is nearly flat in context (46–53 T/s median) because the drafter's rounds dominate. Prefill
-falls with length (987 → 439 T/s), which is the predictable part. Acceptance falls with context,
-which is where the drafter earns less.
+Totals: 491,452 tokens generated, **301,207 of 760,980 draft tokens accepted (39.6 %)**, prompt
+lengths 10 to 222,875, of which 300 are at 128k or more and 68 at 200k or more.
+
+**Prefix cache**: 95–96 % of the large requests hit a cached prefix, and the median hit covers
+99–100 % of their prompt. Prefill is quoted only over requests that actually processed 4096 new
+tokens or more; the median rises with length (1166 → 1645 T/s) because the fixed first-token cost
+amortises.
+
+Two readings that look wrong and are not: the 16–64k bucket decodes slower (42.0) than the longer
+buckets, and it is the only bucket with fewer than 96 % prefix hits, so those are first-touch
+prompts with prefill interleaved. Acceptance falls with context for the drafter (64.7 % → 39.5 %),
+which is where it earns least.
+
+An earlier version of this table sampled the first 289 requests and read differently in the long
+buckets (128–200k at 46.1 T/s against 56.9 here). The two-day sample above replaces it.
 
 ## Swapping
 
