@@ -1,0 +1,52 @@
+{
+  "_comment": "Single source of truth for the active measurement regime. run_pass.ps1 reads this (model, split, threads, cache, env, draft args, floors) and -Model/-Split/-Threads/-MaxLength/-Env/-Extra carry only the DELTA under test. When the model or a winner changes, change it here once; plans express steps as deltas against this file so a swap cannot leave stale hardcoded commands behind.",
+  "updated_utc": "2026-10-30",
+  "active": {
+    "model": "D:\\llms\\Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8",
+    "screening_model": "D:\\llms\\Qwen3.8-Flash-Next-exl3-1.66bpw_h4_ng3",
+    "split": 434,
+    "threads": 16,
+    "max_length": 262144,
+    "cache_size": 262144,
+    "cache_quant": "FP16",
+    "env": {
+      "EXL3_MOE_MEMOPS": "0",
+      "EXL3_MOE_CPU_PIN": "1",
+      "EXL3_MOE_CPU_SWIZZLE": "1",
+      "EXL3_HOST_MEM_RESERVE_MB": "0",
+      "EXL3_MOE_ARENA_HUGEPAGE": "0",
+      "PYTHONUTF8": "1"
+    },
+    "floors": {
+      "min_free_vram_mb": 200,
+      "min_free_ram_mb": 2048
+    },
+    "draft": {
+      "mode": "mtp",
+      "num_draft_tokens": 2,
+      "readback": "batched",
+      "sparse_draft_head": 0,
+      "hybrid_draft_tokens": 0,
+      "dynamic_draft": false,
+      "spec_decode_cache_size": 40960
+    },
+    "frozen_state_dir": "C:\\Users\\yoho\\Downloads\\tabbyAPI\\_agent\\v165\\engine-state\\active",
+    "knob_arms_disable_swap": true,
+    "notes": [
+      "split 376 is the measured 3.18 boundary: 368 loads but dies in long prefill (allocator scratch), 376 measured fastest",
+      "cache_size 131072 is the measurement length; 262144 is a single final confirmation",
+      "spec_decode runs use draft.spec_decode_cache_size (a 1024-token generation needs 139 pages = 35584 tokens)",
+      "frozen_state_dir is used as XDG_CACHE_HOME so expert/token profiles are identical for every arm",
+      "run_pass copies frozen_state_master -> frozen_state_dir before every run and points XDG_CACHE_HOME there, so no arm inherits another arm's expert/token profile"
+    ],
+    "frozen_state_master": "C:\\Users\\yoho\\Downloads\\tabbyAPI\\_agent\\v165\\engine-state\\master",
+    "chunk_size": 4096
+  },
+  "history": [
+    {
+      "utc": "2026-10-29",
+      "change": "production model 3.68bpw_h6_ng8 -> 3.18bpw_h6_ng8 (operator: no headroom, 8 GB lighter); split re-founded 400 -> 376",
+      "carried_results": "MEMOPS=0 (engine path, not per checkpoint); thresholds re-derived on 3.18 (pp 0.92-0.99, tg 0.91-1.01)"
+    }
+  ]
+}
