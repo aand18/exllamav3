@@ -75,6 +75,25 @@ agree on a token, not whether the trunk recalled the right paragraph. A cache th
 accuracy leaves token-level agreement untouched, so this number can neither confirm nor refute the
 operator's observation. The probe for that is retrieval at length, not acceptance.
 
+## Accuracy: retrieval at length
+
+`-Runner longctx -xl` on Q4 at split 389 (`t14-q4-262k-longctx-20261102-095950`, 1197 s):
+**16/16 facts**, the same score Q2 reached at 165 k on 10-31 (`t13-378-xl`). Every one of the eleven
+jobs retrieved its fact, including the inserted paragraph inside 165 k tokens of Pride and Prejudice
+and the chapter-title list.
+
+So the cache does not separate on this probe either. Q2 and Q4 both saturate it.
+
+**A transcript diff cannot answer the remaining question.** The outputs differ a lot between the two
+runs (ic_zoomer 5,917 characters on Q4 against 34,060 on Q2; pp_chap 41,705 against 64,341), which is
+sampling variance, not retrieval: the runner samples, so one draw per mode carries no attribution. A
+controlled answer would be greedy decoding on the same prompts in both modes, two runs — not run here.
+
+What the evidence supports: on every probe available in this harness, **Q2 and Q4 are
+indistinguishable**, and Q4 costs 3 %. That makes Q4 cheap insurance rather than a measured gain. The
+operator's own traffic remains the only instrument that separated them, which is why the switch was
+made on that observation rather than on a number from here.
+
 ## Harness wart found while setting up
 
 `state.json` has no field for the draft **model** path. `run_pass.ps1` emits `-mtp` for
