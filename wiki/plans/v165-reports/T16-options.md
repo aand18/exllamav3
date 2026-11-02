@@ -6,16 +6,20 @@ DFlash2 window 4, Qwen3.8-Flash-Next `3.18bpw_h6_ng8`.
 
 ## What is on the table
 
-| option | cache | split | corpus t/s | vs deployed | draft accepted | min free VRAM | evidence |
-|---|---|---|---|---|---|---|---|
-| **deployed** | Q4 262k | 381 (dynamic) | — | — | — | 1681 MB | server boot, no harness row |
-| Q4 262k, static floor | Q4 262k | 389 | **52.96** | reference | 2.34/4 | 1777 MB | `t14-q4-262k-corpus-20261102-085612` |
-| Q2 262k | Q2 262k | 378 | **54.78** | +3.4 % | 2.39/4 | 777 MB | `t14-q2-262k-corpus-20261102-091413` |
-| FP16 262k | FP16 262k | 448 | **46.56** | −12.1 % | 2.39/4 | 2057 MB | `t14-fp16-262k-corpus-20261102-093623` |
-| FP16 262k, MTP head | FP16 262k | 434 | **50.62** | −4.4 % | 1.65/2 | 657 MB | `t15-fp16-mtp-corpus-20261102-123715` |
-| FP16 131k | FP16 131k | 408 | pending | — | — | — | running |
-| `-dds` on Q4 | Q4 262k | 389 | **53.71** / **55.44** | +1.4 % / +4.7 % | 1.95/2.74, 2.07/2.90 | 1777 / 1805 MB | `t14-q4-dds-corpus-20261102-102211`, `t16-dds-confirm-20261102-160442` |
-| chunk 8192 | Q4 262k | 389 | refused at 381 | — | — | — | `t15-chunk8192-pp` at 389, load refusal at 381 |
+| option | cache | split | corpus t/s | vs deployed | draft accepted | min free VRAM | peak working set | min avail RAM | evidence |
+|---|---|---|---|---|---|---|---|---|---|
+| **deployed** | Q4 262k | 381 (dynamic) | — | — | — | 1681 MB | 42.6 GB | 9074 MB | server boot, no harness row |
+| Q4 262k, static floor | Q4 262k | 389 | **52.96** | reference | 2.34/4 | 1777 MB | 41.7 GB | 4652 MB | `t14-q4-262k-corpus-20261102-085612` |
+| Q2 262k | Q2 262k | 378 | **54.78** | +3.4 % | 2.39/4 | 777 MB | 40.7 GB | 6880 MB | `t14-q2-262k-corpus-20261102-091413` |
+| FP16 262k | FP16 262k | 448 | **46.56** | −12.1 % | 2.39/4 | 2057 MB | 46.8 GB | 2094 MB | `t14-fp16-262k-corpus-20261102-093623` |
+| FP16 262k, MTP head | FP16 262k | 434 | **50.62** | −4.4 % | 1.65/2 | 657 MB | 46.2 GB | 2773 MB | `t15-fp16-mtp-corpus-20261102-123715` |
+| FP16 131k | FP16 131k | 408 | pending | — | — | — | — | — | running |
+| `-dds` on Q4, run 1 | Q4 262k | 389 | **53.71** | +1.4 % | 1.95/2.74 | 1777 MB | 41.7 GB | 6638 MB | `t14-q4-dds-corpus-20261102-102211` |
+| `-dds` on Q4, run 2 | Q4 262k | 389 | **55.44** | +4.7 % | 2.07/2.90 | 1805 MB | 41.6 GB | 5632 MB | `t16-dds-confirm-20261102-160442` |
+| chunk 8192 | Q4 262k | 389 | refused at 381 | — | — | — | — | — | `t15-chunk8192-pp` at 389, load refusal at 381 |
+
+Two slots are deployed. Aggregate throughput is flat in every pair measured (12.77 against 12.69 at
+20 k; 3.19 against 3.12 at 130 k), so the second slot buys latency hiding and nothing else.
 
 ## What each compromise costs
 

@@ -56,8 +56,8 @@ def main(argv: list[str]) -> int:
     for a in arms:
         by_run.setdefault(a["run_id"], {})[a["arm"]] = (float(a["tok_s"]), float(a["acc"]), float(a["draft"]))
 
-    print("| run | cache | split | corpus t/s | baseline t/s | accepted | min free VRAM | status |")
-    print("|---|---|---|---|---|---|---|---|")
+    print("| run | cache | split | corpus t/s | baseline t/s | accepted | min free VRAM | peak working set | min avail RAM | status |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
     for r in sorted(passes, key = lambda x: x["finished_utc"]):
         got = by_run.get(r["run_id"], {})
         draft = next((v for k, v in got.items() if k.lower() != "baseline"), (None, None, None))
@@ -67,8 +67,10 @@ def main(argv: list[str]) -> int:
         tps = f"{draft[0]:.2f}" if draft[0] else ""
         bps = f"{base[0]:.2f}" if base[0] else ""
         acc = f"{draft[1]:.2f}/{draft[2]:.2f}" if draft[1] else ""
+        ws = f"{int(r['peak_proc_ws_mb']) / 1024:.1f} GB" if r.get('peak_proc_ws_mb') else ""
+        ram = f"{r['min_avail_ram_mb']} MB" if r.get('min_avail_ram_mb') else ""
         print(f"| `{r['run_id']}` | {cache} | {split} | {tps} | {bps} | {acc} | "
-              f"{r['min_free_vram_mb']} MB | {r['status']} |")
+              f"{r['min_free_vram_mb']} MB | {ws} | {ram} | {r['status']} |")
     return 0
 
 
