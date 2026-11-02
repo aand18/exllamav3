@@ -96,6 +96,32 @@ cpu_moe_split_experts: 440
 The split must move with the cache mode: **Q4 at 262k needs 381, not 378**. At 378 the engine
 refuses with `Insufficient VRAM in split for model and cache`, the same way it refused 262144 at 376.
 
+## Evidence
+
+Every number above traces to a record:
+
+- **Row 1 (Q4) and row 3 (Q2)**: `t14-q4-262k-corpus-20261102-085612` at split 389 and
+  `t14-q2-262k-corpus-20261102-091413` at split 378, both `ok`, same session. Q4 at the server's
+  dynamic split 381 has no harness row, because `spec_decode` runs static placement and refuses
+  there (`t14-q4-262k-corpus-20261102-085450`, 25 s).
+- **The live bucket table**: parsed from the server logs of 2026-10-31 and 2026-11-01 (731 requests),
+  not from a harness run, so it carries no run id. The parse is reproducible from `logs/server-*.log`.
+- **Q2 corpus 58.54 tok/s**: `t13-378-corpus-20261031-162616`.
+- **The floors**: 378 for Q2 and 381 for Q4 at 262144, both found by loading, not by arithmetic. 262144
+  at split 376 refuses (`t13-262k-dflash-20261030-080138`) and at 392 runs
+  (`t13-262k-dflash-s392-20261030-081052`).
+- **Rows 2, 5 and 6** remain predictions; `bench/options_table.py` lists every corpus arm beside its
+  cache mode and split.
+
+The gate that requires these citations to exist and to be `ok`, with the two refusals named as
+failures rather than measurements:
+
+```
+bench/verify_task.py --post --report wiki/plans/v165-reports/T14-config-catalog.md \
+    --cites-failure t13-262k-dflash-20261030-080138 \
+    --cites-failure t14-q4-262k-corpus-20261102-085450
+```
+
 ## Measured versus predicted
 
 - **Measured**: the Q2 corpus throughput in row 3, its per-bucket live numbers above, and the split

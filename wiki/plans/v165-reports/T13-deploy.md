@@ -372,3 +372,12 @@ so it fires on healthy production traffic, not on a fault.
 measurement passes, where a runaway configuration has to die inside seconds, but nobody arms them
 against the live endpoint. With the watcher gone the host RAM ceiling is enforced by the OS again.
 The server was restarted at 10:31 UTC (load 32.1 s, `n_ctx=262144`, port 5000, same key).
+
+## Verifying this report
+
+The 262144-at-376 run is cited as a refusal, not a measurement:
+
+```
+bench/verify_task.py --post --report wiki/plans/v165-reports/T13-deploy.md \
+    --cites-failure t13-262k-dflash-20261030-080138
+```
