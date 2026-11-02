@@ -13,7 +13,7 @@ DFlash2 window 4, Qwen3.8-Flash-Next `3.18bpw_h6_ng8`.
 | Q2 262k | Q2 262k | 378 | **54.78** | +3.4 % | 2.39/4 | 777 MB | 40.7 GB | 6880 MB | `t14-q2-262k-corpus-20261102-091413` |
 | FP16 262k | FP16 262k | 448 | **46.56** | −12.1 % | 2.39/4 | 2057 MB | 46.8 GB | 2094 MB | `t14-fp16-262k-corpus-20261102-093623` |
 | FP16 262k, MTP head | FP16 262k | 434 | **50.62** | −4.4 % | 1.65/2 | 657 MB | 46.2 GB | 2773 MB | `t15-fp16-mtp-corpus-20261102-123715` |
-| FP16 131k | FP16 131k | 408 | pending | — | — | — | — | — | running |
+| **FP16 131k** | FP16 131k | 408 | **50.64** | −4.4 % | 2.35/4 | 2363 MB | 44.2 GB | 4415 MB | `t16-fp16-131k-corpus-20261102-164829` |
 | `-dds` on Q4, run 1 | Q4 262k | 389 | **53.71** | +1.4 % | 1.95/2.74 | 1777 MB | 41.7 GB | 6638 MB | `t14-q4-dds-corpus-20261102-102211` |
 | `-dds` on Q4, run 2 | Q4 262k | 389 | **55.44** | +4.7 % | 2.07/2.90 | 1805 MB | 41.6 GB | 5632 MB | `t16-dds-confirm-20261102-160442` |
 | chunk 8192 | Q4 262k | 389 | refused at 381 | — | — | — | — | — | `t15-chunk8192-pp` at 389, load refusal at 381 |
@@ -26,8 +26,11 @@ Two slots are deployed. Aggregate throughput is flat in every pair measured (12.
 - **Q2 instead of Q4**: about 3 % faster on paper, and no probe in this harness can see the
   difference in answer quality. The operator's traffic is the only evidence that Q2 hurt, which is
   why Q4 is deployed.
-- **FP16 instead of Q4**: about 12 % slower, 6.3 GB more host working set, and still no measurable
-  quality gain on three probes. Not worth it on this card.
+- **FP16 instead of Q4 at 262k**: about 12 % slower, 6.3 GB more host working set, and still no
+  measurable quality gain on three probes. Not worth it on this card.
+- **FP16 at 131k instead of Q4 at 262k**: **−5.9 % median, and Coding is level at 0.998** (Agentic
+  code 0.933, Agentic curl 0.943). Half the context buys the most precise cache the card can hold at
+  a price the coding column barely notices. This is the best-value precise option measured.
 - **FP16 with the MTP head**: recovers half of the FP16 tax by dropping the split 14 experts, but its
   two-token drafts lose 19 % on Coding and Agentic code. Not viable for this traffic.
 - **`-dds`**: two runs above the reference on the corpus and on Agentic curl, flat on Coding, and
@@ -54,8 +57,8 @@ The Q2 arm runs next at the split Q4 was measured at. At a fixed split the only 
 cache bytes (2.09 GiB against 2.84 GiB) and the arithmetic they cost per token. Nothing else in the
 two runs moves: same model, same drafter, same floors, same corpus.
 
-**Prediction: 52.96 tok/s within the campaign's own spread (about ±5 %), and acceptance equal to
-Q4's 2.34/4.** If Q2 lands materially above that band, the Q4 cache has a runtime cost beyond its
+**Prediction: 52.96 tok/s, and acceptance equal to Q4's 2.34/4.** A result more than 5 % away from
+52.96 counts as a miss, which is roughly the spread the campaign measured between identical runs. If Q2 lands materially above that band, the Q4 cache has a runtime cost beyond its
 placement handicap. If it lands inside, the 3.4 % gap measured between Q2@378 and Q4@389 is the
 split, not the cache, and the operator's choice becomes free rather than 3 %.
 
