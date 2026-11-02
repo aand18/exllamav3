@@ -152,9 +152,20 @@ def run_pending_swap_sweeps(infer_params):
 
 _STATS_SAVE_INTERVAL = 4096   # decode steps between writes of the expert frequency profile
 _STATS_MIN_STEPS = 64         # decode steps a session needs before its profile is worth keeping
-_PROMOTE_BUDGET = 6         # promotions issued per step over all layers (and as many demotions)
-_PROMOTE_RATIO = 1.5        # a miss is promoted when its decayed count is this many times the victim's
-_PROMOTE_DECAY = 0.98       # per-step decay of the hit counts
+
+# Promote-on-miss policy. The defaults are what the code shipped with; the knobs exist because the
+# budget is a rate the box decides, not the algorithm: each promotion moves an expert's bytes over
+# PCIe (~73 us pinned for a 1.95 MB expert at 26.8 GB/s) and each *avoided* host expert costs ~41 us
+# of worker time on this model, so the budget is worth raising only as far as the reuse covers the
+# transfer. Read once at import, like the other placement switches here.
+_PROMOTE_BUDGET = max(0, int(os.environ.get("EXL3_MOE_CPU_PROMOTE_BUDGET", 6)))
+_PROMOTE_RATIO = float(os.environ.get("EXL3_MOE_CPU_PROMOTE_RATIO", 1.5))
+_PROMOTE_DECAY = float(os.environ.get("EXL3_MOE_CPU_PROMOTE_DECAY", 0.98))
+# EXL3_MOE_TIER_STATS=1: report the decode-time coverage of the expert tier (the share of distinct
+# (layer, expert) pairs the VRAM tier held) once per generation, from the generator's queue-drained
+# hook. 2 also prints per-layer detail. Diagnostic only; the snapshot it takes is one pinned
+# device-to-host copy per layer per step, so it costs a little latency and stays off by default.
+_TIER_STATS = int(os.environ.get("EXL3_MOE_TIER_STATS", 0) or 0)
 
 
 class _PromoteState:
@@ -330,6 +341,180 @@ def _split_promote_step(ip, modules, rows):
 def _split_slot_linears(m, g):
     """(gate or None, up, down) Linear modules of GPU slot g"""
     return ((m.gates[g].inner if m.gated else None), m.ups[g].inner, m.downs[g].inner)
+
+
+class _TierStats:
+    """Decode-time coverage of the VRAM expert tier, over every dynamically placed split module.
+
+    The number every placement decision here is gated on, and until now the engine did not report
+    it: with the tail of each layer's experts on the worker, what share of the routed expert
+    evaluations does the GPU tier serve? That share is what the worker's share of the decode time
+    scales with (a host expert costs ~41 us here, a resident one a few us of GPU time). A static
+    frequency profile answers it once at load (~28 % on this model, measured on both engines); the
+    adaptive tier is what moves it, and whether a promotion budget pays is decided by that curve.
+
+    Method: the per-layer hit histograms are already maintained on the GPU by moe_split_map (+1 per
+    routed selection). This snapshots them into pinned memory, one device-to-host copy per layer per
+    step, and reads the *previous* step's values -- the same discipline as _split_promote_step, so
+    nothing here synchronizes. Between two snapshots the policy multiplies every count by its decay
+    rate (per step under promote-on-miss, once per sweep otherwise), so a step's evaluations are
+
+        sum(counts now) - decay * sum(counts before)
+
+    which is exact at any count magnitude, unlike a per-expert comparison (one routing adds 1 while
+    the decay above a count of 25 subtracts more than 1). Splitting the sum over the worker-resident
+    experts by the same arithmetic gives the evaluations the CPU did.
+
+    A drop larger than the policy's own decay (a sweep's halving of the counts) re-baselines instead
+    of reporting a negative step: one step in 128, discarded.
+
+    The whole thing is off unless EXL3_MOE_TIER_STATS is set, and it rides alongside the promote
+    path's own counters rather than replacing them.
+    """
+
+    def __init__(self, modules):
+        import numpy as np
+        self.modules = [m for m in modules
+                        if getattr(m, "_split_map", None) is not None
+                        and getattr(m, "_split_hist", None) is not None]
+        n = max(len(self.modules), 1)
+        e = max((m.num_experts for m in self.modules), default = 1)
+        self.shape = (n, e)
+        # The GPU slices are slots [0, first) of the placement map, so `slot < first` is the
+        # residency test. Padded rows are given a first value they can never clear
+        self.first = np.full((n, 1), 1 << 30, dtype = np.int64)
+        # Placement mirror: physical slot of each router expert, padded with a slot that is neither
+        # resident nor live (so a shorter layer's padding is not counted either way)
+        self.mp = np.full((n, e), 1 << 30, dtype = np.int64)
+        for i, m in enumerate(self.modules):
+            first = m.cpu_split_first
+            self.first[i, 0] = first
+            slots = getattr(m, "_split_mp", None)
+            if slots is None:
+                # No spares: the placement map is the identity (slot == router id), so the split
+                # point alone decides residency
+                slots = np.arange(m.num_experts, dtype = np.int64)
+            self.mp[i, :m.num_experts] = slots
+        # The decay the placement policy applies to the counts between two snapshots, and the two
+        # masks the sums are split over: live experts, and those the map sends to the worker
+        self.decay = _PROMOTE_DECAY if (self.modules and getattr(self.modules[0], "_split_spares", 0)) else 1.0
+        self.worker = (self.mp < (1 << 30)) & ~(self.mp < self.first)
+        try:
+            self.snap = torch.zeros(self.shape, dtype = torch.float).pin_memory()
+        except Exception:
+            # No CUDA (a CPU-only box, or the test suite): a plain buffer keeps the arithmetic
+            # testable. Production always takes the pinned branch, which is what makes the D2H cheap
+            self.snap = torch.zeros(self.shape, dtype = torch.float)
+        self.snap_np = self.snap.numpy()
+        self.snap_ev = {}
+        self.prev = None       # numpy block, once a second snapshot exists to compare it with
+        self.devices = sorted({torch.device(m.device).index or 0 for m in self.modules})
+        self.routed = 0        # routed expert evaluations since the last report
+        self.missed = 0        # ... of which the CPU worker computed
+        self.steps = 0
+        self.per_layer = np.zeros(self.shape, dtype = np.int64)   # EXL3_MOE_TIER_STATS=2 detail
+
+    def _consume(self, cur):
+        """Account one step's routing block `cur` (a [layers, experts] snapshot of the hit counts)
+        against the previous one. Returns False when the block does not fit the policy's decay (a
+        sweep halved the counts), in which case the block only re-baselines"""
+        import numpy as np
+        prev = self.prev
+        if prev is None:
+            # First block after a load or a capture gap: nothing to compare against yet
+            self.prev = cur
+            return False
+        tot_cur, tot_prev = float(cur.sum()), float(prev.sum())
+        if tot_cur + 1e-3 < self.decay * tot_prev:
+            self.prev = cur
+            return False
+        self.routed += int(round(tot_cur - self.decay * tot_prev))
+        self.missed += int(round(float(cur[self.worker].sum() - self.decay * prev[self.worker].sum())))
+        per_layer = cur - self.decay * prev
+        per_layer[~self.worker] = 0.0
+        self.per_layer += np.rint(per_layer).astype(np.int64)
+        self.steps += 1
+        self.prev = cur
+        return True
+
+    def step(self):
+        """One decode step, from the first registered module's submit and before this step's routing
+        is translated, so a step's own routes are read on the next call"""
+        if not self.modules:
+            return
+        if torch.cuda.is_current_stream_capturing():
+            # A bsz-1 graph may be capturing on this stream, and no device-to-host copy belongs in
+            # it. Drop the sample across the gap: the next real step re-baselines instead of
+            # counting the missing steps as none
+            self.snap_ev.clear()
+            self.prev = None
+            return
+        have = bool(self.snap_ev)
+        for ev in self.snap_ev.values():
+            ev.synchronize()
+        if have:
+            self._consume(self.snap_np.copy())
+        for i, m in enumerate(self.modules):
+            dev = torch.device(m.device)
+            with torch.cuda.device(dev):
+                self.snap[i, :m.num_experts].copy_(m._split_hist, non_blocking = True)
+        for d in self.devices:
+            ev = torch.cuda.Event()
+            ev.record(torch.cuda.current_stream(d))
+            self.snap_ev[d] = ev
+
+    def report(self, detail = 0):
+        """The line, and reset: coverage over the steps since the last report"""
+        if not self.steps:
+            return None
+        cov = 1.0 - self.missed / max(self.routed, 1)
+        line = (f" -- expert tier: {100.0 * cov:.1f}% coverage "
+                f"({self.routed} expert evaluations, {self.missed} on the CPU, {self.steps} steps, "
+                f"{self.missed / self.steps:.1f} on the CPU/step)")
+        if detail >= 2 and self.modules:
+            worst = sorted(range(len(self.modules)),
+                           key = lambda i: -int(self.per_layer[i].sum()))[:6]
+            line += "\n    worst layers: " + " ".join(
+                f"{self.modules[i].key}:{int(self.per_layer[i].sum())}" for i in worst)
+        self.routed = self.missed = self.steps = 0
+        self.per_layer.fill(0)
+        return line
+
+
+def _tier_stats_step(ip, modules, rows):
+    """Drive the tier statistics for one decode step (skipped on prefill-size batches: their routing
+    is the prompt's, not the conversation's, and it would smear the histogram window)"""
+    if not modules or rows >= modules[0].cpu_host.stream_min_rows:
+        return
+    stt = getattr(ip, "moe_cpu_tier_stats", None)
+    if stt is None:
+        try:
+            stt = _TierStats(modules)
+        except Exception as e:
+            print(f" !! tier stats disabled: {e}", flush = True)
+            stt = False
+        ip.moe_cpu_tier_stats = stt
+    if stt:
+        stt.step()
+
+
+def report_tier_stats(ip):
+    """Print and reset the tier statistics, plus the arena's pin state. Called from the generator's
+    queue-drained hook, where a synchronize is already allowed -- never mid-stream."""
+    stt = getattr(ip, "moe_cpu_tier_stats", None)
+    if not stt:
+        return
+    line = stt.report(detail = _TIER_STATS)
+    if line is None:
+        return
+    host = getattr(stt.modules[0], "cpu_host", None) if stt.modules else None
+    if host is not None:
+        line += "; " + host.arena_pin_report()
+    promo = [m for m in stt.modules if getattr(m, "_split_promo_n", None) is not None]
+    if promo:
+        line += (f"; {sum(m._split_promo_n for m in promo)} promotions, "
+                 f"{sum(m._split_demo_n for m in promo)} demotions since load")
+    print(line, flush = True)
 
 
 def _split_promote_verify(m, t):
@@ -947,6 +1132,10 @@ class BlockSparseMLP_CPU:
         self._split_step_count += 1
         if self._split_step_count % _STATS_SAVE_INTERVAL == 0:
             save_expert_stats(ip)
+        if _TIER_STATS:
+            # Report-only mode; the promote path's own snapshot (below) stays independent, so the
+            # promotion counters in the report and its coverage come from the same steps
+            _tier_stats_step(ip, reg, self._split_submit_rows)
         if self._split_spares:
             # Promote-on-miss replaces the sweep: one pass over every split module per step
             _split_promote_step(ip, reg, self._split_submit_rows)

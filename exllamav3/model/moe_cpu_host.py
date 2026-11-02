@@ -155,6 +155,18 @@ class MoeCpuTuning:
         # vm.nr_hugepages / hugepages-1048576kB reservations); Windows uses named sections, no
         # hugepage variant.
         self.pinned_arena = os.environ.get("EXL3_MOE_PINNED_ARENA", "0") != "0"
+        # EXL3_MOE_PINNED_ARENA_GIB=N: page-lock at most N GiB of the arena instead of as much as
+        # the driver allows. Two reasons to bound it deliberately. (1) The arena's chunks are
+        # registered hottest-expert-first (the split load permutes the expert lists by the saved
+        # frequency profile), so a prefix is the *most likely* source of a promotion: on a box that
+        # refuses a large registration (WDDM/WSL2 budget about half of RAM, and the KV tiers and
+        # other processes share it) a prefix keeps the cheap DMA path while leaving page-locked
+        # memory for the handoff ring, which is what the staged path runs on. (2) The point where
+        # the driver refuses is not reproducible between runs; a budget is. 0/unset = today's
+        # behaviour (register until the driver refuses).
+        self.pinned_arena_gib = float(os.environ.get("EXL3_MOE_PINNED_ARENA_GIB", "0") or 0)
+        if self.pinned_arena_gib < 0:
+            raise ValueError("EXL3_MOE_PINNED_ARENA_GIB must be >= 0")
         self.arena_huge = os.environ.get("EXL3_MOE_ARENA_HUGE", "").strip().lower()
         assert self.arena_huge in ("", "2m", "1g"), "EXL3_MOE_ARENA_HUGE must be 2m or 1g"
         if self.arena_huge and os.name == "nt":
@@ -940,6 +952,13 @@ def _pinning_exhausted(e: Exception) -> bool:
     return "out of memory" in str(e).lower()
 
 
+def _pin_budget_spent(budget_bytes: int, pinned_bytes: int, size: int) -> bool:
+    """Whether page-locking an arena chunk of `size` bytes would exceed the
+    EXL3_MOE_PINNED_ARENA_GIB budget. A zero budget means no budget: the driver decides, which is
+    the behaviour without the variable"""
+    return bool(budget_bytes) and pinned_bytes + size > budget_bytes
+
+
 class MoeCpuHost:
 
     @classmethod
@@ -1004,6 +1023,15 @@ class MoeCpuHost:
         # memory (WDDM and WSL2 budget the pinnable memory at about half of RAM) ends the pinning,
         # and experts in it and every later chunk stream through the staged path instead
         self.arena_registered = None
+        # Bytes of arena page-locked so far and the explicit budget (0 = the driver decides), see
+        # EXL3_MOE_PINNED_ARENA_GIB. The budget covers arena chunks only: the handoff ring and the
+        # promotion staging buffers have their own registrations.
+        self.arena_pinned_bytes = 0
+        self.arena_pin_budget = int(TUNING.pinned_arena_gib * (1 << 30))
+        if self.arena_pin_budget and not self.pinned:
+            print(" !! EXL3_MOE_PINNED_ARENA_GIB is set but the pinned arena is off (EXL3_MOE_PINNED_ARENA / "
+                  "-mcpa): no arena chunk is page-locked, so nothing can be promoted by DMA", flush = True)
+            self.arena_pin_budget = 0
         self.layer_blocks = []
         self.layer_auxloc = []
         # Promote-on-miss transfers (see BlockSparseMLP_CPU._split_promote_step): per device a
@@ -1079,6 +1107,7 @@ class MoeCpuHost:
                 if not _pinning_exhausted(e) or last is None:
                     raise
                 cuda_host_unregister(self.arena_views[last].data_ptr())
+                self.arena_pinned_bytes -= len(self.arena_views[last]) * 2
                 self.arena_views[last] = None
                 self.arena_maps[last].close()
                 self.arena_maps[last] = None
@@ -1115,6 +1144,20 @@ class MoeCpuHost:
             self.arena_maps.append(None)
             self.arena_views.append(None)
             return
+        if _pin_budget_spent(self.arena_pin_budget, self.arena_pinned_bytes, size):
+            # Explicit budget spent (EXL3_MOE_PINNED_ARENA_GIB): the same fallback as the driver's
+            # refusal below, taken deliberately so that (a) the handoff ring keeps page-locked
+            # memory and (b) the pin point is reproducible between runs. Experts in this and the
+            # later chunks are not promotable — promote_ready() refuses them — but the prefix is
+            # the hot end of the arena, so the promotions that matter still go by DMA
+            m.close()
+            self.arena_registered = index
+            self.arena_maps.append(None)
+            self.arena_views.append(None)
+            print(f" -- CPU MoE pinned arena: pin budget {self.arena_pin_budget >> 30} GiB spent at "
+                  f"chunk {index} ({self.arena_pinned_bytes >> 20} MiB registered); experts in this "
+                  f"and the remaining chunks use the staged path", flush = True)
+            return
         view = None
         try:
             # count = size // 2: a section opened by name reports its page-rounded size, and
@@ -1141,6 +1184,7 @@ class MoeCpuHost:
                 f"({e}). Unset EXL3_MOE_PINNED_ARENA to use the staged path.") from e
         self.arena_maps.append(m)
         self.arena_views.append(view)
+        self.arena_pinned_bytes += len(view) * 2
         if os.environ.get("EXL3_MOE_ARENA_DEBUG"):
             print(f" -- pinned arena: mapped + registered chunk {index} ({size >> 20} MiB)",
                   flush = True)
@@ -1750,6 +1794,17 @@ class MoeCpuHost:
             chunks |= {loc[0] for loc in proj if loc is not None}
         return all(c < len(self.arena_views) and self.arena_views[c] is not None for c in chunks)
 
+
+    def arena_pin_report(self):
+        """Arena pin state in one phrase, for the tier-stats line: how much of the arena is
+        page-locked, over how many chunks, and whether the explicit budget or the driver set the
+        limit"""
+        if not self.pinned:
+            return "pinned arena off"
+        pinned = [v for v in self.arena_views if v is not None]
+        limit = f"budget {self.arena_pin_budget >> 30} GiB" if self.arena_pin_budget else "driver limit"
+        return (f"arena {self.arena_pinned_bytes >> 20} MiB pinned in {len(pinned)} of "
+                f"{len(self.arena_views)} chunk(s), {limit}")
 
     def _promo_state(self, device):
         key = torch.device(device).index or 0
