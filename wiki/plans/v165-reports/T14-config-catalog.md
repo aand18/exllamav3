@@ -13,20 +13,20 @@ card they use.
 
 | you want | row | cost against the deployed config |
 |---|---|---|
-| best all-round at 262k for coding traffic (**deployed**) | 1 | — |
+| cache accuracy at 262k, coding traffic (**deployed**) | 1 | — |
+| the same at Q2, about 2 % more decode | 3 | +1.7 % decode, −0.75 GiB cache |
 | one client only, less batching | 2 | +1–2 % single stream (predicted) |
-| cache accuracy at 262k | 3 | about −19 % decode (predicted) |
 | the lowest latency, 131k is enough | 4 | highest of the set, 131k ceiling |
-| cache accuracy, cheap | 5 | about −10 % (predicted), +2 GiB RAM |
-| cache accuracy at the full 262k | 6 | about −26 % (predicted), +4.5 GiB RAM |
+| fp16 accuracy, cheap | 5 | about −10 % (predicted), +2 GiB RAM |
+| fp16 accuracy at the full 262k | 6 | about −26 % (predicted), +4.5 GiB RAM |
 
 ## The catalog
 
 | # | config | cache | split floor | resident VRAM | host arena | decode (measured or predicted) | verdict |
 |---|---|---|---|---|---|---|---|
-| 1 | **deployed** | 262144 Q2, 2 slots | **378** | 21.4 GiB (763 MB free at the floor) | 33.1 GiB | **58.54 tok/s corpus**; 46–53 T/s live | best all-round |
-| 2 | single slot | 262144 Q2, 1 slot | 378 | 21.4 GiB (−0.1) | 33.0 GiB | +1–2 % single stream (predicted, less batching) | use when one client only |
-| 3 | **accuracy at 262k** | 262144 **Q4**, 2 slots | **416** | 20.2 GiB | 36.4 GiB | ≈ −19 % (predicted: 38 experts above the Q2 floor at 0.5–0.6 %/expert) | if cache accuracy matters more than speed |
+| 1 | **deployed** | 262144 **Q4**, 2 slots | **381** | 21.2 GiB (839 MB free at the floor) | 32.6 GiB | Q2 measured **58.54 tok/s corpus**; Q4 about −1.7 % by the expert count, corpus not yet re-run | cache accuracy at full context |
+| 2 | single slot | 262144 Q4, 1 slot | ~381 | 21.1 GiB (−0.1) | 32.5 GiB | +1–2 % single stream (predicted, less batching) | use when one client only |
+| 3 | **fastest at 262k** | 262144 **Q2**, 2 slots | **378** | 20.7 GiB (763 MB free at the floor) | 32.3 GiB | **58.54 tok/s corpus**; 46–53 T/s live | the previous default, +1.7 % decode |
 | 4 | fastest decode, half context | 131072 Q2, 2 slots | **368** | 20.9 GiB | 32.2 GiB | highest of the set (fewest CPU experts); 131 k ceiling | for short-prompt, latency-critical work |
 | 5 | fp16 cache, 131k | 131072 **FP16**, 2 slots | **~400** | 20.4 GiB | 34.2 GiB | ≈ −10 % (predicted: 22 experts above the Q2 floor) | accuracy at half context, cheap |
 | 6 | **fp16 cache, 262k** | 262144 **FP16**, 2 slots | **~440** | 20.4 GiB | 37.6 GiB | ≈ −26 % (predicted: 62 experts above the Q2 floor) | full context, full precision cache |
@@ -55,18 +55,18 @@ Only `config.yml` fields change. Restart with `start_tuned.ps1` (31 s load); env
 key stay as they are.
 
 ```yaml
-# 1. deployed (fastest all-round)
+# 1. deployed (cache accuracy at 262k)
 cache_size: 262144
-cache_mode: "2,2"
-cpu_moe_split_experts: 378
+cache_mode: "4,4"
+cpu_moe_split_experts: 381
 max_batch_size: 2
 
 # 2. single stream
 max_batch_size: 1
 
-# 3. accuracy at 262k
-cache_mode: "4,4"
-cpu_moe_split_experts: 416
+# 3. fastest at 262k (the previous default)
+cache_mode: "2,2"
+cpu_moe_split_experts: 378
 
 # 4. fastest decode, 131k context
 cache_size: 131072
@@ -81,18 +81,22 @@ cache_mode: "16,16"
 cpu_moe_split_experts: 440
 ```
 
-The split must move with the cache mode: **Q4 at 262k needs 416, not 378**. At 378 the engine
+The split must move with the cache mode: **Q4 at 262k needs 381, not 378**. At 378 the engine
 refuses with `Insufficient VRAM in split for model and cache`, the same way it refused 262144 at 376.
 
 ## Measured versus predicted
 
-- **Measured**: row 1's corpus throughput, its per-bucket live numbers above, the split floors for
-  262k Q2 (378, engine-verified) and Q2 at 131k (368 ran in T10), and every fit number through
-  `size_check`.
+- **Measured**: the Q2 corpus throughput in row 3, its per-bucket live numbers above, and the split
+  floors at 262144 — **Q2 378, Q4 381**, both engine-verified (376 and 378 refuse at Q4). Q2 at
+  131k ran in T10 at 368.
+- **A floor is only a floor when the engine says so.** `size_check.py` predicted 416 for Q4 at 262k
+  because it reserves 2048 MB plus a 1024 MB headroom by default; the engine accepted 381 (839 MB
+  free at its own reserve). Use the tool to rule a configuration out, then load it to find the
+  floor.
 - **Predicted**: rows 2, 3, 5 and 6, on both axes. The split floor comes from `size_check.py`, which
   reads 1–2 experts optimistic at this card: it accepts 376 where the engine refuses. The decode
   delta comes from the split curve measured at 262k, where 392 → 378 = +7.8 % for 14 experts, i.e.
-  about 0.56 %/expert.
+  about 0.56 %/expert. That is how Q4's 3 extra experts become ~1.7 %.
 - Each prediction needs one `perf.py` ladder, about 5 min, and the box serves live traffic.
 
 ## Cache arithmetic, and the retracted 15.8 GiB
