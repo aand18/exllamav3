@@ -30,16 +30,42 @@ Split floors are engine-verified at 262144: 376 and 378 refuse at Q4, 381 loads;
 
 | run id | arm | status |
 |---|---|---|
-| `t14-q4-262k-corpus-*` | A | running |
-| `t14-q2-262k-corpus-*` | B | queued |
-| `t14-fp16-262k-corpus-*` | C | queued, floor check first |
+| `t14-q4-262k-corpus-*` | A | **ok**, 1068 s at split 389 |
+| `t14-q2-262k-corpus-*` | B | **ok**, 1049 s at split 378 |
+| `t14-fp16-262k-corpus-*` | C | running at split 448 |
+
+**A and B both ran 8 experts above the server's dynamic floor**, because `spec_decode` sets
+`EXL3_MOE_CPU_SWAP=0` and static placement needs more. Q4 at 381 refuses in this harness (25 s) while
+the server loads it at 381 with dynamic placement; Q4 needs 389 static, Q2 keeps 378. The static tax
+applies to both arms, so the ratio stands, but the absolute numbers are not the server's numbers.
 
 The corpus is the same runner that produced the 58.54 tok/s Q2 figure in T14, so A and B compare
 directly with it and with each other.
 
-## Results
+## Results — Q2 versus Q4 (same session, 2026-11-02)
 
-To fill when the arms finish.
+| arm | corpus tok/s | baseline tok/s | acceptance | min free VRAM |
+|---|---|---|---|---|
+| Q2 at 378 | **54.78** | 40.65 | 2.39/4.00 | 777 MB |
+| Q4 at 389 | **52.96** | 39.67 | 2.34/4.00 | 1777 MB |
+
+Median per-category ratio **0.969** (n=8, range 0.836–1.028), from `bench/ratios.py` over the two
+runs. The categories the operator cares about:
+
+| category | Q2 tok/s | Q4 tok/s | ratio | Q2 acc | Q4 acc |
+|---|---|---|---|---|---|
+| Coding | 76.96 | 75.32 | 0.979 | 2.76 | 2.76 |
+| Agentic code | 72.24 | 70.00 | 0.969 | 3.18 | 3.09 |
+| Agentic curl | 60.44 | 58.39 | 0.966 | 2.33 | 2.41 |
+| Translation (reasoning) | 41.08 | 34.36 | 0.836 | 1.74 | 1.42 |
+
+**Q4 costs about 3 %, not the 19 % the first catalog predicted.** The expert count said 1.7 %; the
+measured 3.1 % is that plus the run-to-run spread.
+
+**Acceptance is flat, and that is expected.** Acceptance measures how often the drafter and the trunk
+agree on a token, not whether the trunk recalled the right paragraph. A cache that hurts long-context
+accuracy leaves token-level agreement untouched, so this number can neither confirm nor refute the
+operator's observation. The probe for that is retrieval at length, not acceptance.
 
 ## Harness wart found while setting up
 
