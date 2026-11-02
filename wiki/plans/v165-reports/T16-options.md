@@ -11,6 +11,7 @@ DFlash2 window 4, Qwen3.8-Flash-Next `3.18bpw_h6_ng8`.
 | **deployed** | Q4 262k | 381 (dynamic) | — | — | — | 1681 MB | 42.6 GB | 9074 MB | server boot, no harness row |
 | Q4 262k, static floor | Q4 262k | 389 | **52.96** | reference | 2.34/4 | 1777 MB | 41.7 GB | 4652 MB | `t14-q4-262k-corpus-20261102-085612` |
 | Q2 262k | Q2 262k | 378 | **54.78** | +3.4 % | 2.39/4 | 777 MB | 40.7 GB | 6880 MB | `t14-q2-262k-corpus-20261102-091413` |
+| **Q2 262k at Q4's split** | Q2 262k | 389 | **52.70** | −0.5 % | 2.34/4 | 2485 MB | 41.6 GB | 4900 MB | `t16-q2-389-corpus-20261102-170933` |
 | FP16 262k | FP16 262k | 448 | **46.56** | −12.1 % | 2.39/4 | 2057 MB | 46.8 GB | 2094 MB | `t14-fp16-262k-corpus-20261102-093623` |
 | FP16 262k, MTP head | FP16 262k | 434 | **50.62** | −4.4 % | 1.65/2 | 657 MB | 46.2 GB | 2773 MB | `t15-fp16-mtp-corpus-20261102-123715` |
 | **FP16 131k** | FP16 131k | 408 | **50.64** | −4.4 % | 2.35/4 | 2363 MB | 44.2 GB | 4415 MB | `t16-fp16-131k-corpus-20261102-164829` |
@@ -43,27 +44,31 @@ Two slots are deployed. Aggregate throughput is flat in every pair measured (12.
 
 ## What is not measured, and why it matters
 
-- **Q4 against Q2 at one split.** Q4 was measured at 389 and Q2 at 378. Eight experts is about 4.3 %
-  by the campaign's per-expert coefficient, which is larger than the 3.4 % gap, so the cache cost is
-  not separated from the placement cost. The run that settles it is Q2 at 389.
-- **FP16 at 131k**: the last option with real value; running.
+- **Q4 against Q2 at one split**: settled. 52.96 against 52.70 at split 389, acceptance identical,
+  so the cache width has no runtime cost and the earlier 3.4 % was placement.
+- **Production acceptance**: still the one number the harness cannot produce, because the box does
+  not archive prompts.
 - **Production acceptance.** The corpus accepts 58.5 % of drafts; the live log shows 39.6 %, which is
   1.58 of 4 against a break-even near 1.5. Every drafting number here is priced on a friendlier
   workload than production.
 
-## Pre-registered prediction: Q2 at split 389
+## The prediction held: the cache costs VRAM, not speed
 
-The Q2 arm runs next at the split Q4 was measured at. At a fixed split the only difference is the
-cache bytes (2.09 GiB against 2.84 GiB) and the arithmetic they cost per token. Nothing else in the
-two runs moves: same model, same drafter, same floors, same corpus.
+Q2 was re-run at split 389, the split Q4 was measured at. Prediction: 52.96 tok/s and acceptance
+2.34/4, a miss if it landed more than 5 % away.
 
-**Prediction: 52.96 tok/s, and acceptance equal to Q4's 2.34/4.** A result more than 5 % away from
-52.96 counts as a miss, which is roughly the spread the campaign measured between identical runs. If Q2 lands materially above that band, the Q4 cache has a runtime cost beyond its
-placement handicap. If it lands inside, the 3.4 % gap measured between Q2@378 and Q4@389 is the
-split, not the cache, and the operator's choice becomes free rather than 3 %.
+| arm | split | corpus t/s | baseline | accepted |
+|---|---|---|---|---|
+| Q4 262k | 389 | 52.96 | 39.67 | 2.34/4.00 |
+| Q2 262k | 389 | **52.70** | 39.58 | **2.34/4.00** |
 
-Writing the prediction down before the run is the point: a result that matches it closes the
-question, and one that misses it is worth a second pass rather than a rounding exercise.
+Median per-category ratio **0.993**, Coding 0.991, Agentic code 0.978, Agentic curl 1.026. The
+prediction holds to half a percent, and acceptance is identical to the last digit.
+
+**So the Q4 cache costs VRAM, not speed.** At equal placement the two cache widths run at the same
+throughput. The 3.4 % gap measured earlier between Q2 at 378 and Q4 at 389 was the eleven experts
+that Q4's extra 0.75 GiB pushes to the CPU, not the cache width itself. The operator's switch to Q4
+therefore costs one thing only: a little headroom on the card, which at 262 k is eleven experts.
 
 ## Evidence status
 
