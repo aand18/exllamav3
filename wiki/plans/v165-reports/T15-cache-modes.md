@@ -102,3 +102,30 @@ main model. Production now uses the DFlash2 sidecar, so every DFlash2 run passes
 `-Extra "-dm <dir>"`, and a run that forgets it silently drafts with the MTP head while the state
 still says `spec_decode`. Fix: add `draft.draft_model` and emit `-dm` from the regime, then set
 `state.json` to the production truth. Not changed mid-campaign, because A/B/C must share one harness.
+
+## `-dds` (dynamic draft size) on DFlash2, measured at Q4
+
+`t14-q4-dds-corpus-20261102-102211` against the Q4 arm of the same session: corpus 53.71 against
+52.96, no-drafting baseline 39.69 against 39.67 (so the control held). Median per-category ratio
+**1.045**, but the distribution is bimodal and the shape is the finding:
+
+| category | without | with | ratio | acceptance without → with |
+|---|---|---|---|---|
+| Translation (reasoning) | 34.36 | 42.02 | 1.223 | 1.42 → 1.22 |
+| Translation | 35.12 | 41.86 | 1.192 | 1.48 → 1.26 |
+| Creative | 40.42 | 43.26 | 1.070 | 1.83 → 1.40 |
+| Agentic curl | 58.39 | 62.15 | 1.064 | 2.41 → 2.32 |
+| Coding | 75.32 | 77.27 | 1.026 | 2.76 → 2.67 |
+| Agentic code | 70.00 | 69.73 | 0.996 | 3.09 → 2.87 |
+| Creative (reasoning) | 39.10 | 39.44 | 1.009 | 1.68 → 1.18 |
+| Trivial repetition | 71.00 | 53.94 | 0.760 | 4.00 → 2.67 |
+
+Dynamic draft size pays where a fixed four draft tokens overdraft, and it costs where acceptance is
+at the ceiling: trivial repetition always accepts four, and `-dds` sends fewer, so it loses 24 %.
+Coding and agentic traffic sit in the middle: +2.6 % on Coding, +6.4 % on Agentic curl, flat on
+Agentic code.
+
+**Verdict: promising, not deployed.** One pass, and a category at 0.76 inside the same run. The
+T06 note called this "unresolved, leaning +2 %"; today's shape explains why the earlier reading was
+noisy. A confirmation pass plus a check that tabbyAPI forwards `dynamic_draft_tokens` would make it
+deployable.

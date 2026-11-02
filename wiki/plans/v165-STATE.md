@@ -189,8 +189,10 @@ the RAM floor is the component shrunk instead.
 
 - **T14 rows 2, 3, 5, 6 are predicted, not measured**: single slot; 262k Q4 at split ~416; 131k
   FP16 at ~400; 262k FP16 at ~440. Each needs one `perf.py` ladder (~5 min) while the box is free.
-- `-dds` on DFlash2: one ABBA pair at the T13 lock decides it (leaning +2 %, inside the reference's
-  own spread).
+- `-dds` on DFlash2: measured 2026-11-02 at Q4, median 1.045 but bimodal — +19 to +22 % on the two
+  Translation bands, +2.6 % Coding, +6.4 % Agentic curl, flat Agentic code, **0.76 on Trivial
+  repetition** (T15). One pass, so a confirmation run decides, and tabbyAPI must forward
+  `dynamic_draft_tokens` before it can be deployed.
 - Huge pages: the `=1` versus `=0` passes sat on the 2026-10-30 outlier day, so "no benefit" needs
   one run on a normal day.
 - DFlash2 quantisation: ~0.8 GB reclaimed, break-even acceptance **2.34/4**, needs a GPU window.
