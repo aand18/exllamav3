@@ -48,6 +48,20 @@ Two slots are deployed. Aggregate throughput is flat in every pair measured (12.
   1.58 of 4 against a break-even near 1.5. Every drafting number here is priced on a friendlier
   workload than production.
 
+## Pre-registered prediction: Q2 at split 389
+
+The Q2 arm runs next at the split Q4 was measured at. At a fixed split the only difference is the
+cache bytes (2.09 GiB against 2.84 GiB) and the arithmetic they cost per token. Nothing else in the
+two runs moves: same model, same drafter, same floors, same corpus.
+
+**Prediction: 52.96 tok/s within the campaign's own spread (about ±5 %), and acceptance equal to
+Q4's 2.34/4.** If Q2 lands materially above that band, the Q4 cache has a runtime cost beyond its
+placement handicap. If it lands inside, the 3.4 % gap measured between Q2@378 and Q4@389 is the
+split, not the cache, and the operator's choice becomes free rather than 3 %.
+
+Writing the prediction down before the run is the point: a result that matches it closes the
+question, and one that misses it is worth a second pass rather than a rounding exercise.
+
 ## Evidence status
 
 `bench/options_table.py` regenerates the measured rows from `passes.csv` and `arms.csv`, and
