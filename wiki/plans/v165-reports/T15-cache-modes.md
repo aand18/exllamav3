@@ -34,10 +34,10 @@ Split floors are engine-verified at 262144: 376 and 378 refuse at Q4, 381 loads;
 | `t14-q2-262k-corpus-20261102-091413` | B | **ok**, 1049 s at split 378 |
 | `t14-fp16-262k-corpus-20261102-093623` | C | **ok**, 1207 s at split 448 |
 
-**A and B both ran 8 experts above the server's dynamic floor**, because `spec_decode` sets
-`EXL3_MOE_CPU_SWAP=0` and static placement needs more. Q4 at 381 refuses in this harness (25 s) while
-the server loads it at 381 with dynamic placement; Q4 needs 389 static, Q2 keeps 378. The static tax
-applies to both arms, so the ratio stands, but the absolute numbers are not the server's numbers.
+**Only arm A ran above the server's dynamic floor.** `spec_decode` sets `EXL3_MOE_CPU_SWAP=0`, so Q4
+needs 389 to load statically while the server loads it at 381 dynamically; arm B kept 378, which is
+the same number the server uses for Q2. The Q4/Q2 ratio in that table is therefore a comparison
+across two placement regimes, and the absolute numbers are not the server's numbers.
 
 The corpus is the same runner that produced the 58.54 tok/s Q2 figure in T14, so A and B compare
 directly with it and with each other.
@@ -53,8 +53,8 @@ directly with it and with each other.
 Median per-category ratios against Q2: **Q4 0.969** (n=8) and **FP16 0.846**
 (n=8). FP16's Coding band is 0.814 and Agentic code 0.832.
 
-FP16 costs 15 % against Q2 and 12 % against Q4, and it moves 6.3 GB more into the host arena: its
-peak working set is 47.9 GB, and available RAM fell to 2094 MB at the worst sample. That is the same
+FP16 costs 15 % against Q2 and 12 % against Q4. Its peak process working set is 46.8 GiB against
+Q4's 41.7 GiB (+5.1 GiB), and available RAM fell to 2094 MB at the worst sample. That is the same
 range the retired 2048 MB floor used to fire at.
 
 Median per-category ratio **0.969** (n=8), from `bench/ratios.py` over the two
@@ -156,7 +156,7 @@ than 8192 at every band below 262 k), and 14336 refuses. Below 4096 every step i
 a split step to 389 - and the 389 arms above ran without the drafter, so whether 8192 fits there
 with it is untested.
 
-**8192 is 44 % faster at 262 k than 4096** (2702 against 1881) and costs about 800 MB of headroom.
+**8192 is 1.44x faster at 262 k than 4096** (2702 against 1881) and costs about 800 MB of headroom.
 Shrinking the chunk is a bad trade in every direction: 1024 is 2.5x slower for 700 MB, 256 is 6.8x
 slower for 840 MB. 16384 does not fit at this split.
 
@@ -173,13 +173,13 @@ step, about 4.5 % decode. For this workload that is a net loss - a first-touch 2
 about 3 s at 8192, while every cached turn pays 0.4 s on a 500-token answer, and 96 % of turns are
 cached. **4096 stays.**
 
-The knob's real shape: prefill throughput doubles from 4096 to 8192, and the configuration cannot
+The knob's real shape: prefill throughput rises 1.44x from 4096 to 8192, and the configuration cannot
 afford it at 262k Q4 on this card.
 
 ## MTP head at FP16: the drafter's VRAM is worth more than its agreement
 
 FP16 at 262k, split 434, `-mtp -ndt 2` (`t15-fp16-mtp-corpus-20261102-123715`): corpus **50.62**
-against DFlash2's 46.56 at split 448, and 2.39 of 4 draft tokens against 1.65 of 2. The lighter head
+against DFlash2's 46.56 at split 448, which accepts **2.39 of 4** against the MTP head's **1.65 of 2**. The lighter head
 pulls the floor down 14 experts and buys back 8.7 % of the 15 % that FP16 costs.
 
 But the corpus mean is the wrong lens. Against Q2 + DFlash2, in the categories the operator runs:
@@ -252,7 +252,7 @@ is flat to slightly positive: Coding 1.026 then 0.970, Agentic code 0.996 then 0
 1.064 then 1.058. Trivial repetition loses in both, which is the dynamic draft doing what it should:
 it sends fewer tokens where acceptance is already at the ceiling.
 
-**tabbyAPI needs no patch.** `config.yml` already carries `dynamic_draft: false` in the draft block
+**tabbyAPI needs no patch.** `config.yml` carries `dynamic_draft` in the draft block (true since 2026-11-02)
 and the server passes `dynamic_draft_tokens` to the engine; `draft_num_tokens: 4` is the ceiling.
 The earlier note that a patch was necessary was wrong. Deployment is one config change.
 

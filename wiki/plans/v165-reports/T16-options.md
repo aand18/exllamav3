@@ -8,7 +8,7 @@ DFlash2 window 4, Qwen3.8-Flash-Next `3.18bpw_h6_ng8`.
 
 | option | cache | split | corpus t/s | vs deployed | draft accepted | min free VRAM | peak working set | min avail RAM | evidence |
 |---|---|---|---|---|---|---|---|---|---|
-| **deployed** | Q4 262k | 381 (dynamic) | not harness-measured | — | — | 1699 MB at boot | not tracked | not tracked | server boot 2026-11-02 18:49, 22440 MiB used |
+| **deployed** | Q4 262k | 381 (dynamic) | not harness-measured | — | — | not recorded | not tracked | not tracked | server boot 2026-11-02 17:48, 22440 MiB used, no watcher attached |
 | Q4 262k, static floor | Q4 262k | 389 | **52.96** | reference | 2.34/4 | 1777 MB | 41.7 GB | 4652 MB | `t14-q4-262k-corpus-20261102-085612` |
 | Q2 262k | Q2 262k | 378 | **54.78** | +3.4 % | 2.39/4 | 777 MB | 40.7 GB | 6880 MB | `t14-q2-262k-corpus-20261102-091413` |
 | **Q2 262k at Q4's split** | Q2 262k | 389 | **52.70** | −0.5 % | 2.34/4 | 2485 MB | 41.7 GB | 6971 MB | `t16-q2-389-corpus-20261102-170933` |
@@ -34,8 +34,8 @@ Scenario not measured: staggered arrival, which is what two agents with tool cal
   unequal-split comparison is placement: eleven experts on the static harness (389 against 378) and
   **three on the served box (381 against 378)**. No probe in this harness can see a quality
   difference, so the operator's traffic remains the only evidence that Q2 hurt.
-- **FP16 instead of Q4 at 262k**: about 12 % slower, **5.2 GB** more host working set (47.9 against
-  42.7 GB), and still no measurable quality gain on three probes. Not worth it on this card.
+- **FP16 instead of Q4 at 262k**: about 12 % slower, **+5.1 GiB** of host working set (46.8 against
+  41.7 GiB), and still no measurable quality gain on three probes. Not worth it on this card.
 - **FP16 at 131k instead of Q4 at 262k**: −5.9 % median, Coding 0.998. **Most of that gap is the
   trunk, not the cache**: its no-draft baseline is 38.49 against the reference's 39.67, so 3.0 of the
   4.4 points are split and context, and the drafting cost per round barely moves (2.55 against 2.50).
@@ -61,8 +61,10 @@ Scenario not measured: staggered arrival, which is what two agents with tool cal
 - **Production acceptance**: still the one number the harness cannot produce, because the box does
   not archive prompts.
 - **Production acceptance.** The corpus accepts 58.5 % of drafts; the live log shows 39.6 %, which is
-  1.58 of 4 against a break-even near 1.5. Every drafting number here is priced on a friendlier
-  workload than production.
+  1.58 of 4. The gap tracks **prompt length**, not workload difficulty: acceptance falls from 64.7 %
+  below 16 k to 39.5 % above 200 k, and the corpus runs short prompts. At production length the
+  drafter still returns about +3 % gross over no drafting on the campaign's own model, not the 34 %
+  a short-prompt corpus implies.
 
 ## The prediction held: the cache costs VRAM, not speed
 

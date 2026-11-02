@@ -13,14 +13,16 @@ The served endpoint, verified on the box:
 - `Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8`, `cache_size` 262144, cache `"4,4"`, split **381**,
   DFlash2 BF16 window 4, `EXL3_MOE_THREAD_PRIO=1`, `max_batch_size` 2.
 - Port 5000, API key unchanged (`api_tokens.yml`, mtime 2026-08-26). Launcher `start_tuned.ps1`,
-  load 31.3 s.
+  load 32.3 s.
 - **No watcher runs against the live endpoint.** The floors stay in `watch.ps1` for measurement
   passes, where a runaway configuration must die within seconds (T13 step 11).
 - Numbers: corpus 58.54 tok/s, 2.46/4 accepted, min free VRAM 763 MB — measured on the Q2 cache.
   The Q4 corpus run has not been done. Live per-bucket decode and prefill (also Q2): T14 section A.
   API proof on Q2: 165,433-token prompt prefilled at 1726 tok/s, cached repeat 503 tokens in 9.5 s.
 - Split floors are engine-verified at 262144: Q2 needs 378, **Q4 needs 381** (376 and 378 refuse).
-  The Q4 cache costs 3 more CPU experts, about 1.7 % decode, not the 19 % an earlier estimate said.
+  The Q4 cache costs 3 more CPU experts. The same-day dynamic ladder puts eight experts at 0.8 %,
+  so three are worth under 1 %; the older "1.7 %" came from a static cross-day coefficient and does
+  not apply to the served placement.
 - Exact files: `wiki/plans/v165-reports/artifacts/deployed/{config.yml,start_tuned.ps1}`. Config
   backups sit beside the live `config.yml` as `config.yml.bak-*`.
 
