@@ -725,6 +725,32 @@ class CacheQuantSpelling(unittest.TestCase):
                       "the conditional args must sit in the regime argv")
 
 
+class ProductionState(unittest.TestCase):
+    """state.json has to describe the box, or every arm silently runs something else."""
+
+    STATE = os.path.join(REPO, "bench", "windows", "state.json")
+    RUN_PASS = os.path.join(REPO, "bench", "windows", "run_pass.ps1")
+
+    def test_state_matches_the_deployed_configuration(self):
+        with open(self.STATE, encoding = "utf-8") as f:
+            active = json.load(f)["active"]
+        self.assertEqual(active["cache_quant"], "4,4", "production runs Q4 since 2026-11-02")
+        self.assertEqual(active["split"], 381, "381 is the dynamic floor at 262144 for Q4")
+        self.assertEqual(active["cache_size"], 262144)
+        self.assertEqual(active["chunk_size"], 4096, "8192 refuses at this split")
+        self.assertEqual(active["draft"]["mode"], "model", "the DFlash2 sidecar is the deployed drafter")
+        self.assertTrue(active["draft"]["draft_model"].endswith("DFlash2"))
+        self.assertTrue(active["draft"]["dynamic_draft"], "-dds is deployed")
+
+    def test_the_drafter_path_is_emitted_by_the_regime(self):
+        with open(self.RUN_PASS, encoding = "utf-8") as f:
+            text = f.read()
+        self.assertIn('"-dm", [string]$Draft.draft_model', text,
+                      "the sidecar path has to come from the state, not from -Extra")
+        self.assertIn('foreach ($flag in @("-mtp", "-ndt", "-sdh", "-hdt", "-dds", "-dm"))',
+                      text, "drafting is owned even when this state disables it")
+
+
 class NeedlesRunner(unittest.TestCase):
     """A retrieval run has to carry its own score, or two cache modes compare as prose."""
 
