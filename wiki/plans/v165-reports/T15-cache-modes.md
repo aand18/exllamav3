@@ -163,3 +163,26 @@ cached. **4096 stays.**
 
 The knob's real shape: prefill throughput doubles from 4096 to 8192, and the configuration cannot
 afford it at 262k Q4 on this card.
+
+## MTP head at FP16: the drafter's VRAM is worth more than its agreement
+
+FP16 at 262k, split 434, `-mtp -ndt 2` (`t15-fp16-mtp-corpus-20261102-123715`): corpus **50.62**
+against DFlash2's 46.56 at split 448, and 2.39 of 4 draft tokens against 1.65 of 2. The lighter head
+pulls the floor down 14 experts and buys back 8.7 % of the 15 % that FP16 costs.
+
+But the corpus mean is the wrong lens. Against Q2 + DFlash2, in the categories the operator runs:
+
+| category | Q2 + DFlash2 | Q4 + DFlash2 | FP16 + MTP | MTP ratio |
+|---|---|---|---|---|
+| Coding | 76.96 | 75.32 | 62.20 | 0.808 |
+| Agentic code | 72.24 | 70.00 | 58.51 | 0.810 |
+| Agentic curl | 60.44 | 58.39 | 54.48 | 0.901 |
+| Translation | 34.72 | 35.12 | 47.24 | 1.361 |
+| Trivial repetition | 69.06 | 71.00 | 48.82 | 0.707 |
+
+Median 0.973 across the corpus, **0.81 on Coding and Agentic code**. The MTP head's agreement per
+draft token is higher (82.5 % against 59.8 %), but it drafts two tokens where DFlash2 drafts four,
+so tokens per round fall (1.65 against 2.39) and throughput on real work falls with them.
+
+**Verdict: FP16 is not viable for coding traffic at 262k on this card, with either head.** The
+drafter swap recovers speed but cannot recover 19 %.
