@@ -31,7 +31,7 @@ experts, each "supported by evidence".
 | "`dynamic_draft: false`" | true since 2026-11-02 | T15 |
 | "5.2 GB more working set (47.9 against 42.7 GB)" | +5.1 GiB (46.8 against 41.7 GiB) | T16 |
 | "2.84 against 2.76" and "46.91 against 49.00" as corpus | both Coding-only; corpus is 2.35 against 2.34 and 38.49 against 39.67 | T16 |
-| iframe0.75 GiB "pushes eleven experts" | 8.8 at the tool's 87.6 MiB/expert; 11 is the static split gap | T16 |
+| 0.75 GiB "pushes eleven experts" | 8.8 at the tool's 87.6 MiB/expert; 11 is the static split gap | T16 |
 | "1.7 % decode" for the deployed Q4 | same-day dynamic ladder: 0.8 % for eight experts, so under 1 % for three | STATE |
 | load "31.3 s" | 32.3 s for the 17:48 boot | STATE |
 
