@@ -215,3 +215,23 @@ supports paying the extra 12 %.
 
 To go further one would need the harder RULER families (variable tracking, aggregation), where a
 single linked error fails the item, rather than more needles at the same depth profile.
+
+## `-dds` confirmed, and tabbyAPI already supports it
+
+Second run (`t16-dds-confirm-20261102-140654`): corpus **55.44** against the no-dds arm's 52.96,
+median per-category **1.064**, baseline arm 39.72 against 39.67 so the control held.
+
+| run | corpus | Coding | Agentic code | Agentic curl | Trivial repetition |
+|---|---|---|---|---|---|
+| no `-dds` | 52.96 | 75.32 | 70.00 | 58.39 | 71.00 |
+| `-dds` #1 | 53.71 | 77.27 | 69.73 | 62.15 | 53.94 |
+| `-dds` #2 | 55.44 | 73.09 | 68.49 | 61.79 | 59.82 |
+
+Two runs, both above the reference on the corpus (+1.4 % and +4.7 %). On the operator's categories it
+is flat to slightly positive: Coding 1.026 then 0.970, Agentic code 0.996 then 0.978, Agentic curl
+1.064 then 1.058. Trivial repetition loses in both, which is the dynamic draft doing what it should:
+it sends fewer tokens where acceptance is already at the ceiling.
+
+**tabbyAPI needs no patch.** `config.yml` already carries `dynamic_draft: false` in the draft block
+and the server passes `dynamic_draft_tokens` to the engine; `draft_num_tokens: 4` is the ceiling.
+The earlier note that a patch was necessary was wrong. Deployment is one config change.

@@ -50,6 +50,7 @@ cp -f "$REPO"/eval/prompts/*.json "$DEST/prompts/"
 # them is 700 KB (Pride & Prejudice at ~177k tokens for the -xl arm), so the corpus travels with it.
 install -m 0666 "$REPO/eval/longctx.py" "$DEST/longctx.py"
 install -m 0666 "$REPO/eval/needles.py" "$DEST/needles.py"
+install -m 0666 "$REPO/eval/concurrency.py" "$DEST/concurrency.py"
 mkdir -p "$DEST/eval_texts"
 cp -f "$REPO"/eval/eval_texts/*.txt "$DEST/eval_texts/"
 

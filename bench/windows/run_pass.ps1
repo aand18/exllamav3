@@ -127,6 +127,12 @@ if ($Runner -eq "spec_decode") {
     $PERF = Join-Path $Root "spec_decode.py"
     $MATCH_CMD = "spec_decode\.py"
     $RunnerName = "spec_decode"   # what -DryRun reports: the runner actually selected
+} elseif ($Runner -eq "concurrent") {
+    # Two jobs in flight: the only runner that exercises max_batch_size, which every other runner
+    # leaves at one job because it enqueues a single prompt.
+    $PERF = Join-Path $Root "concurrency.py"
+    $MATCH_CMD = "concurrency\.py"
+    $RunnerName = "concurrent"
 } elseif ($Runner -eq "needles") {
     # Multi-key needle retrieval: K access codes planted at hashed depths, one prompt asks for all of
     # them, and the hit count is the score. longctx saturates at 16/16 in every cache mode, so it
@@ -576,6 +582,18 @@ foreach ($rawLine in (($raw -replace "`r", "`n") -split "`n")) {
     }
 }
 
+# Concurrency runs: one summary line per run, with the aggregate throughput that says whether two
+# jobs cost one wall time or two.
+$ccRows = New-Object System.Collections.ArrayList
+foreach ($rawLine in (($raw -replace "`r", "`n") -split "`n")) {
+    $l = ($rawLine -replace $ansi, "").Trim()
+    if ($l -match '^CONC jobs=(\d+) prompt_tokens=(\d+)\.\.(\d+) new_tokens=(\d+) wall_s=([0-9.]+) agg_tps=([0-9.]+)') {
+        [void]$ccRows.Add(@([int]$Matches[1], [int]$Matches[2], [int]$Matches[3],
+                            [int]$Matches[4], [double]::Parse($Matches[5], $inv),
+                            [double]::Parse($Matches[6], $inv)))
+    }
+}
+
 # torch allocator watermarks (improvement I3b): driver-free VRAM says nothing about how much of the
 # card PyTorch is holding in cached blocks, which is what actually kills runs at the floor
 $peakAlloc = 0.0
@@ -600,6 +618,7 @@ elseif ($Runner -eq "perf" -and $ppRows.Count -eq 0 -and $tgRows.Count -eq 0) { 
 elseif ($Runner -eq "spec_decode" -and $armRows.Count -eq 0 -and $sdRows.Count -eq 0) { $status = "fail" }
 elseif ($Runner -eq "longctx" -and $lcRows.Count -eq 0) { $status = "fail" }
 elseif ($Runner -eq "needles" -and $ndRows.Count -eq 0) { $status = "fail" }
+elseif ($Runner -eq "concurrent" -and $ccRows.Count -eq 0) { $status = "fail" }
 
 # --- Persist -----------------------------------------------------------------------------------
 $passesCsv = Join-Path $RES "passes.csv"
@@ -653,6 +672,15 @@ foreach ($r in $lcRows) {
     Add-Content -Path $lcCsv -Value ("{0},{1},{2},{3},{4}" -f $Tag, $runId, $r[0], $r[1], $r[2]) -Encoding ASCII
 }
 
+$ccCsv = Join-Path $RES "concurrent.csv"
+if (-not (Test-Path $ccCsv)) {
+    Set-Content -Path $ccCsv -Value "tag,run_id,jobs,prompt_min,prompt_max,new_tokens,wall_s,agg_tps" -Encoding ASCII
+}
+foreach ($r in $ccRows) {
+    Add-Content -Path $ccCsv -Value ("{0},{1},{2},{3},{4},{5},{6},{7}" -f $Tag, $runId, $r[0], $r[1], $r[2], $r[3],
+        ([string]::Format($inv, "{0:F1}", $r[4])), ([string]::Format($inv, "{0:F2}", $r[5]))) -Encoding ASCII
+}
+
 $ndCsv = Join-Path $RES "needles.csv"
 if (-not (Test-Path $ndCsv)) { Set-Content -Path $ndCsv -Value "tag,run_id,name,code,hit" -Encoding ASCII }
 foreach ($r in $ndRows) {
@@ -679,6 +707,12 @@ if ($ppRows.Count -gt 0) {
     $parts = @()
     foreach ($r in $ppRows) { $parts += ("{0}={1}" -f $r[0], [string]::Format($inv, "{0:F2}", $r[1])) }
     Write-Output ("PP   " + ($parts -join " "))
+}
+if ($ccRows.Count -gt 0) {
+    foreach ($r in $ccRows) {
+        Write-Output ("CONCURRENT jobs=" + $r[0] + " wall_s=" + [string]::Format($inv, "{0:F1}", $r[4]) +
+                      " agg_tps=" + [string]::Format($inv, "{0:F2}", $r[5]) + " new_tokens=" + $r[3])
+    }
 }
 if ($ndRows.Count -gt 0) {
     $hits = 0
