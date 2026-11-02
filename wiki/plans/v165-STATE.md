@@ -197,6 +197,9 @@ the RAM floor is the component shrunk instead.
   one run on a normal day.
 - DFlash2 quantisation: ~0.8 GB reclaimed, break-even acceptance **2.34/4**, needs a GPU window.
 - `max_batch_size` 2 versus 1 under two concurrent long prompts: never measured.
+- Cache precision does not separate on any probe in this harness (T15): acceptance flat, `longctx`
+  16/16, and 64/64 multi-key needles at 245 k on Q2, Q4 and FP16. The next escalation would be
+  RULER's variable tracking or aggregation, not more needles.
 - T13 step 5 (pinned arena / promote-on-miss) has not run.
 - Task plan and the T0–T13 list: `wiki/plans/2026-10-29-v165-retune.md`.
 

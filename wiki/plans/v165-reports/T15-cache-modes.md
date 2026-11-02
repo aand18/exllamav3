@@ -186,3 +186,32 @@ so tokens per round fall (1.65 against 2.39) and throughput on real work falls w
 
 **Verdict: FP16 is not viable for coding traffic at 262k on this card, with either head.** The
 drafter swap recovers speed but cannot recover 19 %.
+
+## Accuracy, probe 3: multi-key needles at 245 k
+
+`eval/needles.py` plants K unique five-digit access codes at hashed depths in a 245 k-token haystack
+and asks for all of them in one prompt; the harness scores the answer against the codes. Built
+because `longctx` saturates at 11 questions and cannot fail.
+
+| arm | facts | found | status |
+|---|---|---|---|
+| Q2 at 378 | 64 | **64** | ok |
+| Q4 at 389 | 64 | **64** | ok |
+| FP16 at 448 | 64 | **64** | ok |
+
+Two haystacks of 32 keys each, six digits of headroom, exact-form answers. Every mode returns every
+code. The probe is not saturated by construction - a model that drops a needle or transposes a digit
+loses the point - but this model does not drop one at 245 k in any cache mode.
+
+**Verdict on the accuracy question: not measurable here.** Three probes, three ties:
+
+- draft acceptance: 2.39 / 2.34 / 2.39 of 4, which measures drafter agreement, not recall;
+- `longctx` retrieval: 16/16 on Q2 and Q4;
+- multi-key needles: 64/64 on Q2, Q4 and FP16.
+
+The operator's traffic remains the only instrument that separated the modes. That is a legitimate
+reason to run Q4, and it is 3 % rather than the 15 % FP16 would cost. Nothing in this harness
+supports paying the extra 12 %.
+
+To go further one would need the harder RULER families (variable tracking, aggregation), where a
+single linked error fails the item, rather than more needles at the same depth profile.
