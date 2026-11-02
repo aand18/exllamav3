@@ -721,8 +721,22 @@ class CacheQuantSpelling(unittest.TestCase):
         self.assertIn("$CacheQuant -notmatch '^(?i)fp16$'", text,
                       "an FP16 state has to suppress -cq, not send 16,16")
         self.assertIn("$cqArgs = @()", text, "the cache-quant args are built conditionally")
-        self.assertIn('"$CacheSize", "-chunk_size", "4096", "-ambs", "2") + $cqArgs', text,
+        self.assertIn('"-chunk_size", "$ChunkSize", "-ambs", "2") + $cqArgs', text,
                       "the conditional args must sit in the regime argv")
+
+
+class ChunkSizeDelta(unittest.TestCase):
+    """The prefill chunk is a regime flag: a delta names it, -Extra may not restate it."""
+
+    RUN_PASS = os.path.join(REPO, "bench", "windows", "run_pass.ps1")
+
+    def test_chunk_size_comes_from_state_and_takes_a_delta(self):
+        with open(self.RUN_PASS, encoding = "utf-8") as f:
+            text = f.read()
+        self.assertIn('else { 4096 }', text, "a state without the field still runs at 4096")
+        self.assertIn('[int]$ST.chunk_size', text, "the state is the regime for the chunk size")
+        self.assertIn('"-chunk_size", "$ChunkSize"', text, "the regime argv prints the resolved value")
+        self.assertIn('"-chunk_size" = "-ChunkSize"', text, "a restated chunk size points at the delta")
 
 
 class PassesCsvCells(unittest.TestCase):

@@ -64,6 +64,7 @@ param(
     [int] $Threads = 0,        # 0 = take from state.json
     [int] $Split = 0,          # 0 = take from state.json
     [int] $CacheSize = 0,      # 0 = take from state.json (spec_decode: draft.spec_decode_cache_size)
+    [int] $ChunkSize = 0,      # 0 = take from state.json, then 4096: prefill chunk, the pp/VRAM lever
     [string] $Extra = "",
     [string] $Model = "",      # "" = take from state.json
     [string] $State = "",      # "" = <Root>\state.json
@@ -109,6 +110,7 @@ if ($MaxLength -eq 0){ $MaxLength = [int]$ST.max_length }
 # different allocation) and the pp/tg ladder sizes it for its measurement length. -cs was cache_size
 # for both runners and -Extra appended a second one on top: val-spec 2026-10-29 logged "-cs 131072
 # ... -mtp -cs 40960", so the recorded regime and the cache the process used were not one number.
+$ChunkSize   = if ($ChunkSize -ne 0) { $ChunkSize } elseif ($null -ne $ST.chunk_size) { [int]$ST.chunk_size } else { 4096 }
 $CacheQuant  = [string]$ST.cache_quant
 $Draft       = $ST.draft
 $stateCs     = [int]$ST.cache_size
@@ -221,7 +223,7 @@ if ($null -ne $Draft -and $Runner -eq "spec_decode") {
 # word the server's config.yml uses is "FP16", so the state may say it and the argv says nothing.
 $cqArgs = @()
 if ($CacheQuant -ne "" -and $CacheQuant -notmatch '^(?i)fp16$') { $cqArgs = @("-cq", $CacheQuant) }
-$regimeArgs = @("-m", $MODEL, "-cs", "$CacheSize", "-chunk_size", "4096", "-ambs", "2") + $cqArgs +
+$regimeArgs = @("-m", $MODEL, "-cs", "$CacheSize", "-chunk_size", "$ChunkSize", "-ambs", "2") + $cqArgs +
               @("-max_length", "$MaxLength", "-mcs", "$Split", "-mct", "$Threads")
 $regimeArgs += $draftArgs
 
@@ -253,7 +255,7 @@ $regimeRemedy = @{
     "-max_length" = "use -MaxLength, or edit state.json"
     "-mcs"        = "use -Split, or edit state.json"
     "-mct"        = "use -Threads, or edit state.json"
-    "-chunk_size" = "edit state.json"
+    "-chunk_size" = "-ChunkSize"
     "-ambs"       = "edit state.json"
     "-cq"         = "edit state.json"
     "-mtp"        = "edit state.json"
