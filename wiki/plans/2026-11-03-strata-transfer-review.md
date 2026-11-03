@@ -186,4 +186,35 @@ def test_a_wrong_recorded_constant_fails():
 - **Step scan:** every step names a command and its expected output; no step says "handle edge cases" or "add validation". The one place a body would be needed — `check()`'s comparison — is specified by its signature and its two tests (a wrong constant must FAIL, the real tree must PASS), so the implementer writes it.
 - **Type consistency:** `extract_strata`/`extract_exllama` return the same `source_lines` contract; `check` takes both plus an optional `matrix`; `--check` and `--selftest` are the only CLI verbs named anywhere.
 - **Review Focus:** all five lines have a task — units/scope (Task 3), name-vs-semantics (Task 2), carried claims (Task 4), instrument cost (Task 4), undocumented divergence (Task 3's `justification` requirement).
-- **Proportion:** the plan specifies two function signatures, one matrix schema and the exact values; the code is left to the implementer except the regex-source contract.
+- **Proportion:** the plan specifies two function signatures, one matrix schema and the exact values; the code is left to the implementer except the regex-source contract. Task 6 is the only task that edits production code, and it exists because leaving a known-defective phrase and four self-contradicting report lines is worse than the two commits it costs.
+
+---
+
+### Task 6: The two findings the branch's final review left open (carry-over)
+
+**Files:**
+- Modify: `exllamav3/model/moe_cpu_host.py` (`arena_pin_report`, ~line 1836)
+- Modify: `tests/moe_cpu/` (the pin-report tests)
+- Modify: `wiki/plans/v165-reports/T16-adaptive-tier.md`
+
+**Interfaces:**
+- Consumes: `pinned_layers()` (Task 1 of the superseded t29 plan, already merged in `cd39e08b`).
+- Produces: `arena_pin_report()` whose output names the promotable layer count in all three cases, and a T16 with no claim its own later sections refute.
+
+- [ ] **Step 1: Write the failing test** — a host with zero promotable layers must print a phrase, and a host with every layer promotable must print a different one:
+
+```python
+def test_pin_report_states_zero_and_all_layers_explicitly():
+    assert "0 of 2 layer(s) promotable" in _arena_host(blocks=2, pinned_chunks=()).[1]
+    assert "all 2 layer(s) promotable" in _arena_host(blocks=2, pinned_chunks=(0, 1)).[1]
+```
+
+- [ ] **Step 2: Run it, expect failure** (both extremes currently print no phrase).
+
+- [ ] **Step 3: Implement the three-way branch** in `arena_pin_report`: real total (`sum(1 for b in self.layer_blocks if b)`), `0 of {total}`, `{n} of {total} ({first}..{last})`, `all {total}`.
+
+- [ ] **Step 4: Run `pytest tests/moe_cpu -q`, expect pass** (rsync the tree to a Windows path first, `--delete`, as in T16 §9).
+
+- [ ] **Step 5: Fix T16's four stale claims** — the "nothing here has been run / unrun" lines, the "hot end of the CPU tier" claim (contradicted by its own §7/§10), the `generator.py` hook reference, and the line claiming C5 was fixed with `Event(device = d)`.
+
+- [ ] **Step 6: Gate and commit** — `bench/verify_task.py --post --report <abs>/T16-adaptive-tier.md --cites-failure t27-A-base-20261103-121148` prints `verdict: all gates passed`; commit the code+test and the report as two commits.
