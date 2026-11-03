@@ -660,13 +660,16 @@ one notice at load.
 ### `EXL3_MOE_PINNED_ARENA_GIB` (default: `0`)
 
 Page-lock at most this many GiB of the arena instead of as much as the driver allows; `0` keeps the
-driver-decided behaviour. Two reasons to bound it deliberately. The arena's chunks are registered
-in order and the split load permutes the experts hottest first, so what gets pinned is the hot end
-of the CPU tier — the part promotions are drawn from — while the pinning stops at a point that does
-not depend on what the driver happened to allow that run. And page-locked memory is a budget the
-pinned KV tiers, the handoff ring (which the staged path runs on) and every other process draw on
-(WDDM and WSL2 allow about half of RAM), so a bound leaves room that the load would otherwise have
-had to take back chunk by chunk (see `_register_handoff`).
+driver-decided behaviour; a value of `0` means the same thing, so a budget cannot express "pin
+nothing". Two reasons to bound it deliberately. The budget is spent on chunks in registration order
+and the layers register in order, so N chunks pin the **first** layers' experts and nothing later:
+the frequency profile reorders experts *within* a layer, never across layers, so a prefix is not the
+hot end of the tier and `arena_pin_report()` states how many layers it leaves promotable. What the
+bound buys is a stopping point that does not depend on what the driver happened to allow that run,
+and page-locked memory left over for the handoff ring (which the staged path runs on) and for the
+pinned KV tiers — WDDM and WSL2 allow about half of RAM, and the load would otherwise take the
+arena's chunks back one by one (see `_register_handoff`). A campaign that wants the whole tier
+promotable should leave it unset.
 
 ### `EXL3_MOE_CPU_PROMOTE` (default: `4`)
 
@@ -685,9 +688,9 @@ same coverage per generation.
 
 Only experts whose arena chunk is page-locked can be promoted (`MoeCpuHost.promote_ready`): where
 the driver runs out of pinned memory, or where `EXL3_MOE_PINNED_ARENA_GIB` caps it, the experts
-past that point stay CPU-computed and keep using the sweep. The arena is laid out hottest expert
-first (the split load permutes it by the saved frequency profile), so a pinned prefix is the part
-of the CPU tier most likely to be promoted.
+past that point stay CPU-computed and keep using the sweep. Because the arena fills in layer order,
+a pinned prefix makes the first layers promotable and strands the rest — `arena_pin_report()` prints
+the covered layer range on every tier line for exactly this reason.
 
 ### `EXL3_MOE_CPU_PROMOTE_BUDGET` (default: `6`)
 
@@ -709,7 +712,8 @@ in `EXL3_MOE_CPU_SWAP_HYST` / `EXL3_MOE_CPU_SWAP_FLOOR`.
 ### `EXL3_MOE_TIER_STATS` (default: `0`)
 
 Report what the VRAM expert tier actually covered: once per generation, from the generator's
-queue-drained hook, one line
+step tick (every `EXL3_MOE_TIER_STATS_EVERY` decode steps, 128 by default — a generator hook would
+never fire in a `perf.py` ladder, which drives the model directly), one line
 
 ```
  -- expert tier: 63.4% coverage (18240 expert evaluations, 6676 on the CPU, 480 steps, 13.9 on the CPU/step); arena 8192 MiB pinned in 8 of 33 chunk(s), budget 8 GiB

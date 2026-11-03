@@ -156,14 +156,15 @@ class MoeCpuTuning:
         # hugepage variant.
         self.pinned_arena = os.environ.get("EXL3_MOE_PINNED_ARENA", "0") != "0"
         # EXL3_MOE_PINNED_ARENA_GIB=N: page-lock at most N GiB of the arena instead of as much as
-        # the driver allows. Two reasons to bound it deliberately. (1) The arena's chunks are
-        # registered hottest-expert-first (the split load permutes the expert lists by the saved
-        # frequency profile), so a prefix is the *most likely* source of a promotion: on a box that
-        # refuses a large registration (WDDM/WSL2 budget about half of RAM, and the KV tiers and
-        # other processes share it) a prefix keeps the cheap DMA path while leaving page-locked
-        # memory for the handoff ring, which is what the staged path runs on. (2) The point where
-        # the driver refuses is not reproducible between runs; a budget is. 0/unset = today's
-        # behaviour (register until the driver refuses).
+        # the driver allows. Two reasons to bound it deliberately. (1) The budget is spent on chunks
+        # in registration order, and layers register in order, so N chunks pin the *first* layers'
+        # experts and nothing later: measure what it buys with arena_pin_report(), which states the
+        # promotable layer range. A prefix is NOT "the hot end of the tier" - the frequency profile
+        # reorders experts within a layer, never across layers. What a prefix does buy is a
+        # reproducible stopping point, and page-locked memory left for the handoff ring, which is
+        # what the staged prefill path runs on. (2) The point where the driver refuses is not
+        # reproducible between runs; a budget is. 0/unset = no budget (register until the driver
+        # refuses), which is what a campaign that wants the whole tier promotable should use.
         self.pinned_arena_gib = float(os.environ.get("EXL3_MOE_PINNED_ARENA_GIB", "0") or 0)
         if self.pinned_arena_gib < 0:
             raise ValueError("EXL3_MOE_PINNED_ARENA_GIB must be >= 0")
@@ -1148,15 +1149,17 @@ class MoeCpuHost:
             # Explicit budget spent (EXL3_MOE_PINNED_ARENA_GIB): the same fallback as the driver's
             # refusal below, taken deliberately so that (a) the handoff ring keeps page-locked
             # memory and (b) the pin point is reproducible between runs. Experts in this and the
-            # later chunks are not promotable — promote_ready() refuses them — but the prefix is
-            # the hot end of the arena, so the promotions that matter still go by DMA
+            # later chunks are not promotable — promote_ready() refuses them, and the arena fills in
+            # layer order, so the budget's real cost is the layers it strands: arena_pin_report()
+            # states how many of them can still be promoted
             m.close()
             self.arena_registered = index
             self.arena_maps.append(None)
             self.arena_views.append(None)
-            print(f" -- CPU MoE pinned arena: pin budget {self.arena_pin_budget >> 30} GiB spent at "
-                  f"chunk {index} ({self.arena_pinned_bytes >> 20} MiB registered); experts in this "
-                  f"and the remaining chunks use the staged path", flush = True)
+            print(f" -- CPU MoE pinned arena: pin budget "
+                  f"{self.arena_pin_budget / (1 << 30):.3g} GiB spent at chunk {index} "
+                  f"({self.arena_pinned_bytes / (1 << 30):.3g} GiB registered); experts in this and "
+                  f"the remaining chunks use the staged path", flush = True)
             return
         view = None
         try:
@@ -1795,16 +1798,40 @@ class MoeCpuHost:
         return all(c < len(self.arena_views) and self.arena_views[c] is not None for c in chunks)
 
 
+    def pinned_layers(self):
+        """How many layers, and which, can be promoted at all: a layer is promotable when every
+        chunk holding its expert blocks (trellis and aux) is registered. The arena fills in layer
+        order, so a bounded pin budget reaches the first layers only — this is the number that says
+        how much of the model a promotion experiment actually had access to."""
+        layers = []
+        for li, blocks in enumerate(self.layer_blocks):
+            if not blocks:
+                continue
+            chunks = {b[0] for b in blocks}
+            for proj in (self.layer_auxloc[li] or []):
+                chunks |= {loc[0] for loc in proj if loc is not None}
+            if all(c < len(self.arena_views) and self.arena_views[c] is not None for c in chunks):
+                layers.append(li)
+        return layers
+
     def arena_pin_report(self):
         """Arena pin state in one phrase, for the tier-stats line: how much of the arena is
-        page-locked, over how many chunks, and whether the explicit budget or the driver set the
-        limit"""
+        page-locked, over how many chunks, which layers that makes promotable, and whether the
+        explicit budget or the driver set the limit"""
         if not self.pinned:
             return "pinned arena off"
         pinned = [v for v in self.arena_views if v is not None]
-        limit = f"budget {self.arena_pin_budget >> 30} GiB" if self.arena_pin_budget else "driver limit"
-        return (f"arena {self.arena_pinned_bytes >> 20} MiB pinned in {len(pinned)} of "
+        if self.arena_pin_budget:
+            limit = f"budget {self.arena_pin_budget / (1 << 30):.3g} GiB"
+        else:
+            limit = "driver limit"
+        text = (f"arena {self.arena_pinned_bytes / (1 << 20):.0f} MiB pinned in {len(pinned)} of "
                 f"{len(self.arena_views)} chunk(s), {limit}")
+        layers = self.pinned_layers()
+        if layers and len(layers) < len(self.layer_blocks):
+            text += (f", {len(layers)} of {len(self.layer_blocks)} layer(s) promotable "
+                     f"({layers[0]}..{layers[-1]})")
+        return text
 
     def _promo_state(self, device):
         key = torch.device(device).index or 0
