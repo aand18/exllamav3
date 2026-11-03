@@ -118,3 +118,121 @@ arms B-E measure promote-on-miss against a frozen profile, which is the comparis
   arithmetic differently: a generation in progress *can* change its output when the tier changes
   under it (the twin measured this as the reason a tok/s A/B cannot resolve tier changes below ~2 %
   of the window). For byte-identical repeats, `EXL3_MOE_CPU_PROMOTE=0`.
+
+## 6. Run log (2026-11-03)
+
+**Deployment restored, then left alone.** The first deploy from this branch overwrote
+`_agent/v165` with the branch's older harness; the box's copy is fed from the `165-win-perf`
+worktree, and its `run_pass.ps1` hashes to `9B98E754…`, the value recorded on the last run of
+2026-11-02. Re-deploying from that worktree restored it (`run_pass.ps1` `9B98E754…`, `perf.py`
+`b270a0e9…`, the production regime in `state.json`: split 381, 262144, `4,4`, DFlash2 window 4 with
+dynamic drafting). Nothing in this branch is deployed there; the arms use its env deltas only.
+
+**How the patch was installed (no wheel).** The change is pure Python, so it went into the venv's
+`site-packages` as two files — `exllamav3/modules/block_sparse_mlp_cpu.py` and
+`exllamav3/model/moe_cpu_host.py` — with the replaced originals backed up under
+`_agent/adaptive-t27/backup/` (`ec103eb9…` and `f7342c9d…`) for an exact rollback. The wheel build
+(`run_build.ps1`, ~33 min) is still the artifact for anything deployed.
+
+**Two defects the first pass found, both fixed** (`73625217`):
+
+1. the report was hung off the generator's queue-drained hook, which a `perf.py` ladder never
+   reaches (that runner drives the model directly), so nothing was ever printed there;
+2. a **prefill** routes the prompt through the same hit histograms and nothing marked the
+   transition, so the prompt's whole routing landed in the next decode step's delta — 120x the true
+   per-step count in the log. Prefill-size batches now *invalidate* the comparison window, and a
+   block whose arithmetic cannot be a decode step (routed <= 0, missed < 0, missed > routed) only
+   re-baselines. The line now goes out from the step tick every 128 decode steps
+   (`EXL3_MOE_TIER_STATS_EVERY`), which is one mechanism in every runner and a fixed window.
+
+**A measurement that is not a tok/s number.** A drafting pass with dynamic placement re-enables the
+sweep, and a sweep can fire inline inside a long generation (the generator's queue-drain defers it,
+but `_split_swap_tick` sweeps anyway once it is 4x overdue). The run degenerated into repetition —
+endless tool-call XML, "All work and no play makes Jack a dull boy" — which is exactly why
+`spec_decode.py` refuses dynamic placement for a multi-arm pass. Its tok/s is therefore void. Its
+**coverage** readings are not, because a 128-step window whose evaluations are 480 per step is a
+decode window whatever the text says:
+
+| baseline, production regime, cs 40960, DFlash2 w4, loaded profile | value |
+|---|---|
+| decode-clean windows (evaluations / step = 480, i.e. one routed row) | 12 of 27 |
+| coverage | min 15.9 %, **median 39.4 %**, mean 37.0 %, max 61.1 % |
+
+So the ~41 % that the research note derived from the worker profile's bytes is what the engine
+measures, and it moves 16-61 points with the text — the tier is already reacting somewhat to the
+conversation, and the ceiling is not 100 % coverage but the *stable* part of it.
+
+The all-arms campaign therefore runs `perf.py` ladders: no drafting, so a placement change cannot
+corrupt a band's timing, and `tg` at 130816 is the repo's canonical decode number.
+
+## 7. Arms, measured (2026-11-03)
+
+Regime: the deployed one from `state.json` (3.18bpw_h6_ng8, split 381, 262144 Q4, chunk 4096,
+`-ambs 2`, 16 threads), `-Runner perf -MaxLength 131072`, found-unit floors (200 MB VRAM / 2048 MB
+available RAM) held in every arm (`breach=0`, `FLOORS` line present), each pass preceded by the
+harness's frozen-profile restore so every arm starts from the same expert ranking. Coverage is the
+pooled figure over the pass's 128-step windows; promotions are the engine's own counters.
+
+| arm | env delta | PP 4096 | PP 131072 | TG 130816 | coverage | promotions | hook ms/step | min avail RAM |
+|---|---|---|---|---|---|---|---|---|
+| **A** control | stats only | **1952.7** | **1920.3** | **38.30** | **28.5 %** | – | – | 6009 |
+| **B** pin 8 GiB + promote | `-mcpa`, `PINNED_ARENA_GIB=8`, `PROMOTE=4` | 2048.7 | 2004.8 | 36.30 | 27.7 % | 695 | – | 5240 |
+| **C** pin 8 GiB, wider pool | as B, `PROMOTE=16`, `SWAP_DEBUG=1` | 1992.9 | 1941.1 | 34.63 | 25.4 % | 663 | **1.03-1.06** | 5348 |
+| **D** pin 8 GiB, no promote | as B, `PROMOTE=0` | 2043.6 | 2011.8 | 37.31 | 27.8 % | – | – | 7911 |
+
+**What the counters say (deterministic, not timing).**
+
+1. **The cheap path engages and is safe.** The pin budget landed exactly where it was asked to
+   ("pin budget 8 GiB spent at chunk 8 (8192 MiB registered)"), the load came up in
+   promote-on-miss mode ("4/16 spare slots, placement from saved profile"), and every pass held its
+   floors with 8 GiB page-locked beside the 2.9 GiB pinned KV cache.
+2. **Promotion does not converge to a better tier at this workload.** The count settles at **~680
+   promotions for the whole pass**, and it does *not* scale with the pool: 695 at 4 spares, 663 at
+   16. The policy, not the pool, is the cap — the ratio test (a miss at 1.5x the least-used
+   unresident resident, on 0.98-decayed counts) stops qualifying candidates after the first few
+   hundred steps. The engine's own line agrees: 31.2-39.1 % hit over its last 128 steps, the same
+   band as the control's 28.5 % pooled.
+3. **Every spare is a hole in the tier.** At load the GPU slice is `first` slots with the spares'
+   experts living in worker slots, so 4 spares cost 3 % of the tier and 16 cost 12 % *before any
+   promotion happens*. Coverage fell monotonically with the spare count (28.5 → 27.7 → 25.4 %):
+   the mechanism buys adaptability by giving away capacity, and on this workload the adaptability
+   converts nothing.
+4. **The hook is not free**: 1.03-1.06 ms/step measured by the engine (the per-step pinned snapshot
+   plus the numpy ranking over 48 x 512 counts). At ~28 ms/step that is ~4 % of decode, which is
+   the size of B's and C's decode deltas.
+
+**What the timings say, with the noise stated.** The repo's own acceptance thresholds are +-2 % pp
+and +-11 % tg (worst band), from T4, and these arms are separate processes.
+
+- **Prefill gains, repeatably.** +4.7 / +4.8 % at 4096 / 131072 for the pin alone (D), +4.9 / +4.4 %
+  with promotion on (B): three of four comparisons clear the pp threshold, in the direction the
+  flag exists for (the pinned arena gives the streamed-prefill path a direct DMA source instead of
+  the worker's staging ring). It is the one positive the campaign produced. It is also the same
+  effect the Strata twin measured on its own expert copy (+15.9 % from a partial pin), with the
+  difference that their pin covered the *hot* part of the complement and ours a 1 GiB-chunk prefix
+  of the arena.
+- **Decode does not gain anywhere.** The pin alone is -2.6 % at 130816 (inside the tg threshold,
+  i.e. not proven); promotion costs a further ~2.6 % on top of the measured 1.03 ms/step hook, and
+  the wider pool costs more again (-9.6 % in C). No arm beats the control on decode.
+- The pin also leaves *more* available RAM at the floor (7911 vs 6009 MB) — it replaces the staged
+  path's separate pinned ring buffers with the arena mapping.
+
+**Verdict against the gate.** Section 3 asked for "coverage up >= 10 points *and* tok/s up >= 3 %".
+Promote-on-miss fails on both, in every pool size, and for a reason the counters name: it promotes
+one step late and cannot see past the current prompt. **The promote path stays off by default**
+(it already was), and the branch's remaining value is the two instruments plus the pin budget.
+
+**What is left that the data still supports.** One thing: `EXL3_MOE_PINNED_ARENA_GIB` with
+`EXL3_MOE_CPU_PROMOTE=0` is prefill-positive and decode-neutral at this noise level, i.e. a candidate
+for the deployed `state.json` env (`EXL3_MOE_PINNED_ARENA=1`,
+`EXL3_MOE_PINNED_ARENA_GIB=8`) — but a prefill claim at +4.7 % needs a *within-session interleaved*
+A/B to clear the box's own pp threshold honestly, and this campaign compared separate processes.
+Per the twin's account of the same measurement, that is the next run, not a conclusion.
+
+**How this closes the direction, and what it does not.** The gate in section 3 was "coverage rises
+by >= 10 points and tok/s by >= 3 %, else fail". Promote-on-miss as tuned fails both, and the
+reason is now measured rather than inferred: a just-missed expert is promoted one step after the
+route that needed it, and in a ladder whose prompt changes every 256 tokens that expert is exactly
+the one that will not be routed again. The next candidate in this family is not a bigger pool or a
+faster budget: it is a *ranking* that is right about the next thousand tokens rather than the last
+one — which is what the twin's `--adapt-forecast` tried, and lost 20.2 % there.
