@@ -240,6 +240,7 @@ def _split_promote_step(ip, modules, rows):
                 m._split_mp[r] = m.cpu_split_first + t["cpu"]
                 m._split_free_gpu.append(t["gpu"])
                 m._split_demo_n += 1
+            m._split_gen = getattr(m, "_split_gen", 0) + 1
             idx.append(r)
             val.append(m._split_mp[r])
             ps.busy[i, r] = False
@@ -411,17 +412,44 @@ class _TierStats:
         self.snap_np = self.snap.numpy()
         self.snap_ev = {}
         self.prev = None       # numpy block, once a second snapshot exists to compare it with
+        # Placement generation per module: the mirror below is refreshed only when one moves, which
+        # is a landed promotion/demotion or a sweep, so the mask cannot freeze while the map moves
+        self.gen = [getattr(m, "_split_gen", 0) for m in self.modules]
         self.devices = sorted({torch.device(m.device).index or 0 for m in self.modules})
         self.routed = 0        # routed expert evaluations since the last report
         self.missed = 0        # ... of which the CPU worker computed
         self.steps = 0
         self.per_layer = np.zeros(self.shape, dtype = np.int64)   # EXL3_MOE_TIER_STATS=2 detail
 
+    def _refresh(self):
+        """Re-read the placement maps if any module's placement moved. Without this the coverage
+        column is a load-time number: a promotion is a transfer the frozen mask would keep scoring
+        at the expert's old home, i.e. the instrument would be blind to the mechanism it exists to
+        measure in exactly the arms that use it"""
+        import numpy as np
+        moved = False
+        for i, m in enumerate(self.modules):
+            gen = getattr(m, "_split_gen", 0)
+            if gen != self.gen[i]:
+                self.gen[i] = gen
+                moved = True
+        if not moved:
+            return
+        for i, m in enumerate(self.modules):
+            slots = getattr(m, "_split_mp", None)
+            if slots is None:
+                mpl = getattr(m, "_split_map", None)
+                # the sweep path keeps only the device map; one D2H per move, never per step
+                slots = mpl.detach().cpu().numpy() if mpl is not None else np.arange(m.num_experts)
+            self.mp[i, :m.num_experts] = slots
+        self.worker = (self.mp < (1 << 30)) & ~(self.mp < self.first)
+
     def _consume(self, cur):
         """Account one step's routing block `cur` (a [layers, experts] snapshot of the hit counts)
         against the previous one. Returns False when the block does not fit the policy's decay (a
         sweep halved the counts), in which case the block only re-baselines"""
         import numpy as np
+        self._refresh()
         prev = self.prev
         if prev is None:
             # First block after a load or a capture gap: nothing to compare against yet
@@ -474,7 +502,7 @@ class _TierStats:
             with torch.cuda.device(dev):
                 self.snap[i, :m.num_experts].copy_(m._split_hist, non_blocking = True)
         for d in self.devices:
-            ev = torch.cuda.Event()
+            ev = torch.cuda.Event(device = d)
             ev.record(torch.cuda.current_stream(d))
             self.snap_ev[d] = ev
 
@@ -748,6 +776,9 @@ class BlockSparseMLP_CPU:
                 self._split_hist = None
                 self._split_pending = None
                 self.config.infer_params.moe_cpu_promote_state = None
+                # Holds strong references to the split modules: dropping only the promote state
+                # would keep every GPU slice alive across a reload with EXL3_MOE_TIER_STATS set
+                self.config.infer_params.moe_cpu_tier_stats = None
         if self.cpu_offload:
             host = getattr(self, "cpu_host", None)
             if host is not None:
@@ -1219,6 +1250,8 @@ class BlockSparseMLP_CPU:
                 assert mp.sort().values.equal(torch.arange(self.num_experts)), \
                     f"{self.key}: placement map is not a permutation after sweep"
             self._split_map.copy_(mp.to(self._split_map.device))
+            # the tier statistics watch this to know the mirror is stale (see _TierStats._refresh)
+            self._split_gen = getattr(self, "_split_gen", 0) + 1
         self._split_hist.mul_(0.5)
         return nswaps
 

@@ -56,10 +56,11 @@ class _FakeSplit:
         self.num_experts = len(slots)
         self.cpu_split_first = first
         self._split_spares = spares
-        self._split_map = torch.arange(len(slots), dtype = torch.long)   # marker: dynamic placement on
+        self._split_gen = 0
+        self._split_map = torch.tensor(slots, dtype = torch.long)   # marker: dynamic placement on
         if spares:
             # Only the promote-on-miss path keeps a placement map; without it the map is the identity
-            self._split_mp = slots
+            self._split_mp = list(slots)
         self._split_hist = torch.zeros(len(slots), dtype = torch.float)
         self.device = "cpu"
         self.cpu_host = None
@@ -121,6 +122,40 @@ def test_tier_stats_rebaselines_after_a_hard_decay():
     # And the next step counts normally against the new baseline
     assert _consume(st, [[51.0, 50.0, 0.0]]) is True
     assert (st.routed, st.missed) == (1, 0)
+
+
+def test_tier_stats_follows_a_promotion():
+    # The instrument exists to measure promotion, so it must not score a promoted expert at its old
+    # home: the placement mirror is refreshed whenever a module's placement generation moves.
+    mod = _FakeSplit("layer0", first = 2, slots = [0, 1, 2, 3], spares = 1)
+    st = _TierStats([mod])
+    assert _consume(st, [[0, 0, 0, 0]]) is False
+    assert _consume(st, [[0, 0, 1, 0]]) is True           # expert 2 routed: a worker slot, a miss
+    assert (st.routed, st.missed) == (1, 1)
+
+    # Promote expert 2 into GPU slot 0 and demote expert 0 into the worker slot it vacated
+    mod._split_mp = [mod.cpu_split_first + 0, 1, 0, 3]
+    mod._split_gen += 1
+    assert _consume(st, [[0, 0, 2, 0]]) is True           # expert 2 routed again, now resident
+    assert (st.routed, st.missed) == (2, 1), "a promoted expert must count as a hit"
+    # And the demoted one is now a miss
+    assert _consume(st, [[1, 0, 2, 0]]) is True
+    assert (st.routed, st.missed) == (3, 2), "a demoted expert must count as a miss"
+
+
+def test_tier_stats_follows_a_sweep_without_a_placement_map():
+    # The sweep path keeps only the device map (`_split_map`) and no host mirror, so the refresh
+    # reads it back - once per placement change, never per step
+    mod = _FakeSplit("layer0", first = 2, slots = [0, 1, 2, 3])
+    st = _TierStats([mod])
+    assert _consume(st, [[0, 0, 0, 0]]) is False
+    assert _consume(st, [[0, 0, 1, 0]]) is True            # expert 2 on the worker
+    assert (st.routed, st.missed) == (1, 1)
+    # A sweep swaps experts 0 and 2 in the device map
+    mod._split_map = torch.tensor([2, 1, 0, 3], dtype = torch.long)
+    mod._split_gen += 1
+    assert _consume(st, [[0, 0, 2, 0]]) is True            # expert 2 again, now in a GPU slot
+    assert (st.routed, st.missed) == (2, 1), "the sweep's move must be visible to the mask"
 
 
 def test_tier_stats_ignores_a_step_that_routed_nothing():

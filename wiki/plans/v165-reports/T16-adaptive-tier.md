@@ -51,7 +51,9 @@ not in this branch.
 arena, `48 × 1.95 MB ≈ 94 MiB` per spare per layer set. 4 (today) → 0.4 GiB, 16 → 1.5 GiB, 32 → 3.0 GiB
 on top of the 32.6 GiB arena.
 
-## 3. The protocolOne session, one process per arm, the same prompt stream, interleaved with a reference arm: this box
+## 3. The protocol
+
+One session, one process per arm, the same prompt stream, interleaved with a reference arm: this box
 cannot be compared across processes or days (identical code has produced 39.3 vs 50.8 tok/s; the
 twin's own noise floor was 0.8 % within a session). Regime: the deployed one from `state.json`
 (262144, `"4,4"`, split 381, DFlash2 w4, 16 threads, `EXL3_MOE_THREAD_PRIO=1`), 131072 for the
@@ -228,17 +230,40 @@ and +-11 % tg (worst band), from T4, and these arms are separate processes.
   of *streamed* experts per prefill chunk predicts — the pin only accelerates experts the stager
   would have copied, and the newer split leaves more of them resident.
 
-**Verdict against the gate.** Section 3 asked for "coverage up >= 10 points *and* tok/s up >= 3 %".
-Promote-on-miss fails on both, in every pool size, and for a reason the counters name: it promotes
-one step late and cannot see past the current prompt. **The promote path stays off by default**
-(it already was), and the branch's remaining value is the two instruments plus the pin budget.
+**Verdict against the gate — corrected after review (see section 10).** Section 3 asked for
+"coverage up >= 10 points *and* tok/s up >= 3 %". What the campaign actually established, and what it
+did not:
 
-**What is left that the data still supports.** One thing: `EXL3_MOE_PINNED_ARENA_GIB` with
-`EXL3_MOE_CPU_PROMOTE=0` is prefill-positive and decode-neutral at this noise level, i.e. a candidate
-for the deployed `state.json` env (`EXL3_MOE_PINNED_ARENA=1`,
-`EXL3_MOE_PINNED_ARENA_GIB=8`) — but a prefill claim at +4.7 % needs a *within-session interleaved*
-A/B to clear the box's own pp threshold honestly, and this campaign compared separate processes.
-Per the twin's account of the same measurement, that is the next run, not a conclusion.
+- **The coverage column of B and C is not usable.** The instrument's placement mirror is built once
+  at construction and never refreshed, so a promoted expert keeps being scored at its old home. The
+  same logs carry a second, live-mirror instrument from the promote path, and it reads **31.1 % mean
+  hit for C against the control's 28.5 %** — the opposite sign to the "coverage fell with the spares"
+  reading of the frozen column (28.5 / 27.7 / 25.4 / 28.5). Fixed on this branch ("Tier stats: the placement mirror follows the map"): the mirror now
+  follows a per-module placement generation (asserted by two new tests), so the next pass can answer
+  this. Until then the gate is **open**, not failed.
+- **The promotion counters had not plateaued.** Final values are **710 (B) and 679 (C)**, still
+  climbing at the end of the pass; "settles at ~680" quoted the 25th of 28 windows. The slope is
+  pool-independent (+95 over the last ten windows at 4 spares, +88 at 16), which is real evidence
+  against the *pool* being the cap — but at ~0.07 promotions/step and with the budget knobs never
+  swept (`PROMOTE_BUDGET`, `_RATIO`, `_DECAY` appear in no arm) it says nothing about the *policy*.
+- **The pin budget also capped the experiment.** The arena fills in layer order, so 8 of 33 chunks
+  pin the *first ~11 layers* — a prefix is not "the hot end" (that claim was wrong and is corrected
+  in the code, `doc/env_vars.md` and here). ~37 of 48 layers could not promote at all. The tier line
+  now prints the promotable layer range.
+- **Prefill, recomputed per band from `pp.csv`:** D is >= +2 % in **10 of 10** bands (mean +6.9 %),
+  B in 9 of 10 (+3.6 %), and C — same pin, same budget — in only **3 of 10** (+1.9 %, four bands
+  negative). So all four arms clear the threshold at 131072, and the C non-reproduction is an
+  unexplained caveat, not a clean win.
+- **No interleaved reference.** Four single passes, one each, in sequence: that is what section 3
+  forbids and `AGENTS.md` forbids. The prefill number needs an A/D/A/D interleave before it is quoted
+  as a deployment candidate; the four decode deltas (-2.6, -5.2, -9.6 %) are all inside the +-11 %
+  threshold and none of them is proven either.
+
+**So the honest result of this campaign is narrower than its first draft: the cheap DMA path engages
+on this box (710 promotions, a live-mirror hit rate above the control), the pin budget bounds an
+experiment in a way that has to be measured per layer, and the promotion rate, the policy constants
+and the instrument itself were not yet in a state to answer the gate.** Sections 10 and 11 list what
+that costs and what settles it.
 
 **How this closes the direction, and what it does not.** The gate in section 3 was "coverage rises
 by >= 10 points and tok/s by >= 3 %, else fail". Promote-on-miss as tuned fails both, and the
@@ -310,3 +335,41 @@ marker the rest of the suite uses for OS-specific cases.
 
 `bench/test_gates.py` (the harness's own offline gates, which is where the `--cites-failure` rule
 this report needs comes from) passes: `OK`.
+
+## 10. Review of this branch (T28) and what it changed
+
+An independent critique of the branch, its four arms and this report was run after the campaign
+(`/tmp/opencode/t28-critique.md`, 27 findings: 3 blocker, 12 major, 8 minor, 4 nit). Its blockers
+were verified against the source and the logs before being acted on — the recomputations below are
+mine, from the same `logs/perf-t27-*.log` and `results/*.csv` the critique used.
+
+| finding | verified how | response |
+|---|---|---|
+| **C1/M1 blocker** — `_TierStats` freezes its placement mirror at construction, so it cannot see a promotion | by inspection (the mask was built once in `__init__`) and by recomputing both instruments from the logs: C's tier column 24.6 % mean, C's own promote line 31.1 % mean, A/D 27.8 % each | **fixed**: a per-module `_split_gen` is bumped by every landed promotion/demotion and by a sweep, and `_refresh()` re-reads the map and the worker mask when it moves (one D2H per move, never per step). Two tests: a promotion flips a miss to a hit, a demotion flips a hit to a miss, and the sweep path (device map only) is followed too. |
+| **C3 major** — the pin budget pins a prefix of the *layers*, not "the hot end of the tier" | by inspection of `_HugeArena` (1 GiB chunks filled in registration order, layers register in order) and the log line "8 of 33 chunk(s)" | **fixed as a claim**: the code comment, `doc/env_vars.md` and section 7 above now state the layer-order consequence; `arena_pin_report()` gained `pinned_layers()` and prints "N of 48 layer(s) promotable (0..K)" on every tier line, so the next campaign cannot mistake a capped pool for a settled policy. The *design* fix (order the arena by heat across layers) is not attempted. |
+| **C2 major** — the tier state survives `cpu_unload`, holding the modules (and their GPU slices) alive | `grep moe_cpu_tier_stats` found no reset | **fixed**: `cpu_unload` drops it beside `moe_cpu_promote_state` |
+| **C5 minor** — a `torch.cuda.Event()` created on device 0 and recorded on another | by inspection | **fixed**: `Event(device = d)` |
+| **C6/C7 minor** — two accounting styles, `>> 30` truncation printing "0 GiB" for a sub-GiB budget, and 0 meaning "unlimited" without saying so | by inspection | **fixed**: one formatter, real byte totals, `0 = no budget` documented |
+| **C8 nit** — the docs still described the generator hook the code no longer uses | `grep report_tier_stats` | **fixed**: the docs describe the step tick and `EXL3_MOE_TIER_STATS_EVERY` |
+| **M2, M3, M4, M6, R1-R5, P1-P4** — the missing budget/policy arms, the still-climbing counters, no interleaved reference, the instrument's price, the untested M1/M3/M4 mechanisms, and the protocol slips | recomputed per band and per window | **recorded, not fixed**: section 7 now states each one, and section 11 is the arm list that settles them. None of it is code; all of it is another GPU session. |
+
+Tests after the fixes: `tests/moe_cpu` **111 passed, 63 skipped** (the two new placement-following
+tests included), on the box's venv against the patched source tree.
+
+## 11. What the next session must run, in order
+
+1. **Re-run arm C unchanged** (`-mcpa`, `PINNED_ARENA_GIB=8`, `PROMOTE=16`) with the fixed mask: it
+   decides whether the gate was met (the live-mirror number says "close, not 10 points") or whether
+   the campaign's negative stands.
+2. **The policy arm the plan promised**: `PROMOTE=16 PROMOTE_BUDGET=32 PROMOTE_DECAY=0.90`, with
+   `EXL3_MOE_PINNED_ARENA_GIB` **unset** so the driver's own limit applies (more than 8 chunks) and
+   `EXL3_SPLIT_PROF=1` for the exposed `split prof [wait]` median that section 3 made the decision
+   variable. This separates "the policy plateaued" from "the prefix capped it".
+3. **`EXL3_MOE_STREAM_MIN_ROWS=2` on top of arm D** — the research's M3 (decode-size PCIe split of
+   misses), reachable as an env delta with no code.
+4. **Move the budget, not the pin**: D at `-CacheSize 32768 -MaxLength 32768` (plus the `-Split` and
+   `size_check.py` that follow) to buy the research's M1 (+10-13 experts/layer), reading coverage
+   with the fixed instrument and comparing pp at 4096/32768 rather than tg at 130816.
+5. **A/D/A/D interleaved, one with `EXL3_MOE_TIER_STATS=0`** — the same-session reference `AGENTS.md`
+   requires, which also prices the instrument (the decode deltas in section 7 are all inside the
+   noise floor without it).
