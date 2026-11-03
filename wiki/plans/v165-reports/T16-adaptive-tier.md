@@ -261,3 +261,52 @@ one — which is what the twin's `--adapt-forecast` tried, and lost 20.2 % there
 - **Harness deployment**: `_agent/v165` untouched by this branch (see section 6).
 - The four arms' evidence lives in the deployed harness's `results/` and `logs/` (`perf-t27-*.log`),
   and `bench/verify_task.py --post` reads this report's run ids against `results/passes.csv`.
+
+## 9. Tests (2026-11-03)
+
+The suite was run against the **source tree with the patch** (`tests/conftest.py` puts the repo first
+on `sys.path`, so the tests exercise the branch, not the installed copy), on the Windows venv
+(pytest 9.1.1, torch 2.11.0+cu130), per directory because the venv has no pytest-xdist and the whole
+tree takes ~35 min serially. 7,052 tests collected.
+
+| directory | result |
+|---|---|
+| `kernels/moe_cpu_host` | 26 passed, 14 skipped |
+| `moe_cpu` | **109 passed, 63 skipped** (includes the new `test_tier_stats.py`: 10 tests) |
+| `cache` | 109 passed, 63 skipped |
+| `generator` | 55 passed |
+| `graph` | 222 passed, 47 skipped |
+| `kernels` | 5,001 passed, 531 skipped, **2 failed** |
+| `modules` | 315 passed, 5 skipped, **131 failed** |
+| `conversion` | 193 passed, **3 failed** |
+| `tp` | 28 passed, **2 failed** |
+| `tokenizer`, `loader`, `model_setup`, `e2e` | 16+4+15 passed, 26 skipped, no failures |
+| `parity` | 69 skipped, **7 errors** |
+
+**Every red cluster is pre-existing and environmental — proven, not asserted.** The same selections
+were run on a pristine copy of the base commit (`2df1b005`) with the two patched engine files
+restored, and the counts are identical:
+
+| cluster | patched | base |
+|---|---|---|
+| `modules` (131) | 131 failed, 315 passed | **131 failed, 315 passed** |
+| `kernels`: ptx + cross-process, `tp`: overflow | 4 failed, 31 passed | **4 failed, 31 passed** |
+| `conversion`: optimizer targets | 3 failed, 193 passed | **3 failed, 193 passed** |
+
+- the 131 are **one mechanism, not 131 defects**: `RuntimeError: Error opening file ... Too many open
+  files (errno=24)` from `loader/safetensors.py`, i.e. the suite accumulates open synthetic
+  checkpoints per test until the process runs out of handles. `tests/modules/mla/test_mla_dsa.py`
+  **alone passes 12/12** on the patched tree; the same file is the tail of the cascade in the full
+  directory run. A Windows-only limit: the suite was written on Linux.
+- `test_ptx_portable` (no `nvcc`/arch match), `test_run_blocks_until_marker_across_processes`
+  (cross-process sync), `test_sm_overflow` (shared-memory overflow segments) and the `parity` setup
+  errors (HF `transformers` device-map API) are all platform/dependency gaps, identical on base.
+
+**Two suite defects were fixed**, because they were red *only* for staleness (commit `acfbd7ac`,
+both verified to fail on base first): `test_swap_sweep_inference_mode`'s stub lacked
+`Generator.sparse_head`, which the hook reads first, so the test died before asserting the inference
+mode it exists for; and `test_shm_capacity` sizes against `/dev/shm` without the `platform("linux")`
+marker the rest of the suite uses for OS-specific cases.
+
+`bench/test_gates.py` (the harness's own offline gates, which is where the `--cites-failure` rule
+this report needs comes from) passes: `OK`.
