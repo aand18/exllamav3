@@ -51,9 +51,7 @@ not in this branch.
 arena, `48 × 1.95 MB ≈ 94 MiB` per spare per layer set. 4 (today) → 0.4 GiB, 16 → 1.5 GiB, 32 → 3.0 GiB
 on top of the 32.6 GiB arena.
 
-## 3. The protocol
-
-One session, one process per arm, the same prompt stream, interleaved with a reference arm: this box
+## 3. The protocolOne session, one process per arm, the same prompt stream, interleaved with a reference arm: this box
 cannot be compared across processes or days (identical code has produced 39.3 vs 50.8 tok/s; the
 twin's own noise floor was 0.8 % within a session). Regime: the deployed one from `state.json`
 (262144, `"4,4"`, split 381, DFlash2 w4, 16 threads, `EXL3_MOE_THREAD_PRIO=1`), 131072 for the
