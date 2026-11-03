@@ -10,7 +10,8 @@ import pytest
 
 from exllamav3.util import shm
 
-pytestmark = pytest.mark.nogpu
+# /dev/shm capacity is a Linux property: the tests size the segment against it and assert a refusal
+pytestmark = [pytest.mark.nogpu, pytest.mark.platform("linux")]
 
 
 def _fake_statvfs(free_bytes, total_bytes):
