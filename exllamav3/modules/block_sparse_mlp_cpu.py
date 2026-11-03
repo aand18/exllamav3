@@ -502,8 +502,15 @@ class _TierStats:
             with torch.cuda.device(dev):
                 self.snap[i, :m.num_experts].copy_(m._split_hist, non_blocking = True)
         for d in self.devices:
-            ev = torch.cuda.Event(device = d)
-            ev.record(torch.cuda.current_stream(d))
+            # torch.cuda.Event takes no `device` argument (torch 2.11.0+cu130, where
+            # Event.__new__ is (enable_timing, blocking, interprocess, external): the kwarg raised
+            # TypeError and took every EXL3_MOE_TIER_STATS pass down after the prefill ladder). An
+            # event is bound to a device by the stream that first records it, so select the module's
+            # device around construction and record: a multi-GPU split records one event per device,
+            # each on its own device's stream
+            with torch.cuda.device(d):
+                ev = torch.cuda.Event()
+                ev.record(torch.cuda.current_stream(d))
             self.snap_ev[d] = ev
 
     def report(self, detail = 0):
