@@ -220,6 +220,13 @@ and +-11 % tg (worst band), from T4, and these arms are separate processes.
   the wider pool costs more again (-9.6 % in C). No arm beats the control on decode.
 - The pin also leaves *more* available RAM at the floor (7911 vs 6009 MB) — it replaces the staged
   path's separate pinned ring buffers with the arena mapping.
+- **This is the second campaign to see it.** The first was on 1.5.4 (2.05 bpw, split 360, 32k,
+  `EXL3_MOE_STREAM_T=6`/`STREAM_BATCH_EXPERTS=48`): streamed prefill 2417-2441 tok/s unpinned against
+  2906-2979 pinned, **+21 %**, across 4096/8192/16384/32768, with decode unresolved because S=1 swung
+  25.4-32.0 it/s within a single run (Engram #260). Two engine versions, two quants and two splits
+  agree on the sign; the magnitudes differ (21 % then, 4.7 % now), which is what the different share
+  of *streamed* experts per prefill chunk predicts — the pin only accelerates experts the stager
+  would have copied, and the newer split leaves more of them resident.
 
 **Verdict against the gate.** Section 3 asked for "coverage up >= 10 points *and* tok/s up >= 3 %".
 Promote-on-miss fails on both, in every pool size, and for a reason the counters name: it promotes
