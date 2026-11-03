@@ -214,6 +214,14 @@ def _selftest(root: pathlib.Path = STRATA) -> int:
     per_layer = _fake_root({GENERATE: "    bool expert_cache_per_layer = true;\n"})
     check("per-layer.slot_pool", extract_strata(per_layer)["slot_pool"], "per-layer")
 
+    # 2b. The header decides when generate.cpp no longer declares the flag.  Without this arm the
+    # fallback could be renamed out of the regex and nothing would say so: the real tree answers from
+    # the flag first, so the fallback firing would only be noticed by a reviewer reading the code.
+    header_only = _fake_root({EXPERT_CACHE: "    bool per_layer_ = true;\n"})
+    got = extract_strata(header_only)
+    check("header-fallback.slot_pool", got["slot_pool"], "per-layer")
+    check("header-fallback.source_lines.slot_pool", got["source_lines"].get("slot_pool"), f"{EXPERT_CACHE}:1")
+
     # 3. A swap path that names a checkpoint read is "checkpoint"; nothing named is "unknown".
     checkpoint = _fake_root({
         GENERATE: "    // a swap re-reads the expert from the checkpoint before the copy\n"})
@@ -232,6 +240,11 @@ def _selftest(root: pathlib.Path = STRATA) -> int:
         check("real.slot_pool", real["slot_pool"], "global")
         check("real.kv_resident_tokens", real["kv_resident_tokens"], 0)
         check("real.prefill_chunk", real["prefill_chunk"], 0)
+        # The header's member default is the corroboration for the flag's: on the real tree the two
+        # must agree, or one of them moved and the review is quoting a shape the pool no longer has.
+        header_pool, header_line = _slot_pool({GENERATE: [], EXPERT_CACHE: _lines(root / EXPERT_CACHE)})
+        check("real.header_slot_pool", header_pool, real["slot_pool"])
+        check("real.header_slot_pool_line", header_line is not None, True)
         text = {rel: _lines(root / rel) for rel in (GENERATE, EXPERT_CACHE)}
         for key, where in real["source_lines"].items():
             rel, number = where.rsplit(":", 1)
