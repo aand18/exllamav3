@@ -3,16 +3,19 @@ The pinned-arena budget (EXL3_MOE_PINNED_ARENA_GIB) and the tier statistics (EXL
 neither of which needs a GPU: the budget is arithmetic on chunk sizes, and the statistics are sums
 over two snapshots of the per-layer hit counts (the CUDA side only decides how a snapshot travels).
 What the tests pin down is the part a GPU-less box can still get wrong: the chunk that straddles the
-budget, the zero budget meaning "no budget", the decay-corrected step arithmetic, and the padding
-rule for layers of different width.
+budget, the zero budget meaning "no budget", the decay-corrected step arithmetic, the padding rule for
+layers of different width, and the arena pin phrase the tier line carries — which chunks make a layer
+promotable, walked over the shape the worker actually acks.
 """
+
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import torch
 
-from exllamav3.model.moe_cpu_host import _pin_budget_spent
-from exllamav3.modules.block_sparse_mlp_cpu import _TierStats, _PROMOTE_DECAY
+from exllamav3.model.moe_cpu_host import MoeCpuHost, _pin_budget_spent
+from exllamav3.modules.block_sparse_mlp_cpu import _TierStats, _PROMOTE_DECAY, report_tier_stats
 
 pytestmark = [pytest.mark.nogpu]
 
@@ -202,3 +205,99 @@ def test_tier_stats_detail_lists_the_worst_layers():
     assert _consume(st, block) is True
     line = st.report(detail = 2)
     assert "worst layers:" in line and "layer0:2" in line and "layer2:0" in line
+
+
+# -- arena pin report ----------------------------------------------------------------------------
+#
+# `layer_auxloc[li]` arrives in the worker's ack (`rehome_experts` -> ("ok", blocks, auxlocs)) as a
+# per-expert list, each expert a per-projection list (gate, up, down), each projection a
+# (suh, svh, bias) triple of (chunk, offset, bytes) or None where the expert has no such tensor.
+# A walk one level short compares a location tuple against a chunk index, which is the TypeError the
+# t29 re-measurement hit on the box; a walk that skipped the aux locations would call a layer
+# promotable when only its bias sits in an unpinned chunk.
+
+def _arena_host(blocks, auxloc, pinned_chunks, chunks = 3, pinned_bytes = 0, budget = 0):
+    """A MoeCpuHost carrying only what the pin report reads, without spawning a worker: the two ack
+    lists, the parent's arena views (None where a chunk was not page-locked) and the budget state"""
+    host = object.__new__(MoeCpuHost)
+    host.pinned = True
+    host.layer_blocks = blocks
+    host.layer_auxloc = auxloc
+    host.arena_views = [None] * chunks
+    for c in pinned_chunks:
+        host.arena_views[c] = memoryview(bytearray(1 << 16))
+    host.arena_pinned_bytes = pinned_bytes
+    host.arena_pin_budget = budget
+    return host
+
+
+def _expert(chunk, bias_chunk = None):
+    """One expert's aux locations: trellis-side suh/svh in `chunk`, an optional bias elsewhere"""
+    suh, svh = (chunk, 64, 32), (chunk, 96, 32)
+    bias = (bias_chunk, 128, 32) if bias_chunk is not None else None
+    return [[suh, svh, bias] for _ in range(3)]   # gate, up, down
+
+
+def test_pinned_layers_walks_the_ack_shape():
+    # Chunk 0 is page-locked, chunk 2 is not (the pin budget stopped at it): layer 0 sits entirely in
+    # chunk 0 and is promotable, layer 1's expert block is in chunk 2 and is not. A None aux entry (no
+    # bias) must not count against a layer
+    blocks = [[(0, 0), (0, 4096)], [(2, 0)]]
+    auxloc = [[_expert(0), _expert(0, bias_chunk = 0)], [_expert(2)]]
+    host = _arena_host(blocks, auxloc, pinned_chunks = [0, 1])
+    assert host.pinned_layers() == [0]
+
+
+def test_pinned_layers_strands_a_layer_on_one_aux_chunk():
+    # Both layers' trellis blocks are in the pinned chunk, and one expert of layer 1 has its bias in
+    # chunk 2: the aux locations decide, so layer 1 must be stranded
+    blocks = [[(0, 0)], [(0, 8192)]]
+    auxloc = [[_expert(0)], [_expert(0), _expert(0, bias_chunk = 2)]]
+    host = _arena_host(blocks, auxloc, pinned_chunks = [0, 1])
+    assert host.pinned_layers() == [0]
+
+
+def test_pinned_layers_skips_a_layer_without_acks():
+    # A layer the worker has not acked yet (or one whose arena never got pinned) reports no blocks
+    host = _arena_host([[(0, 0)], None], [[_expert(0)], None], pinned_chunks = [0, 1])
+    assert host.pinned_layers() == [0]
+
+
+def test_pin_report_states_the_promotable_range():
+    # A 3-chunk arena of which 2 are page-locked, over 4 layers: the budget's real cost is the layers
+    # it strands past the last pinned chunk
+    host = _arena_host(
+        [[(0, 0)], [(0, 4096)], [(2, 0)], [(2, 4096)]],
+        [[_expert(0)], [_expert(1)], [_expert(2)], [_expert(2)]],
+        pinned_chunks = [0, 1], pinned_bytes = 2 << 30, budget = 2 << 30)
+    report = host.arena_pin_report()
+    assert "arena 2048 MiB pinned in 2 of 3 chunk(s)" in report
+    assert "budget 2 GiB" in report
+    assert "2 of 4 layer(s) promotable (0..1)" in report
+
+
+def test_pin_report_says_nothing_about_a_range_when_nothing_is_stranded():
+    host = _arena_host([[(0, 0)], [(0, 4096)]], [[_expert(0)], [_expert(0)]], pinned_chunks = [0, 1])
+    report = host.arena_pin_report()
+    assert "driver limit" in report and "promotable" not in report
+    # And an arena that is not pinned at all says so instead of reporting zero layers
+    host.pinned = False
+    assert host.arena_pin_report() == "pinned arena off"
+
+
+def test_tier_line_carries_the_pin_phrase(capsys):
+    # The tier line the generator prints is the coverage phrase plus the arena's pin state; this is
+    # where the wrong walk crashed on the box, in the middle of a measured pass
+    host = _arena_host(
+        [[(0, 0)], [(0, 4096)], [(2, 0)], [(2, 4096)]],
+        [[_expert(0)], [_expert(1)], [_expert(2)], [_expert(2)]],
+        pinned_chunks = [0, 1], pinned_bytes = 2 << 30, budget = 2 << 30)
+    mod = _FakeSplit("layer0", first = 2, slots = [0, 1, 2, 3])
+    st = _TierStats([mod])
+    assert _consume(st, [[0, 0, 0, 0]]) is False
+    assert _consume(st, [[0, 0, 1, 0]]) is True           # expert 2 on the worker: 1 evaluation, a miss
+    mod.cpu_host = host
+    report_tier_stats(SimpleNamespace(moe_cpu_tier_stats = st))
+    out = capsys.readouterr().out
+    assert "expert tier: 0.0% coverage" in out and "1 on the CPU" in out
+    assert "2 of 4 layer(s) promotable (0..1)" in out

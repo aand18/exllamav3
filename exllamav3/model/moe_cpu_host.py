@@ -1808,8 +1808,14 @@ class MoeCpuHost:
             if not blocks:
                 continue
             chunks = {b[0] for b in blocks}
-            for proj in (self.layer_auxloc[li] or []):
-                chunks |= {loc[0] for loc in proj if loc is not None}
+            # layer_auxloc[li] is per expert, an expert's entry per projection (gate, up, down), and a
+            # projection's entry the (suh, svh, bias) arena locations with None where the expert has
+            # no such tensor (see the worker's rehome_experts and the ack in _pump). Walk it at that
+            # depth, as promote_ready() does: one nesting level short reads a location tuple where the
+            # chunk index is expected
+            for expert in (self.layer_auxloc[li] or []):
+                for proj in expert:
+                    chunks |= {loc[0] for loc in proj if loc is not None}
             if all(c < len(self.arena_views) and self.arena_views[c] is not None for c in chunks):
                 layers.append(li)
         return layers
