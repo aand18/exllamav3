@@ -123,6 +123,28 @@ def test_tier_stats_rebaselines_after_a_hard_decay():
     assert (st.routed, st.missed) == (1, 0)
 
 
+def test_tier_stats_ignores_a_step_that_routed_nothing():
+    mod = _FakeSplit("layer0", first = 2, slots = [0, 1, 2, 3])
+    st = _TierStats([mod])
+    assert _consume(st, [[0, 0, 0, 0]]) is False        # arms
+    assert _consume(st, [[0, 0, 0, 0]]) is False        # an idle step is not a step
+    assert (st.routed, st.missed, st.steps) == (0, 0, 0)
+
+
+def test_tier_stats_invalidate_forces_a_rebaseline():
+    # A prefill, a capture or a load moves the counts for a reason no decode step explains; the next
+    # block must only re-baseline instead of reporting the whole prompt as one step's evaluations
+    mod = _FakeSplit("layer0", first = 2, slots = [0, 1, 2, 3])
+    st = _TierStats([mod])
+    assert _consume(st, [[1, 1, 1, 1]]) is False
+    st.invalidate()
+    assert st.prev is None
+    assert _consume(st, [[500, 400, 300, 200]]) is False   # the prompt's routing, not the conversation's
+    assert (st.routed, st.missed, st.steps) == (0, 0, 0)
+    assert _consume(st, [[501, 400, 300, 200]]) is True    # and the next real step counts again
+    assert (st.routed, st.missed, st.steps) == (1, 0, 1)
+
+
 def test_tier_stats_padding_never_counts():
     # Two layers of different width (the draft model's layers are shorter): the padding columns must
     # not be counted as evaluations of either kind, and the per-layer figures must not mix

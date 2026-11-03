@@ -166,6 +166,9 @@ _PROMOTE_DECAY = float(os.environ.get("EXL3_MOE_CPU_PROMOTE_DECAY", 0.98))
 # hook. 2 also prints per-layer detail. Diagnostic only; the snapshot it takes is one pinned
 # device-to-host copy per layer per step, so it costs a little latency and stays off by default.
 _TIER_STATS = int(os.environ.get("EXL3_MOE_TIER_STATS", 0) or 0)
+# Decode steps per tier report (EXL3_MOE_TIER_STATS=1): a fixed window makes arms comparable even
+# when they generate different text, and 128 steps is ~1/30 of a drafting pass's generation
+_TIER_STATS_EVERY = max(1, int(os.environ.get("EXL3_MOE_TIER_STATS_EVERY", 128)))
 
 
 class _PromoteState:
@@ -425,17 +428,29 @@ class _TierStats:
             self.prev = cur
             return False
         tot_cur, tot_prev = float(cur.sum()), float(prev.sum())
-        if tot_cur + 1e-3 < self.decay * tot_prev:
+        routed = int(round(tot_cur - self.decay * tot_prev))
+        missed = int(round(float(cur[self.worker].sum() - self.decay * prev[self.worker].sum())))
+        if tot_cur + 1e-3 < self.decay * tot_prev or routed <= 0 or missed < 0 or missed > routed:
+            # Not a decode step's change: a sweep halved the counts, the window spans a load, or the
+            # arithmetic landed on float noise. Re-baseline rather than report it
             self.prev = cur
             return False
-        self.routed += int(round(tot_cur - self.decay * tot_prev))
-        self.missed += int(round(float(cur[self.worker].sum() - self.decay * prev[self.worker].sum())))
+        self.routed += routed
+        self.missed += missed
         per_layer = cur - self.decay * prev
         per_layer[~self.worker] = 0.0
         self.per_layer += np.rint(per_layer).astype(np.int64)
         self.steps += 1
         self.prev = cur
         return True
+
+    def invalidate(self):
+        """Drop the comparison window so the next decode step re-baselines. Called when the hit
+        counts have moved for a reason a decode step cannot explain - a prefill routed the prompt,
+        a bsz-1 graph was capturing, a sweep halved the counts - because those movements would
+        otherwise land in the next step's delta as thousands of phantom evaluations"""
+        self.snap_ev.clear()
+        self.prev = None
 
     def step(self):
         """One decode step, from the first registered module's submit and before this step's routing
@@ -465,7 +480,9 @@ class _TierStats:
 
     def report(self, detail = 0):
         """The line, and reset: coverage over the steps since the last report"""
-        if not self.steps:
+        if not self.steps or self.routed <= 0:
+            self.routed = self.missed = self.steps = 0
+            self.per_layer.fill(0)
             return None
         cov = 1.0 - self.missed / max(self.routed, 1)
         line = (f" -- expert tier: {100.0 * cov:.1f}% coverage "
@@ -482,10 +499,12 @@ class _TierStats:
 
 
 def _tier_stats_step(ip, modules, rows):
-    """Drive the tier statistics for one decode step (skipped on prefill-size batches: their routing
-    is the prompt's, not the conversation's, and it would smear the histogram window)"""
-    if not modules or rows >= modules[0].cpu_host.stream_min_rows:
+    """Drive the tier statistics for one decode step. A prefill-size batch routes the prompt rather
+    than the conversation, so it invalidates the window instead of being skipped: the counts it
+    leaves behind would otherwise all land in the first decode step's delta"""
+    if not modules:
         return
+    prefill = rows >= modules[0].cpu_host.stream_min_rows
     stt = getattr(ip, "moe_cpu_tier_stats", None)
     if stt is None:
         try:
@@ -494,8 +513,12 @@ def _tier_stats_step(ip, modules, rows):
             print(f" !! tier stats disabled: {e}", flush = True)
             stt = False
         ip.moe_cpu_tier_stats = stt
-    if stt:
-        stt.step()
+    if not stt:
+        return
+    if prefill:
+        stt.invalidate()
+        return
+    stt.step()
 
 
 def report_tier_stats(ip):
@@ -1134,8 +1157,12 @@ class BlockSparseMLP_CPU:
             save_expert_stats(ip)
         if _TIER_STATS:
             # Report-only mode; the promote path's own snapshot (below) stays independent, so the
-            # promotion counters in the report and its coverage come from the same steps
+            # promotion counters in the report and its coverage come from the same steps. The line
+            # goes out from here rather than from the generator's queue-drained hook because a
+            # perf.py ladder drives the model directly and would never reach that hook
             _tier_stats_step(ip, reg, self._split_submit_rows)
+            if self._split_step_count % _TIER_STATS_EVERY == 0:
+                report_tier_stats(ip)
         if self._split_spares:
             # Promote-on-miss replaces the sweep: one pass over every split module per step
             _split_promote_step(ip, reg, self._split_submit_rows)
