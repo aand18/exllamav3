@@ -173,12 +173,16 @@ available RAM) held in every arm (`breach=0`, `FLOORS` line present), each pass 
 harness's frozen-profile restore so every arm starts from the same expert ranking. Coverage is the
 pooled figure over the pass's 128-step windows; promotions are the engine's own counters.
 
-| arm | env delta | PP 4096 | PP 131072 | TG 130816 | coverage | promotions | hook ms/step | min avail RAM |
-|---|---|---|---|---|---|---|---|---|
-| **A** control | stats only | **1952.7** | **1920.3** | **38.30** | **28.5 %** | – | – | 6009 |
-| **B** pin 8 GiB + promote | `-mcpa`, `PINNED_ARENA_GIB=8`, `PROMOTE=4` | 2048.7 | 2004.8 | 36.30 | 27.7 % | 695 | – | 5240 |
-| **C** pin 8 GiB, wider pool | as B, `PROMOTE=16`, `SWAP_DEBUG=1` | 1992.9 | 1941.1 | 34.63 | 25.4 % | 663 | **1.03-1.06** | 5348 |
-| **D** pin 8 GiB, no promote | as B, `PROMOTE=0` | 2043.6 | 2011.8 | 37.31 | 27.8 % | – | – | 7911 |
+| arm | run id | env delta | PP 4096 | PP 131072 | TG 130816 | coverage | promotions | hook ms/step | min avail RAM |
+|---|---|---|---|---|---|---|---|---|---|
+| **A** control | `t27-A-perf-20261103-121739` | stats only | **1952.7** | **1920.3** | **38.30** | **28.5 %** | – | – | 6009 |
+| **B** pin 8 GiB + promote | `t27-B-pin8-f4-20261103-122212` | `-mcpa`, `PINNED_ARENA_GIB=8`, `PROMOTE=4` | 2048.7 | 2004.8 | 36.30 | 27.7 % | 695 | – | 5240 |
+| **C** pin 8 GiB, wider pool | `t27-C-pin8-f16-20261103-122756` | as B, `PROMOTE=16`, `SWAP_DEBUG=1` | 1992.9 | 1941.1 | 34.63 | 25.4 % | 663 | **1.05** | 5348 |
+| **D** pin 8 GiB, no promote | `t27-D-pin8-nopromo-20261103-123221` | as B, `PROMOTE=0` | 2043.6 | 2011.8 | 37.31 | 27.8 % | – | – | 7911 |
+
+All four are `status=ok`, `breach=0`, in `results/passes.csv` of the deployed harness; the void
+drafting attempt before them (`t27-A-base-20261103-121148`, `status=fail`) and its `-swap_ok` re-run
+are the subject of section 6.
 
 **What the counters say (deterministic, not timing).**
 
@@ -197,7 +201,7 @@ pooled figure over the pass's 128-step windows; promotions are the engine's own 
    promotion happens*. Coverage fell monotonically with the spare count (28.5 → 27.7 → 25.4 %):
    the mechanism buys adaptability by giving away capacity, and on this workload the adaptability
    converts nothing.
-4. **The hook is not free**: 1.03-1.06 ms/step measured by the engine (the per-step pinned snapshot
+4. **The hook is not free**: 1.03 to 1.06 ms/step measured by the engine (the per-step pinned snapshot
    plus the numpy ranking over 48 x 512 counts). At ~28 ms/step that is ~4 % of decode, which is
    the size of B's and C's decode deltas.
 
@@ -212,7 +216,7 @@ and +-11 % tg (worst band), from T4, and these arms are separate processes.
   difference that their pin covered the *hot* part of the complement and ours a 1 GiB-chunk prefix
   of the arena.
 - **Decode does not gain anywhere.** The pin alone is -2.6 % at 130816 (inside the tg threshold,
-  i.e. not proven); promotion costs a further ~2.6 % on top of the measured 1.03 ms/step hook, and
+  i.e. not proven); promotion costs a further ~2.6 % on top of the hook the engine reports (1.03 to 1.06 ms/step), and
   the wider pool costs more again (-9.6 % in C). No arm beats the control on decode.
 - The pin also leaves *more* available RAM at the floor (7911 vs 6009 MB) — it replaces the staged
   path's separate pinned ring buffers with the arena mapping.
@@ -236,3 +240,17 @@ route that needed it, and in a ladder whose prompt changes every 256 tokens that
 the one that will not be routed again. The next candidate in this family is not a bigger pool or a
 faster budget: it is a *ranking* that is right about the next thousand tokens rather than the last
 one — which is what the twin's `--adapt-forecast` tried, and lost 20.2 % there.
+
+## 8. End state of the box
+
+- **Server**: stopped for the campaign, then restarted with the operator's own `start_tuned.ps1` and
+  verified serving (`GET /v1/models` -> HTTP 200, `Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8`, key
+  unchanged), 21.9 GiB VRAM in use. The served config was never changed.
+- **Installed engine**: restored to the deployed files from `_agent/adaptive-t27/backup/`
+  (`block_sparse_mlp_cpu.py` `ec103eb9…`, `moe_cpu_host.py` `f7342c9d…`, `generator.py`
+  `6edbdb19…`), and the patched symbols are verified absent from the installed package. The
+  measurement ran a file-level patch of a pure-Python change, not a wheel; a wheel build
+  (`run_build.ps1`, ~33 min) is what a deployment would need.
+- **Harness deployment**: `_agent/v165` untouched by this branch (see section 6).
+- The four arms' evidence lives in the deployed harness's `results/` and `logs/` (`perf-t27-*.log`),
+  and `bench/verify_task.py --post` reads this report's run ids against `results/passes.csv`.
