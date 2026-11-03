@@ -13,7 +13,14 @@ The served endpoint, verified on the box:
 - `Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8`, `cache_size` 262144, cache `"4,4"`, split **381**,
   DFlash2 BF16 window 4, `EXL3_MOE_THREAD_PRIO=1`, `max_batch_size` 2.
 - Port 5000, API key unchanged (`api_tokens.yml`, mtime 2026-08-26). Launcher `start_tuned.ps1`,
-  load 32.3 s.
+  load 36 s with vision enabled.
+- **Vision is on** since 2026-11-03: `vision: true`, `vision_offload: true`. The weights are the 987
+  `model.visual.*` tensors already inside the exl3 checkpoint at `vision_bits: 6` - no separate
+  projector is needed, and the engine has no GGUF loader at all, so the `mmproj-…BF16.gguf` in
+  `D:\llms` is unused by this stack. They stream from system RAM, so the GPU is unchanged (21 834 MiB
+  used, 2 305 MB free at boot, chunk 8192, split 381).
+- Drafter is the **4-bit exl3 DFlash2** (`Qwen3.8-Flash-Next-DFlash2-exl3`, 472 MB against 1.2 GB),
+  which is what lets chunk 8192 fit at split 381; prefill 1661 → 2289 T/s on a 19 k prompt.
 - **No watcher runs against the live endpoint.** The floors stay in `watch.ps1` for measurement
   passes, where a runaway configuration must die within seconds (T13 step 11).
 - Numbers: corpus 58.54 tok/s, 2.46/4 accepted, min free VRAM 763 MB — measured on the Q2 cache.
