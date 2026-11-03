@@ -50,6 +50,7 @@ def test_queue_drained_hook_enters_inference_mode():
     seen = []
 
     class Stub:
+        sparse_head = None          # the hook saves its profile first; None skips that
         recurrent_cache = None
         disk_page_cache = None
         pagetable = SimpleNamespace(defrag = lambda: seen.append(torch.is_inference_mode_enabled()))
