@@ -144,7 +144,7 @@ explicit = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-norecursedirs = ["tools", "_retired", "testlib", "__disk_lru_cache__", ".*"]
+norecursedirs = ["_retired", "testlib", "__disk_lru_cache__", ".*"]
 addopts = ["-p", "no:cacheprovider"]
 filterwarnings = [
     # Triton's code generator on Python 3.14

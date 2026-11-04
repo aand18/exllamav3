@@ -31,7 +31,7 @@ against references; higher levels compose them.
 | `e2e/`        | Feature tests over the canonical model set (generation, CPU offload modes, TP, drafting, prompt caching) | models |
 | `parity/`     | Per-architecture parity against HF transformers or the reference implementation | models, transformers |
 | `examples/`   | Helpers of the example scripts | |
-| `tools/`      | Benchmarks, probes and diagnostics (not collected) | |
+| `tools/`      | Benchmarks, probes and diagnostics (their `test_*.py` files are collected; the scripts themselves are not) | |
 | `testlib/`    | Shared helpers: environment queries, model registry, synthetic weights, references, tolerances | |
 
 Every directory name is also a pytest marker, so `-m moe` selects `kernels/moe`, `modules/moe` and anything a

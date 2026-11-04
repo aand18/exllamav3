@@ -1,6 +1,5 @@
 from __future__ import annotations
 import os
-import sys
 import threading
 import weakref
 from concurrent.futures import ThreadPoolExecutor
@@ -81,6 +80,14 @@ def _row_cache_budget() -> int:
     except ValueError:
         return 0
     return min(max(rows, 0), ROW_CACHE_BUDGET_MAX)
+
+
+def _row_cache_budget_label(budget: int) -> str:
+    """The budget for an error message: the value the operator set, with the clamp named when it
+    changed the outcome. A message that prints only the clamp (1048576 for a ROWS of 4000000) names a
+    number they never wrote, and sends them looking for a default that is not in their config."""
+    raw = os.environ.get("EXL3_NGRAM_ROW_CACHE_ROWS", "").strip()
+    return f"{raw}, clamped to {budget}" if raw and raw != str(budget) else str(budget)
 
 
 def _row_cache_stats() -> bool:
@@ -172,7 +179,9 @@ class _RowCache:
         self.hits = 0
         self.misses = 0
         self.lock = threading.Lock()
-        _row_caches.add(self)
+        # Not registered here: the owner adds a cache to _row_caches once its pin set is loaded (see
+        # RowTable._gather_row_cache), so a cache a failed pin load was building never reaches the
+        # counts reset_row_cache() and row_cache_pinned() report.
 
     def __len__(self):
         return len(self.index)
@@ -497,45 +506,58 @@ class RowTable:
                 or cache.row_dtype != self.row_dtype:
             cache = _RowCache(budget, self.row_words, self.row_dtype)    # a new table or a new budget
             self._load_pin(cache)       # a rebuilt cache gets the pin set back before it serves
+            _row_caches.add(cache)      # live only once its pins are in: a failed load leaves none
             self._row_cache = cache
         return cache
 
     def _row_bytes(self) -> int:
         return self.row_words * torch.empty((), dtype = self.row_dtype).element_size()
 
+    def _pin_blocked(self, path: str) -> str | None:
+        """Why EXL3_NGRAM_ROW_CACHE_PIN cannot apply to this table, or None when it can. Both cases
+        are startup errors rather than warnings: a pin set that cannot apply is a run that looks
+        configured and serves every hot row from disk again, which is the defect the pin exists for,
+        and a warning on stderr is a line nobody reads at a failed measurement."""
+        if not _row_cache_budget():
+            return (f"EXL3_NGRAM_ROW_CACHE_PIN={path} needs EXL3_NGRAM_ROW_CACHE_ROWS > 0: the pinned "
+                    f"rows live in the row cache, so with the cache off nothing can hold them")
+        if not self.on_disk:
+            return (f"EXL3_NGRAM_ROW_CACHE_PIN={path} cannot apply to {self.key}, which is held in RAM "
+                    f"rather than streamed from disk: every row is already a hit, so there is no read "
+                    f"for a pin to save - unset the knob for this table")
+        return None
+
     def _pin_row_cache(self):
         """EXL3_NGRAM_ROW_CACHE_PIN: allocate the cache at open and load the pinned rows into it.
 
-        Called from open(), after the stores exist, so a pin set that does not fit fails the load
-        instead of a decode step. A pin without a budget pins nothing, and says so: the knob pair is
-        two settings for one mechanism, and half of it silently missing is the failure mode the row
-        cache itself is meant to remove."""
+        Called from open(), after the stores exist, so a pin set that does not fit - or does not
+        apply at all - fails the load instead of a decode step."""
         path = _row_cache_pin_path()
         if path is None:
             return
-        if not _row_cache_budget():
-            print(f"n-gram row cache pin: EXL3_NGRAM_ROW_CACHE_PIN is set "
-                  f"({path}) but EXL3_NGRAM_ROW_CACHE_ROWS=0, so nothing is pinned",
-                  file = sys.stderr)
-            return
-        if not self.on_disk:
-            return      # a table in RAM already serves every row from memory: nothing to pin
+        blocked = self._pin_blocked(path)
+        if blocked is not None:
+            raise ValueError(blocked)
         self._gather_row_cache()
 
     def _load_pin(self, cache: _RowCache):
-        """Read the pin file's rows into a fresh cache and mark them pinned. Two startup errors
-        rather than a quiet drop: a pin set the budget cannot hold, or one over the byte cap, is a
-        misconfiguration, and a run that silently serves the hot rows from disk again is exactly the
-        defect the pin was added for - it would show up only as a slower measurement."""
+        """Read the pin file's rows into a fresh cache and mark them pinned. Startup errors rather
+        than a quiet drop, all of them: a pin set the budget cannot hold, one over the byte cap, or
+        one that cannot apply here is a misconfiguration, and a run that silently serves the hot rows
+        from disk again would show up only as a slower measurement."""
         path = _row_cache_pin_path()
-        if path is None or not self.on_disk:
+        if path is None:
             return
+        blocked = self._pin_blocked(path)
+        if blocked is not None:
+            raise ValueError(blocked)
         rows = _read_pin_rows(path)
         row_bytes = self._row_bytes()
         if len(rows) > cache.budget:
             raise ValueError(
                 f"EXL3_NGRAM_ROW_CACHE_PIN: {path} pins {len(rows)} rows, more than "
-                f"EXL3_NGRAM_ROW_CACHE_ROWS={cache.budget}; raise the budget or shorten the pin set")
+                f"EXL3_NGRAM_ROW_CACHE_ROWS={_row_cache_budget_label(cache.budget)}; "
+                f"raise the budget or shorten the pin set")
         limit = _row_cache_pin_max_bytes()
         if limit is not None and len(rows) * row_bytes > limit:
             raise ValueError(

@@ -9,7 +9,11 @@ these tests pin down:
 
 - a pinned row is a hit after two full laps of the LRU, which is where an unpinned copy of it dies,
 - a pin set that does not fit the row budget is a startup error naming the count and the budget,
-- so is a pin set over EXL3_NGRAM_ROW_CACHE_PIN_MAX_BYTES (the L3 guard), naming both byte counts,
+  and so is one over EXL3_NGRAM_ROW_CACHE_PIN_MAX_BYTES (the L3 guard), naming both byte counts -
+  the over-budget error reports the budget as the operator set it, not only the clamped value,
+- a pin set that cannot apply is the same refusal, not a line on stderr: with the row cache off there
+  is nothing to hold it, and a table held in RAM has no row left to pin,
+- a failed pin load registers no cache: a cache joins the module's live set only once its pins are in,
 - a pinned lookup is counted as a hit, and row_cache_pinned() reports how many rows are pinned,
 - with the knobs unset nothing is allocated and nothing is pinned, byte for byte today's behaviour.
 
@@ -107,6 +111,67 @@ def test_a_pin_file_larger_than_the_budget_is_an_error(table, tmp_path, monkeypa
     assert "EXL3_NGRAM_ROW_CACHE_PIN" in msg and "EXL3_NGRAM_ROW_CACHE_ROWS" in msg
     assert f"{BUDGET + 1} rows" in msg and f"={BUDGET}" in msg
     assert not hasattr(table, "_row_cache")      # nothing half-loaded
+
+
+def test_a_pin_that_fails_to_load_registers_no_cache(table, tmp_path, monkeypatch):
+    """An over-budget pin set is the cheapest way to make the load raise, and the cache it was
+    building must not survive it: a cache joins the module's live set (reset_row_cache() and
+    row_cache_pinned() both walk it) only once its pins are in, so a failed start leaves no empty
+    cache behind for the next reader of those counts to find."""
+    enable(monkeypatch, tmp_path, list(range(BUDGET + 1)))
+    live = len(rt._row_caches)                   # other tables in this process, if any
+    with pytest.raises(ValueError) as err:
+        table._pin_row_cache()
+    # The exception, and pytest's raised-info, hold the frames that built the cache; with the set
+    # written from __init__ the empty cache is still reachable here, which is the leak
+    assert len(rt._row_caches) == live
+    assert not hasattr(table, "_row_cache")
+    assert "EXL3_NGRAM_ROW_CACHE_ROWS" in str(err.value)
+
+
+def test_a_pin_without_the_cache_enabled_errors_by_name(table, tmp_path, monkeypatch):
+    """EXL3_NGRAM_ROW_CACHE_PIN names rows for the row cache to hold. With the cache off there is
+    nothing to hold them, and a warning on stderr is a run that looks configured and serves every
+    hot row from disk again - the defect the pin exists for. So: refuse, and name both knobs."""
+    monkeypatch.delenv("EXL3_NGRAM_ROW_CACHE_ROWS", raising = False)
+    monkeypatch.setenv("EXL3_NGRAM_ROW_CACHE_PIN", str(pin_file(tmp_path, [3])))
+    monkeypatch.delenv("EXL3_NGRAM_ROW_CACHE_PIN_MAX_BYTES", raising = False)
+    with pytest.raises(ValueError) as err:
+        table._pin_row_cache()
+    msg = str(err.value)
+    assert "EXL3_NGRAM_ROW_CACHE_PIN" in msg and "EXL3_NGRAM_ROW_CACHE_ROWS" in msg
+    assert not hasattr(table, "_row_cache")
+
+
+def test_a_pin_on_a_ram_table_errors_by_name(tmp_path, monkeypatch):
+    """A table held in RAM already serves every row from memory, so there is nothing for a pin to
+    keep - and saying nothing is how an operator concludes the pin is doing work it cannot do."""
+    g = torch.Generator().manual_seed(0)
+    ram = rt.RowTable("test.ngram", ["test.ngram.weight"])
+    ram._set_stores([torch.randint(-32768, 32768, (ROWS, WORDS), generator = g, dtype = torch.int16)])
+    assert not ram.on_disk
+    enable(monkeypatch, tmp_path, [3])
+    try:
+        with pytest.raises(ValueError) as err:
+            ram._pin_row_cache()
+        msg = str(err.value)
+        assert "EXL3_NGRAM_ROW_CACHE_PIN" in msg and "RAM" in msg
+        assert not hasattr(ram, "_row_cache")
+    finally:
+        ram.close()
+
+
+def test_the_over_budget_error_reports_the_budget_as_set(table, tmp_path, monkeypatch):
+    """EXL3_NGRAM_ROW_CACHE_ROWS is clamped to ROW_CACHE_BUDGET_MAX. An error that prints only the
+    clamp names a number the operator never wrote, so a pin set against a large budget fails with a
+    message that looks like a default they cannot find in their own config. The clamp is lowered here
+    so a five-row pin set can be the one that overflows it."""
+    monkeypatch.setattr(rt, "ROW_CACHE_BUDGET_MAX", BUDGET)
+    enable(monkeypatch, tmp_path, list(range(BUDGET + 1)), budget = 1000)
+    with pytest.raises(ValueError) as err:
+        table._pin_row_cache()
+    msg = str(err.value)
+    assert "1000" in msg and "clamped to 4" in msg
 
 
 def test_the_byte_guard_errors_by_name(table, tmp_path, monkeypatch):
