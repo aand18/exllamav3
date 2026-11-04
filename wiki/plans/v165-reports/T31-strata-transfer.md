@@ -42,7 +42,7 @@ this branch unless the cell says otherwise.
 | **M3-miss-split** — the miss is split CPU/DMA | `pcie_frac -1.0` = the model's own, nominal **0.55** for native packs before the startup probe scales it `generate.cpp:470`, `:2051-2063` (read by hand: not an extracted key) | `stream_min_rows 32` `model/moe_cpu_host.py:141`; second gate `stream_t 8` `:139` (by hand) | `absent` | a 5-row window (the pending token + the 4 drafts appended to it) is 6.4× below the gate and 1.6× below the per-expert gate; the arm that tests it is `EXL3_MOE_STREAM_MIN_ROWS=2` + `EXL3_MOE_STREAM_T=2` (§3) | `unmeasured` |
 | **M4-spec-yield** — what one verify pass buys | MTP ≤3 drafts + prompt lookup, cost-model chosen, `docs/upstream/DETAILS.md:1032-1035`; **2.5–3.5 tokens/window** `server log:425,444,453` | DFlash2 `num_draft_tokens 4`, `dynamic_draft` shortens only, `generator.py:1128-1146`; **2.2–2.4 tokens/window** from note 1 §2's live-log derivation, against **2.17–2.40 accepted drafts** = 3.17–3.40 tokens/round in `results/arms.csv` | `diverged` | a ceiling of 4 offered drafts in a 5-row window against a policy that picks a window per round; the fork is behind on note 1's reading and at parity or ahead on the harness's own column, so the size and the sign are unresolved (§4) | `unmeasured` |
 | **M5-ple** — the n-gram table read on the decode path | row cache 1M rows (≈90 MiB), up to ~82 % of reads **on a frozen corpus**, 20–34 % recurrence `include/strata/ngram/ple_reader.hpp:13-16`; issue/collect split `:5-11`; un-hidden gather 2.1–2.6 ms/token `generate.cpp:393-395` | no row cache: `ext.ngram_gather_cpu` per gather `modules/row_table.py:282-312`; `PREFETCH_MIN_TOKENS 256` `:27` declined at `ngram_embedding.py:334`; `advise()` is `posix_fadvise`, a no-op on Windows `row_table.py:208-215` | `absent` | three defences absent; 16 × 90 B = 1440 B/token is the byte scale, Strata's own un-hidden 2.1–2.6 ms/token the ceiling (§5) | `unmeasured` |
-| **M7-deploy** — deployment policy, not an engine property | one request at a time (`batch 0` `generate.cpp:456`; no `--slots`), `--kv-resident 32768` of 262144 `/home/dev/UnbiasedStrata/start-logged.ps1:54` | `max_batch_size 2` (`tabbyAPI/config.yml:217`, outside this tree), `sysmem_kv_cache 0` `:441`, whole cache in VRAM: `cache_size 131072` `bench/windows/state.json:10`, measured `262144` | `diverged` | 2.82 GB of KV + indexer planes in VRAM against Strata's 0.23 GB resident (8× the cells, 2.59 GB of bytes); the one overlapping pair ran 49.8 T/s on the long stream and 8.1 on the short one against 57.2–61.3 single (§6) | `unmeasured` |
+| **M7-deploy** — deployment policy, not an engine property | one request at a time (`batch 0` `generate.cpp:456`; no `--slots`), `--kv-resident 32768` of 262144 `/home/dev/UnbiasedStrata/start-logged.ps1:54` | `max_batch_size 2` (`tabbyAPI/config.yml:217`, outside this tree), `sysmem_kv_cache 0` `:441`, whole cache in VRAM: `cache_size 131072` `bench/windows/state.json:10`, measured `262144` | `diverged` | 2.82 GB of KV + indexer planes in VRAM against Strata's 0.23 GB resident (8× the cells, 2.59 GB of bytes); the one overlapping pair ran 49.8 T/s on the long stream and 8.1 on the short one against 50.5–61.3 T/s single (§6) | `unmeasured` |
 
 Two regime values are recorded twice on purpose (M1, M7): this worktree's `state.json` and the
 deployment's disagree (376/131072/"2,2" against 381/262144/"4,4"), so both are stated and M1's
@@ -69,8 +69,9 @@ PASS M7-deploy: 10 comparison(s) - fork.cache_size=131072 (bench/windows/state.j
 
 **`MATRIX["M1-budget"]["justification"]`** (reflowed for the page; typography and spacing normalised —
 `—`, `×`, `≈`, `≤`, `§`; the code is authoritative): the fork's 131 experts/layer is a static prefix of
-one uniform per-layer budget at the measured split 381 (512 − 381; this worktree's
-`state.json` says 376, i.e. 136); Strata's 173/layer is 8301 global slots over 48 layers (15.74 GiB)
+one uniform per-layer budget at the measured split 381 (the split is the CPU tail count,
+`model_init.py:68`, so 512 − 381 is what stays on the GPU; this worktree's `state.json` says 376, i.e.
+136 on the GPU); Strata's 173/layer is 8301 global slots over 48 layers (15.74 GiB)
 that follow routing. Three levers would move the fork: `cache_size` 262144 → 32768/65536,
 `memory.sysmem_kv_cache` ~1800 MB, then `cpu_moe_split_experts` below 381. The KV bytes, from the
 checkpoint's config and the engine's cache shapes: 2 KV heads × 256 head_dim = 512 values/token/layer,
@@ -148,8 +149,8 @@ reaches once the pool stops capping it: 8669 promotions / 3584 steps = **2.42/st
 realized rate (2.42/0.201 = 12.0, 8669/710 = 12.2; the spare count went 4 → 16 and `PROMOTE_BUDGET`
 stayed 6/step, which neither arm reached), for +40.6 points of coverage (31.7 → 72.3 % pooled).
 
-The two campaigns' numbers, as read — and the third row is where the fork's divergence lives, not in
-the fourth:
+The two campaigns' numbers, as read — and the fork's divergence lives in the cadence and the pool,
+not in where the bytes come from:
 
 | quantity | Strata | fork, t27-B (pin 8 GiB, 4 spares) | fork, t29-C1 (pin unset, 16 spares) |
 |---|---|---|---|
@@ -316,9 +317,10 @@ pinned RAM" (`server log:378`). The
 fork adds 320 B/token/layer of fp16 indexer planes (896 B/token/layer) and keeps all of it in VRAM:
 2.82 GB. Strata keeps 32768 cells
 resident (0.23 GB) and the other 229376 cells, 1.59 GB, in pinned RAM. So the VRAM delta at one context
-is 2.82 − 0.23 = **2.59 GB** — the same quantity the M1 lever frees (2.11–2.47 GB by target cell
-count), not a second one. Concurrency is anti-scaled: the log's one overlapping pair ran 49.8 T/s on
-the 19.5k-token stream and 8.1 T/s on the 551-token stream that shared the window, against 57.2–61.3
+is 2.82 − 0.23 = **2.59 GB** — the same class of quantity the M1 lever frees (fork VRAM KV against
+host KV), though not the same number: that lever frees 2.11–2.47 GB by target cell
+count. Concurrency is anti-scaled: the log's one overlapping pair ran 49.8 T/s on
+the 19.5k-token stream and 8.1 T/s on the 551-token stream that shared the window, against 50.5–61.3
 T/s for the three single-stream requests (note 1 §2). No arm of either campaign varied batch or KV
 residency, so the divergence is real and `unmeasured`.
 
@@ -336,14 +338,15 @@ Arithmetic, in bytes rather than in a range:
 
 So the two engines do not differ in bytes per token — both are 576 B of 4-bit K/V per token per layer,
 which is why Strata's 1.69 GiB line and the fork's `-cq 4,4` agree — they differ in *residency*. The
-fork's 2.82 GB (planes included) against Strata's 0.23 GB is a **2.59 GB** VRAM delta, the same
-quantity the M1 lever frees when the fork shrinks its own cache to 32768 or 65536 cells (2.47 or
-2.11 GB); the 1.9–2.4 GB an earlier draft quoted here was neither side's figure. Concurrency, one
+fork's 2.82 GB (planes included) against Strata's 0.23 GB is a **2.59 GB** VRAM delta, the same class
+of quantity the M1 lever frees when the fork shrinks its own cache to 32768 or 65536 cells (2.47 or
+2.11 GB) — VRAM KV against host KV, not the same number; the 1.9–2.4 GB an earlier draft quoted here
+was neither side's figure. Concurrency, one
 reading: the log's single overlapping pair ran 49.8 T/s on the 19 497-token stream (#6) and 8.1 T/s on
-the 551-token stream (#5) that shared its window, against 50.5 / 61.3 / 57.2 T/s for the three
-single-stream requests (cold, fully cached, warm) — so two sessions cost more than they yield on this
-box, a deployment decision rather than an engine property, and the deployed `max_batch_size: 2` was
-never A/B'd by either campaign.
+the 551-token stream (#5) that shared its window, against 50.5 / 61.3 / 57.2 T/s — a 50.5–61.3 T/s
+band — for the three single-stream requests (cold, fully cached, warm) — so two sessions cost more than
+they yield on this box, a deployment decision rather than an engine property, and the deployed
+`max_batch_size: 2` was never A/B'd by either campaign.
 
 ## 7. The evidence, row by row
 
@@ -364,7 +367,7 @@ mechanism, and its run ids appear nowhere in this report.
 | **M3-miss-split** | `unmeasured` | nothing: no row of `passes.csv` (186 rows, every campaign) sets `EXL3_MOE_STREAM_MIN_ROWS` or `EXL3_MOE_STREAM_T` in its `env` | the arithmetic (a 5-row verify window against a 32-row gate, and a per-expert gate at 8) stands on the sources alone; nothing contradicts it and nothing supports it | the arm: one `-Env` string, `t31-M3-rows2` (§8). **`unmeasured` — needs an arm** |
 | **M4-spec-yield** | `unmeasured` | the campaigns carry no draft — every t27/t29 `perf` arm's `args` ends `-sd`, and `perf.py` registers no draft flag, while the campaign's only draft arm is the failed `t27-A-base` — **but the harness's `results/arms.csv` does hold acceptance**: `t7-dflash2-w4-20261030-071928` **2.40 accepted drafts of 4.00 drafted** over 8 rounds, `t7-dflash2-w6-20261030-072942` **2.94 of 6.00**, and two later 4-draft repeats whose `-dm` is confirmed DFlash2 in `passes.csv` — `t16-q4-ref2-20261102-172722` **2.35 of 4.00** (`-dm …-DFlash2`) and `t19-qdrafter-381-20261102-194803` **2.17 of 4.00** (`-dm …-DFlash2-exl3`, the exl3-quantized drafter, which is why its tag is `qdrafter`) | the fork's acceptance at 4 offered drafts is 2.17 to 2.40 **accepted drafts per round**, i.e. **3.17 to 3.40 tokens per round** (1 + `acc`) — a harness column, and a different measurement from note 1's log-derived 2.2–2.4 tokens/window | the comparison: `acc` is accepted *drafts* (`spec_decode.py:142-151`), so the two fork-side readings (note 1's log derivation and this column) measure different things and disagree by about a token. Which — if either — shares Strata's unit is open, and a window-4 arm at the current regime is what settles it (§8) |
 | **M5-ple** | `unmeasured` | one of the three defences is measured and it is the one that fails: the RAM-resident table (`-ngr` / `EXL3_NGRAM_STREAM=0`) breached the RAM floor 27 s in with 637 MB free (tag `t12-ngram-ram`, T12 §2); the PLE gather knob that does exist, `EXL3_PLE_SUB_CHUNK`, was A/B'd in the same campaign — `t12-ple1024-20261030-105757` (default) against `t12-ple512-20261030-104213` and `t12-ple0-20261030-103851`, prefill only, inside a 2 % band | two of Strata's three defences are either absent from this engine or not a lever at decode: the RAM copy does not fit, and the sub-chunk is a prefill knob | the row cache itself: no arm, because no such object exists in this fork (`modules/row_table.py:282-312` goes straight to `ext.ngram_gather_cpu`). The price is code, not a flag (§8) |
-| **M7-deploy** | `unmeasured` | no arm varied batch or KV residency: every t27/t29 `args` carries `-ambs 2`, a regime flag `-Extra` may not restate, and `sysmem_kv_cache 0` is a tabbyAPI setting no pass reads. The only concurrency measurement on the box is Strata's own (`server log:378` ff.): 49.8 T/s on the 19 497-token stream against 8.1 on the 551-token one sharing the window, vs 50.5 / 61.3 / 57.2 single | that the divergence is real (2.82 GB against 0.23 GB of KV in VRAM) and that its *performance* claim is not this harness's to make | batch and residency on the fork: a served-config edit or a second instance, not an arm — so this row stays `unmeasured` by construction (§6, §8) |
+| **M7-deploy** | `unmeasured` | no arm varied batch or KV residency: every t27/t29 `args` carries `-ambs 2`, a regime flag `-Extra` may not restate, and `sysmem_kv_cache 0` is a tabbyAPI setting no pass reads. The only concurrency measurement on the box is Strata's own (`server log:378` ff.): 49.8 T/s on the 19 497-token stream against 8.1 on the 551-token one sharing the window, vs 50.5 / 61.3 / 57.2 single, a 50.5–61.3 T/s band | that the divergence is real (2.82 GB against 0.23 GB of KV in VRAM) and that its *performance* claim is not this harness's to make | batch and residency on the fork: a served-config edit or a second instance, not an arm — so this row stays `unmeasured` by construction (§6, §8) |
 
 ### 7.1 The four arms, recomputed
 
@@ -514,7 +517,11 @@ cd /home/dev/.local/share/opencode/worktree/3a6c9f/adaptive-expert-tier
 python3 bench/strata_transfer_check.py --check          # -> 6/6 rows PASS, exit 0
 
 # the module's own assertions (the gate on a box with no pytest)
-python3 bench/strata_transfer_check.py --selftest       # -> 113/113 checks passed, exit 0
+python3 bench/strata_transfer_check.py --selftest       # -> 123/123 checks passed, exit 0
+
+# ... and a missing real tree is a failure, not a green fixtures-only run (exit 2, not 1)
+python3 bench/strata_transfer_check.py --selftest --root /nonexistent   # -> NO SUCH TREE, exit 2
+python3 bench/strata_transfer_check.py --selftest --root /nonexistent --allow-missing-tree  # -> exit 0
 
 # the pytest form, including the two plan tests
 uv run --no-project --with pytest python -m pytest bench/test_strata_transfer_check.py -q   # -> 8 passed
