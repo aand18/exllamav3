@@ -667,13 +667,15 @@ def run(args) -> int:
     prompt = build_prompt_ids(args.prompt_len)
     decode = int(args.tokens)
     is_recurrent = model.caps.get("recurrent_states", False)
-    recurrent = [cache.get_test_state(0)] if is_recurrent else None
     prefill_ids = prompt[:-1]
     past = len(prefill_ids)
     batch_shape = (1, max(past + decode + 256, 256))
 
     generated = []
     with torch.inference_mode():
+        # the recurrent state is created from inference tensors, and its constructor zeroes them in
+        # place: outside InferenceMode that raises (first real run, 2026-11-05)
+        recurrent = [cache.get_test_state(0)] if is_recurrent else None
         params = {
             "attn_mode": "flash_attn",
             "cache": cache,
