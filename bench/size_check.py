@@ -201,11 +201,6 @@ def main(argv: list[str]) -> int:
         ram = int(round(trunk["arena_bytes"] * scale))
         out["trunk"]["arena_source_mib"] = out["trunk"]["arena_mib"]
         out["trunk"]["arena_mib"] = round(mib(ram), 1)
-        if "draft" in out:
-            # the same tail applies to whichever component owns the workers; leaving the draft's
-            # arena unscaled would underprice RAM exactly where this flag is meant to save it
-            out["draft"]["arena_source_mib"] = out["draft"]["arena_mib"]
-            out["draft"]["arena_mib"] = round(out["draft"]["arena_mib"] * scale, 1)
         out["tail"] = {"bpw": args.tail_bpw, "source_bits": src_bits, "scale": round(scale, 4),
                        "note": "linear in bits; the per-expert scales do not shrink, so this is an upper bound"}
     out["cache"] = {"kv_mib": round(mib(cache["kv_bytes"]), 1),
@@ -253,6 +248,14 @@ def main(argv: list[str]) -> int:
                         "arena_mib": round(mib(draft["arena_bytes"]), 1),
                         "cache_mib": round(mib(dcache["bytes"]), 1),
                         "layers": dcount}
+
+    # the tail applies to whichever component owns the workers - but the draft is only built above,
+    # so this has to run here, after it exists
+    if args.tail_bpw and "draft" in out:
+        scale = out["tail"]["scale"]
+        out["draft"]["arena_source_mib"] = out["draft"]["arena_mib"]
+        out["draft"]["arena_mib"] = round(out["draft"]["arena_mib"] * scale, 1)
+        ram -= int(round(draft["arena_bytes"] * (1 - scale)))
 
     out["vram_mib"] = round(mib(vram), 1)
     out["ram_mib"] = round(mib(ram), 1)

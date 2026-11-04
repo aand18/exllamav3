@@ -90,12 +90,25 @@ def write_variant(model_dir: str, wanted: list[str], out_dir: str, filename: str
     return header
 
 
-def glob_for(plan: dict) -> str:
-    """One glob that covers every planned expert and nothing else in the checkpoint."""
-    layers = sorted(plan["layers"])
-    if len(layers) == 1:
-        return f"model.language_model.layers.{layers[0]}.mlp.experts.*"
-    return "model.language_model.layers.*.mlp.experts.*"
+def expert_globs(plan: dict) -> list[str]:
+    """One glob per planned expert, and **only** the planned ones.
+
+    A single `...experts.*` glob is wrong, not merely broad: `VariantSafetensorsCollection.get_tensor`
+    does not fall back to the main checkpoint when the override collection lacks the key, so a glob
+    that matches a GPU-resident expert makes that expert's load raise. The tail is a contiguous set
+    of router ids and a glob cannot express a range, so the list is emitted per expert.
+    """
+    return [f"{prefix}.*" for _, info in sorted(plan["layers"].items())
+            for prefix in info["expert_prefixes"]]
+
+
+def override_yaml(plan: dict, variant_dir: str, source_id: str = "tail") -> str:
+    """The `-or/--override` spec: a YAML file with one source and one key per planned expert."""
+    lines = ["sources:", f"  - id: {source_id}", f"    model_dir: {variant_dir}", "overrides:"]
+    for key in expert_globs(plan):
+        lines.append(f'  - key: "{key}"')
+        lines.append(f"    source: {source_id}")
+    return "\n".join(lines) + "\n"
 
 
 def planned_tensors(plan: dict) -> list[str]:
@@ -138,8 +151,12 @@ def main(argv=None) -> int:
         print(f"{e}", file=sys.stderr)
         return 2
     total = sum(m["data_offsets"][1] - m["data_offsets"][0] for m in header.values())
+    spec = os.path.join(args.out, "override.yml")
+    with open(spec, "w", encoding="utf-8") as f:
+        f.write(override_yaml(plan, args.out))
     print(f"wrote {len(header)} tensor(s), {total / 2**20:.1f} MiB -> {os.path.join(args.out, args.filename)}")
-    print(f"mount with: -or \"{glob_for(plan)}={os.path.abspath(args.out)}\"")
+    print(f"wrote {len(expert_globs(plan))} override key(s) -> {spec}")
+    print(f"mount with: -or {spec}   (a Windows process needs the Windows path)")
     return 0
 
 

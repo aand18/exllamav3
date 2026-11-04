@@ -9,7 +9,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from tail_variant_write import glob_for, main, write_variant  # noqa: E402
+from tail_variant_write import expert_globs, main, override_yaml, write_variant  # noqa: E402
 
 PREFIX = "model.language_model.layers.{l}.mlp.experts.{e}.trellis"
 
@@ -68,12 +68,17 @@ def test_the_variant_carries_exactly_the_planned_tensors_byte_for_byte():
         assert "model.language_model.layers.0.mlp.gate.weight" not in got
 
 
-def test_the_glob_names_only_experts():
-    plan = {"layers": {"0": {}, "1": {}}}
-    g = glob_for(plan)
-    assert g == "model.language_model.layers.*.mlp.experts.*"
-    one = glob_for({"layers": {"3": {}}})
-    assert one == "model.language_model.layers.3.mlp.experts.*"
+def test_the_override_spec_names_only_the_planned_experts():
+    plan = {"layers": {"0": {"expert_prefixes": ["model.language_model.layers.0.mlp.experts.131",
+                                                 "model.language_model.layers.0.mlp.experts.132"]}}}
+    globs = expert_globs(plan)
+    assert globs == ["model.language_model.layers.0.mlp.experts.131.*",
+                     "model.language_model.layers.0.mlp.experts.132.*"]
+    # a broad glob would make every GPU-resident expert's load raise: the collection has no fallback
+    assert all(g.count("experts.*") == 0 for g in globs)
+    yml = override_yaml(plan, "D:\\llms\\variant")
+    assert yml.count("- key:") == 2 and "model_dir: D:\\llms\\variant" in yml
+    assert "source: tail" in yml
 
 
 def test_a_plan_naming_a_tensor_that_is_not_there_exits_two():
@@ -97,7 +102,7 @@ def test_the_written_shard_round_trips_through_the_writer_reader():
 
 TESTS = [
     test_the_variant_carries_exactly_the_planned_tensors_byte_for_byte,
-    test_the_glob_names_only_experts,
+    test_the_override_spec_names_only_the_planned_experts,
     test_a_plan_naming_a_tensor_that_is_not_there_exits_two,
     test_the_written_shard_round_trips_through_the_writer_reader,
 ]
