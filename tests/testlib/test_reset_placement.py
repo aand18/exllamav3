@@ -90,6 +90,30 @@ def test_pending_transfers_and_histograms_are_cleared():
     assert ip.moe_cpu_promote_state is None
 
 
+def test_an_unlanded_transfer_is_waited_for_even_when_the_map_is_unchanged():
+    # _split_map only records transfers that have LANDED. A promotion or demotion the last arm issued
+    # can still be queued while the map equals the load-time map, and the rebuild drops
+    # _split_pending: that copy would then land in a slot the load-time map has just made live again.
+    # So the quiesce cannot be conditional on the map having moved.
+    class Event:
+        def __init__(self):
+            self.waited = 0
+
+        def synchronize(self):
+            self.waited += 1
+
+    m = split_module(num_experts = 9, first = 5, spares = 2)
+    ev = Event()
+    m._split_pending = [dict(kind = "d", r = 3, gpu = 0, cpu = 0, ev = ev)]
+    fresh = split_module(num_experts = 9, first = 5, spares = 2)
+    assert m._split_map.tolist() == fresh._split_map.tolist()      # nothing has landed yet
+
+    reset_placement(SimpleNamespace(modules = [m]))
+
+    assert ev.waited == 1
+    assert m._split_pending == []
+
+
 def test_a_module_without_a_split_map_is_untouched():
     static = SimpleNamespace(device = torch.device("cpu"), num_experts = 8,
                              cpu_split_first = None, _split_map = None)

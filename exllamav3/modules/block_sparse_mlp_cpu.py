@@ -802,17 +802,51 @@ def reset_placement(model):
     it from the restored map, and a module with no split map (static placement, or no split at all)
     is left untouched. Runs under inference mode for the same reason run_pending_swap_sweeps() does:
     the map, the histogram and the slot tensors are inference tensors, and an in-place update to one
-    outside inference mode raises (issue #329)."""
+    outside inference mode raises (issue #329).
+
+    VERIFICATION - the weight restore below has no automated test (it needs a checkpoint, a CPU
+    worker and a split load), so no measured arm may rest on it until it has been checked on the box
+    once. How, cheapest first:
+
+      1. EXL3_MOE_CPU_SWAP_VERIFY=1 with a short two-arm run, e.g.
+             python.exe eval\\spec_decode.py <model args> -single "Agentic, code" -tokens 64 -swap_ok
+         The env makes every promotion and demotion assert its copies against the checkpoint
+         (_split_promote_verify, _split_swap_experts). A restore that left a slot holding the wrong
+         expert surfaces there as "promote verify failed" / "demote verify failed" as soon as that
+         slot is read again, because the verify names the expert the transfer expects.
+      2. Look for " -- expert placement reset: N slot(s) returned to their load-time map" at each arm
+         boundary with N > 0. N = 0 means the reset found nothing to do and then proves nothing.
+      3. Compare the two arms' greedy text. After a reset they start from the same model, so they
+         should read alike and drift only as mid-arm placement churn accumulates. Immediate, grossly
+         garbled output from the second arm is a restore that mismatched weights to map.
+      4. What 1-3 do NOT assert: that the slots the restore *skipped* (inv[g] == g) really do hold
+         the expert the map names. Those slots were left alone on purpose, and a stale tenant there
+         is only caught by reading the checkpoint back for them (the same comparison
+         _split_promote_verify makes for one transfer). A direct check, after a run that reset, is to
+         compare each split module's GPU slot g against stc.get_tensor(full[g].key + ".trellis") and
+         its worker aux copies against the same expert - if that has not been done, say so where the
+         number is quoted."""
     targets = [m for m in (getattr(model, "modules", None) or [])
                if getattr(m, "_split_map", None) is not None]
     if not targets:
         return 0
-    # Nothing may be in flight while the weights move: a promotion's DMA lands in exactly the slot
-    # the restore is about to rewrite. Quiesce every device holding a split layer, as the sweep does
-    if any([int(v) for v in m._split_map.cpu()] != _split_placement_map(m) for m in targets):
-        for d in sorted({torch.device(m.device).index or 0 for m in targets
-                         if m.device is not None and torch.device(m.device).type == "cuda"}):
-            torch.cuda.synchronize(d)
+    # Nothing may be in flight when the map and the weights move, and this is deliberately
+    # unconditional. "The map already equals the load-time map" only says no transfer has *landed*
+    # yet: a promotion or demotion the last arm issued can still be queued on the host's promotion
+    # stream and on the event in _split_pending. Dropping that pending entry (the rebuild below
+    # replaces it with []) would leave a copy that lands after the reset, in a slot the load-time map
+    # has just made live again - a demotion's destination is popped from the free list precisely so
+    # nothing routes to it while it is being written. So: wait every unlanded event, then quiesce
+    # every device holding a split layer, as the sweep does (the transfers run on the host's
+    # promotion stream, so a single-device synchronize would leave the others' copies in flight).
+    for m in targets:
+        for t in (getattr(m, "_split_pending", None) or []):
+            ev = t.get("ev")
+            if ev is not None:
+                ev.synchronize()
+    for d in sorted({torch.device(m.device).index or 0 for m in targets
+                     if m.device is not None and torch.device(m.device).type == "cuda"}):
+        torch.cuda.synchronize(d)
     moved = 0
     for m in targets:
         moved += _split_placement_restore(m)
