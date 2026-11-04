@@ -786,6 +786,55 @@ def _split_placement_restore(m):
     return moved
 
 
+def _split_placement_targets(model):
+    """The split modules of `model`, and the infer_params objects reachable from it.
+
+    The registry is the authoritative source, and it is the one the engine itself walks:
+    cpu_post_load() appends each dynamically placed split module to its config's
+    `infer_params.moe_cpu_swap_modules`, and both the placement sweep (_split_swap_tick) and
+    _TierStats read only that list. The module tree is scanned as well, for a shape where the registry
+    was never created, but it cannot stand in for the registry: `Model.modules` holds the top-level
+    blocks, so a split MoE block nested inside one is invisible to it - measured on the box, 48
+    "CPU split experts" lines and 1972 promotions into step 384, with a scan of `model.modules`
+    finding 0 modules. Iterating the model itself (`for m in model`, Model.__iter__, the flattening
+    find_module() uses) does reach the nested ones."""
+    ips, mods = [], []
+
+    def add_ip(ip):
+        if ip is not None and all(ip is not x for x in ips):
+            ips.append(ip)
+
+    def add_mod(m):
+        if m is not None and all(m is not x for x in mods):
+            mods.append(m)
+
+    add_ip(getattr(getattr(model, "config", None), "infer_params", None))
+    for m in (getattr(model, "modules", None) or []):
+        add_mod(m)
+    try:
+        for m in model:                     # a block yields the modules it holds
+            add_mod(m)
+    except TypeError:
+        pass
+    # Reachability closes in both directions - a module names its config, a config's registry names
+    # its modules - so a registry behind a module (a draft head's, say) is only found by walking it
+    # to a fixed point. Both lists only grow, so this terminates.
+    changed = True
+    while changed:
+        changed = False
+        for m in list(mods):
+            ip = getattr(getattr(m, "config", None), "infer_params", None)
+            if ip is not None and all(ip is not x for x in ips):
+                ips.append(ip)
+                changed = True
+        for ip in list(ips):
+            for m in (getattr(ip, "moe_cpu_swap_modules", None) or []):
+                if all(m is not x for x in mods):
+                    mods.append(m)
+                    changed = True
+    return [m for m in mods if getattr(m, "_split_map", None) is not None], ips
+
+
 @torch.inference_mode()
 def reset_placement(model):
     """Restore every split module of `model` to the expert placement it was loaded with, and return
@@ -803,6 +852,10 @@ def reset_placement(model):
     is left untouched. Runs under inference mode for the same reason run_pending_swap_sweeps() does:
     the map, the histogram and the slot tensors are inference tensors, and an in-place update to one
     outside inference mode raises (issue #329).
+
+    The modules to reset are found through the registry the engine's own placement code walks
+    (_split_placement_targets), not by scanning model.modules: that list holds the blocks, and the
+    split MoE blocks are nested inside them.
 
     VERIFICATION - the weight restore below has no automated test (it needs a checkpoint, a CPU
     worker and a split load), so no measured arm may rest on it until it has been checked on the box
@@ -826,8 +879,7 @@ def reset_placement(model):
          compare each split module's GPU slot g against stc.get_tensor(full[g].key + ".trellis") and
          its worker aux copies against the same expert - if that has not been done, say so where the
          number is quoted."""
-    targets = [m for m in (getattr(model, "modules", None) or [])
-               if getattr(m, "_split_map", None) is not None]
+    targets, ips = _split_placement_targets(model)
     if not targets:
         return 0
     # Nothing may be in flight when the map and the weights move, and this is deliberately
@@ -854,8 +906,7 @@ def reset_placement(model):
         # The tier statistics mirror the map and refresh when this moves, so a coverage figure cannot
         # freeze on a placement that changed underneath it
         m._split_gen = getattr(m, "_split_gen", 0) + 1
-    ips = {id(ip): ip for ip in (getattr(getattr(m, "config", None), "infer_params", None)
-                                for m in targets) if ip is not None}
+    ips = {id(ip): ip for ip in ips}
     for ip in ips.values():
         ip.moe_cpu_promote_state = None     # rebuilt from the restored _split_mp on the next step
         ip.moe_cpu_swap_pending = False     # a sweep the last arm queued has nothing left to move

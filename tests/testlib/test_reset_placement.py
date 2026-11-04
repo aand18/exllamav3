@@ -114,6 +114,22 @@ def test_an_unlanded_transfer_is_waited_for_even_when_the_map_is_unchanged():
     assert m._split_pending == []
 
 
+def test_a_model_that_only_exposes_the_registry_is_reset():
+    # The shape a real model has: split MoE blocks are nested inside blocks, so model.modules holds
+    # blocks and none of the split modules. The registry cpu_post_load() fills
+    # (infer_params.moe_cpu_swap_modules) is what the engine's own placement code walks, so the reset
+    # has to find them there. On the box this scan found 0 targets with 48 split modules loaded.
+    m = split_module(num_experts = 8, first = 5)
+    m._split_map = torch.tensor([0, 5, 2, 3, 4, 1, 6, 7], dtype = torch.long)
+    ip = SimpleNamespace(moe_cpu_swap_modules = [m], moe_cpu_promote_state = object())
+    model = SimpleNamespace(modules = [], config = SimpleNamespace(infer_params = ip))
+
+    reset_placement(model)
+
+    assert m._split_map.tolist() == list(range(8))
+    assert ip.moe_cpu_promote_state is None
+
+
 def test_a_module_without_a_split_map_is_untouched():
     static = SimpleNamespace(device = torch.device("cpu"), num_experts = 8,
                              cpu_split_first = None, _split_map = None)
