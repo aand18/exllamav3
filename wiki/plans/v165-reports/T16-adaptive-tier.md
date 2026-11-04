@@ -1,9 +1,9 @@
 # T16 — the adaptive expert tier: a pin budget, a promote rate, and the coverage number
 
-Written 2026-11-02 on `feat/adaptive-tier` (base `165-win-perf`). **Nothing here has been run:**
-the code is unbuilt and the unit tests are unrun (this box has no CUDA and no torch; the fork's
-tests run on the Windows side). What exists is the instrumentation the direction was missing, the
-two knobs its price depends on, and the protocol below.
+Written 2026-11-02 on `feat/adaptive-tier` (base `165-win-perf`), and **run on 2026-11-03**: the four
+arms in §7 are measured, the suite ran on the Windows venv (§9), a review doubled back over both (§10),
+and §6 records how the patch was installed. What this file was first written as — an unbuilt plan — is
+what §2 and §3 still describe; §6 onwards is what happened.
 
 Companion note: `/tmp/opencode/strata-vs-exllama-research.md` (the cross-engine measurement this
 follows from). Read §2.1 and §3.1 of it before the first arm.
@@ -31,15 +31,16 @@ reported number for the tier's coverage, which the engine never printed.
 
 | what | where | why the default is what it is |
 |---|---|---|
-| `EXL3_MOE_PINNED_ARENA_GIB=N` | `moe_cpu_host.py` (`MoeCpuTuning`, `_attach_chunk`, `_pin_budget_spent`, `arena_pin_report`) | Registers at most N GiB of arena chunks, then falls back chunk-by-chunk exactly like the driver-refusal path (`promote_ready` already refuses experts in unpinned chunks, so promotions simply do not target them). The arena is laid out hottest-first by the loaded profile, so the prefix is the hot end of the CPU tier — the part promotions are drawn from. Bounding it also leaves page-locked memory for the handoff ring, which the staged path runs on. `0`/unset = today's behaviour. |
+| `EXL3_MOE_PINNED_ARENA_GIB=N` | `moe_cpu_host.py` (`MoeCpuTuning`, `_attach_chunk`, `_pin_budget_spent`, `arena_pin_report`) | Registers at most N GiB of arena chunks, then falls back chunk-by-chunk exactly like the driver-refusal path (`promote_ready` already refuses experts in unpinned chunks, so promotions simply do not target them). The arena fills in chunk order and the layers register in order, so the prefix is the **first layers, not the hot end of the tier** — §7's measured 8 of 33 chunks reached ~11 of 48 layers, and ~37 could not promote at all (that "hot end" claim was wrong; §10 C3 is the correction). Bounding the budget also leaves page-locked memory for the handoff ring, which the staged path runs on, and `arena_pin_report()` now prints how many layers the pin made promotable, so a capped pool cannot be mistaken for a settled policy. `0`/unset = today's behaviour. |
 | `EXL3_MOE_CPU_PROMOTE_BUDGET` (default `6`) | `block_sparse_mlp_cpu.py` `_PROMOTE_BUDGET` | Promotions per step over all layers. One moves ~1.95 MB over PCIe (~73 µs pinned), one avoided host expert is ~41 µs, so a promotion pays after ~2 reuses. 6/step is the shipped value; the runbook sweeps up. |
 | `EXL3_MOE_CPU_PROMOTE_RATIO` (1.5), `EXL3_MOE_CPU_PROMOTE_DECAY` (0.98) | same | How fast the resident set follows a change of subject. Defaults unchanged. |
-| `EXL3_MOE_TIER_STATS=1` | `block_sparse_mlp_cpu.py` (`_TierStats`, `_tier_stats_step`, `report_tier_stats`), hook in `generator.py` | Prints, per generation, the share of the routed expert evaluations the tier served (a step's evaluations are the change in each layer's hit-histogram sum, corrected for the placement policy's decay, so it stays exact at any count magnitude), plus the arena's pin state and the promotion/demotion counts. Counters come from the hit histograms `moe_split_map` already maintains, snapshotted into pinned memory and read one step later — nothing synchronizes mid-decode, but the extra D2H is why it is a diagnostic and not a default. `=2` adds the six worst layers. |
+| `EXL3_MOE_TIER_STATS=1` | `block_sparse_mlp_cpu.py` (`_TierStats`, `_tier_stats_step`, `report_tier_stats`), called from the split step tick (`_split_step_count % EXL3_MOE_TIER_STATS_EVERY`) | Prints, per generation, the share of the routed expert evaluations the tier served (a step's evaluations are the change in each layer's hit-histogram sum, corrected for the placement policy's decay, so it stays exact at any count magnitude), plus the arena's pin state and the promotion/demotion counts. The line goes out from the module's own step tick, **not** from a hook in `generator.py`: the first draft hung it on the generator's queue-drained hook, which a `perf.py` ladder never reaches, so nothing was ever printed (§6). Counters come from the hit histograms `moe_split_map` already maintains, snapshotted into pinned memory and read one step later — nothing synchronizes mid-decode, but the extra D2H is why it is a diagnostic and not a default. `=2` adds the six worst layers. |
 
 Docs: `doc/env_vars.md` (the four entries above, with the payback arithmetic).
 Tests: `tests/moe_cpu/test_tier_stats.py` — the budget arithmetic (whole chunks, the chunk that
 straddles it, zero = no budget) and the coverage math (evaluations, the promote path's per-step
-decay, the re-baseline after a sweep's halving, layers of different width, worst layers). Unrun.
+decay, the re-baseline after a sweep's halving, layers of different width, worst layers). Run on the
+Windows venv — the counts are in §9 and §10.
 
 **Not changed:** the split itself (still a uniform `first` per layer), the sweep's interval and
 budget, `spares`' default of 4, and every production config. A global (per-layer-varying) budget is
@@ -94,8 +95,12 @@ arms B-E measure promote-on-miss against a frozen profile, which is the comparis
 
 ## 4. What is not verified
 
-1. **The code has not been executed at all.** No CUDA on this box; no torch to run the tests. Expect
-   the usual first-run issues: an import error, a numpy dtype mismatch, a wrong attribute name.
+1. **The code has now been executed, and the first run's defects were not the ones this list
+   predicted.** No import error, no numpy dtype mismatch, no wrong attribute name: what the box found
+   was a report hung on a hook a `perf.py` ladder never reaches, a prefill landing in the next decode
+   delta (both §6), a `torch.cuda.Event(device = d)` that raised `TypeError` on torch 2.11, and
+   `pinned_layers()` walking the worker's ack one nesting level short (§10 C5, C3). Each is a
+   prediction this list got wrong, recorded here so the list is not read as the run's outcome.
 2. **The `spares` pool may be the binding constraint, not the budget.** With 4 spares per layer only
    4 of 131 slots per layer can hold a freshly promoted expert, so arm B may be capped regardless of
    `EXL3_MOE_CPU_PROMOTE_BUDGET`. That is why C raises `EXL3_MOE_CPU_PROMOTE` first.
@@ -287,6 +292,25 @@ one — which is what the twin's `--adapt-forecast` tried, and lost 20.2 % there
 - The four arms' evidence lives in the deployed harness's `results/` and `logs/` (`perf-t27-*.log`),
   and `bench/verify_task.py --post` reads this report's run ids against `results/passes.csv`.
 
+The gate, re-run on 2026-11-04 from the deployment's worktree
+(`…/3a6c9fa6df7b22161dba7be0a7f274f329396456/165-win-perf`), no GPU and no process:
+
+```
+$ python3 bench/verify_task.py --post --report <this file> --cites-failure t27-A-base-20261103-121148
+post-run gates
+  PASS  t27-A-base-20261103-121148: status=fail, cited as failure evidence (not a measurement)
+  PASS  t27-A-perf-20261103-121739: 48 CPU-split component(s), every one from the saved profile
+  PASS  t27-B-pin8-f4-20261103-122212: 48 CPU-split component(s), every one from the saved profile
+  PASS  t27-C-pin8-f16-20261103-122756: 48 CPU-split component(s), every one from the saved profile
+  PASS  t27-D-pin8-nopromo-20261103-123221: 48 CPU-split component(s), every one from the saved profile
+verdict: all gates passed
+```
+
+Its `INFO` lines (one per prose `%` figure, each "prose, not a ratio band - not checked") are omitted;
+no `FAIL` line printed and the exit code is 0. The `--cites-failure` argument is this report's own
+rule in practice: `t27-A-base` is the void drafting attempt of section 6, cited as evidence of a
+failure, so without that flag the gate reads it as a measurement and fails.
+
 ## 9. Tests (2026-11-03)
 
 The suite was run against the **source tree with the patch** (`tests/conftest.py` puts the repo first
@@ -346,15 +370,18 @@ mine, from the same `logs/perf-t27-*.log` and `results/*.csv` the critique used.
 | finding | verified how | response |
 |---|---|---|
 | **C1/M1 blocker** — `_TierStats` freezes its placement mirror at construction, so it cannot see a promotion | by inspection (the mask was built once in `__init__`) and by recomputing both instruments from the logs: C's tier column 24.6 % mean, C's own promote line 31.1 % mean, A/D 27.8 % each | **fixed**: a per-module `_split_gen` is bumped by every landed promotion/demotion and by a sweep, and `_refresh()` re-reads the map and the worker mask when it moves (one D2H per move, never per step). Two tests: a promotion flips a miss to a hit, a demotion flips a hit to a miss, and the sweep path (device map only) is followed too. |
-| **C3 major** — the pin budget pins a prefix of the *layers*, not "the hot end of the tier" | by inspection of `_HugeArena` (1 GiB chunks filled in registration order, layers register in order) and the log line "8 of 33 chunk(s)" | **fixed as a claim**: the code comment, `doc/env_vars.md` and section 7 above now state the layer-order consequence; `arena_pin_report()` gained `pinned_layers()` and prints "N of 48 layer(s) promotable (0..K)" on every tier line, so the next campaign cannot mistake a capped pool for a settled policy. The *design* fix (order the arena by heat across layers) is not attempted. |
+| **C3 major** — the pin budget pins a prefix of the *layers*, not "the hot end of the tier" | by inspection of `_HugeArena` (1 GiB chunks filled in registration order, layers register in order) and the log line "8 of 33 chunk(s)" | **fixed as a claim**: the code comment, `doc/env_vars.md` and section 7 above now state the layer-order consequence; `arena_pin_report()` gained `pinned_layers()` and prints the promotable count on every tier line — `0 of N`, `N of M (0..K)` or `all N`, so neither a pin that covered no layer nor one that covered every layer can be mistaken for the partial case. The *design* fix (order the arena by heat across layers) is not attempted. |
 | **C2 major** — the tier state survives `cpu_unload`, holding the modules (and their GPU slices) alive | `grep moe_cpu_tier_stats` found no reset | **fixed**: `cpu_unload` drops it beside `moe_cpu_promote_state` |
-| **C5 minor** — a `torch.cuda.Event()` created on device 0 and recorded on another | by inspection | **fixed**: `Event(device = d)` |
+| **C5 minor** — a `torch.cuda.Event()` created on device 0 and recorded on another | by inspection, then by the crash it caused in the first t29 pass | **fixed, but not as first written**: `Event(device = d)` *was the crash* — torch 2.11's `Event.__new__` takes `(enable_timing, blocking, interprocess, external)` and no `device` kwarg, so the kwarg raised `TypeError` and took every `EXL3_MOE_TIER_STATS` pass down after the prefill ladder. The fix constructs the event inside `torch.cuda.device(d)` and records it on that device's current stream, so each device gets its own event |
 | **C6/C7 minor** — two accounting styles, `>> 30` truncation printing "0 GiB" for a sub-GiB budget, and 0 meaning "unlimited" without saying so | by inspection | **fixed**: one formatter, real byte totals, `0 = no budget` documented |
 | **C8 nit** — the docs still described the generator hook the code no longer uses | `grep report_tier_stats` | **fixed**: the docs describe the step tick and `EXL3_MOE_TIER_STATS_EVERY` |
 | **M2, M3, M4, M6, R1-R5, P1-P4** — the missing budget/policy arms, the still-climbing counters, no interleaved reference, the instrument's price, the untested M1/M3/M4 mechanisms, and the protocol slips | recomputed per band and per window | **recorded, not fixed**: section 7 now states each one, and section 11 is the arm list that settles them. None of it is code; all of it is another GPU session. |
 
 Tests after the fixes: `tests/moe_cpu` **111 passed, 63 skipped** (the two new placement-following
-tests included), on the box's venv against the patched source tree.
+tests included), on the box's venv against the patched source tree. On 2026-11-04 the same directory on
+the same venv, at this branch's HEAD, reports **119 passed, 63 skipped** — the later pin-report cases
+(`cd39e08b`) and this round's two (`test_pin_report_states_zero_and_all_layers_explicitly` and
+`test_pin_report_counts_only_layers_that_acked_blocks`) are the difference.
 
 ## 11. What the next session must run, in order
 
