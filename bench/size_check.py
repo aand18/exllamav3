@@ -141,6 +141,10 @@ def main(argv: list[str]) -> int:
                     help="required free VRAM after everything is resident (default 1024)")
     ap.add_argument("--reserve-mb", type=int, default=2048,
                     help="the autosplit's own reserve, observed at ~2 GiB; counted against the card (0 to ignore)")
+    ap.add_argument("--tail-bpw", type=float, default=0.0,
+                    help="re-quantise the CPU worker's cold-tail experts at this bpw (backlog item 3). "
+                         "The arena scales linearly from the checkpoint's own bits; the per-expert "
+                         "scales do not shrink, so the saving is an upper bound")
     ap.add_argument("--ccs", type=float, default=0.0,
                     help="host KV second tier in GB (the -ccs value). Its VRAM cost is NOT modelled, so a "
                          "configuration that uses it is reported UNCERTIFIED instead of FITS (T37)")
@@ -185,6 +189,16 @@ def main(argv: list[str]) -> int:
 
     out["trunk"] = {"gpu_mib": round(mib(trunk["gpu_bytes"]), 1),
                     "arena_mib": round(mib(trunk["arena_bytes"]), 1)}
+    if args.tail_bpw:
+        src_bits = float((cfg.get("quantization_config") or {}).get("bits") or 0)
+        if src_bits <= 0:
+            ap.error("--tail-bpw needs quantization_config.bits in the checkpoint's config.json")
+        scale = min(1.0, args.tail_bpw / src_bits)
+        ram = int(round(trunk["arena_bytes"] * scale))
+        out["trunk"]["arena_source_mib"] = out["trunk"]["arena_mib"]
+        out["trunk"]["arena_mib"] = round(mib(ram), 1)
+        out["tail"] = {"bpw": args.tail_bpw, "source_bits": src_bits, "scale": round(scale, 4),
+                       "note": "linear in bits; the per-expert scales do not shrink, so this is an upper bound"}
     out["cache"] = {"kv_mib": round(mib(cache["kv_bytes"]), 1),
                     "recurrent_mib": round(mib(cache["recurrent_bytes"]), 1),
                     "kv_layers": cache["kv_layers"],
@@ -270,6 +284,11 @@ def main(argv: list[str]) -> int:
     print(f"  reserve  {args.reserve_mb:9.0f} MiB held by the autosplit (counted against the card)")
     print(f"           {out['ram_mib']:9.0f} MiB host arena of {args.budget_ram_mb}"
           f"  -> {out['ram_free_after_mib']:.0f} MiB free")
+    if "tail" in out:
+        t = out["tail"]
+        print(f"  tail     {t['bpw']:9.2f} bpw for the CPU tail (from {t['source_bits']:.2f}): "
+              f"arena {out['trunk']['arena_source_mib']:.0f} -> {out['trunk']['arena_mib']:.0f} MiB "
+              f"(linear, upper bound)")
     if args.ccs:
         print(f"  host KV  {args.ccs:9.1f} GB (-ccs)   cost NOT modelled, see T37")
         print(f"verdict    UNCERTIFIED — {out['uncertified_reason']}")
