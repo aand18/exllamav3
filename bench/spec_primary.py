@@ -89,7 +89,8 @@ def evaluate(rows, control: str, treat: str) -> tuple[int, dict]:
         rc, rt = rate(c, "tok_s"), rate(t, "tok_s")
         if rc and rt:
             others[cat] = ratio(rc, rt)
-    corpus_c, corpus_t = rate(pick(rows, control, None), "tok_s") if False else None, None
+        else:
+            problems.append(f"secondary category '{cat}' has no data on one arm")
     # corpus: every draft row of each arm, primary and secondary alike
     def allrows(prefix):
         return [r for r in rows if r.get("tag", "").startswith(prefix)
@@ -103,11 +104,17 @@ def evaluate(rows, control: str, treat: str) -> tuple[int, dict]:
     p_c = sum(PRIMARY_WEIGHTS[c] * cats[c]["control"] for c in cats) / wsum
     p_t = sum(PRIMARY_WEIGHTS[c] * cats[c]["treat"] for c in cats) / wsum
     p_ratio = ratio(p_c, p_t)
-    spread = abs(p_c - p_t) / ((p_c + p_t) / 2) if (p_c or p_t) else None
     # the same-arm spread: the widest per-run deviation from its arm's mean, over the primary set
+    def primary_rows(prefix):
+        return [r for r in rows if r.get("tag", "").startswith(prefix)
+                and r.get("category") in PRIMARY_WEIGHTS
+                and any(r.get("arm", "").startswith(k) for k in DRAFT_ARMS)]
+
     def arm_spread(prefix):
-        runs = sorted({r["run_id"] for r in allrows(prefix)})
-        vals = [rate([r for r in allrows(prefix) if r["run_id"] == rid], "tok_s") for rid in runs]
+        # the spread the rule guards is on the same 12-workload primary mean, not on every category
+        pr = primary_rows(prefix)
+        runs = sorted({r["run_id"] for r in pr})
+        vals = [rate([r for r in pr if r["run_id"] == rid], "tok_s") for rid in runs]
         vals = [v for v in vals if v]
         if len(vals) < 2:
             return None
@@ -120,12 +127,17 @@ def evaluate(rows, control: str, treat: str) -> tuple[int, dict]:
     corpus_ratio = ratio(corpus_c, corpus_t)
     worst_other = min(others.values()) if others else None
 
+    missing = [c for c in cats if cats[c]["ratio"] is None or cats[c]["acc_control"] is None
+               or cats[c]["acc_treat"] is None]
+    if missing:
+        return 2, {"problems": [f"no data for {c}" for c in missing],
+                   "categories": cats, "secondary": others}
     withdraw = bool(p_ratio is not None and p_ratio < 1.0) or any(
-        (cats[c]["ratio"] or 1.0) < 0.98 for c in cats)
+        cats[c]["ratio"] < 0.98 for c in cats)
     passed = bool(
         p_ratio is not None and p_ratio >= 1 + floor
-        and all((cats[c]["ratio"] or 0) >= 1.0 for c in cats)
-        and abs((acc_t or 0) - (acc_c or 0)) <= 0.05
+        and all(cats[c]["ratio"] >= 1.0 for c in cats)
+        and abs(acc_t - acc_c) <= 0.05
         and corpus_ratio is not None and corpus_ratio >= 1.0
         and (worst_other is None or worst_other >= 0.97)
     )

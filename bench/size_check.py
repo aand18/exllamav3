@@ -160,6 +160,10 @@ def main(argv: list[str]) -> int:
     sizes = read_shards(args.model)
 
     if args.min_cs:
+        if args.ccs:
+            print(f"--ccs {args.ccs:g} GB is not modelled: a minimum -cs computed here says nothing "
+                  f"about a configuration that also uses a host KV tier (T37)", file=sys.stderr)
+            return 1
         prompt, new = args.min_cs
         need = prompt + new
         print(json.dumps({"min_cs_tokens": int(math.ceil(need / PAGE) * PAGE),
@@ -197,6 +201,11 @@ def main(argv: list[str]) -> int:
         ram = int(round(trunk["arena_bytes"] * scale))
         out["trunk"]["arena_source_mib"] = out["trunk"]["arena_mib"]
         out["trunk"]["arena_mib"] = round(mib(ram), 1)
+        if "draft" in out:
+            # the same tail applies to whichever component owns the workers; leaving the draft's
+            # arena unscaled would underprice RAM exactly where this flag is meant to save it
+            out["draft"]["arena_source_mib"] = out["draft"]["arena_mib"]
+            out["draft"]["arena_mib"] = round(out["draft"]["arena_mib"] * scale, 1)
         out["tail"] = {"bpw": args.tail_bpw, "source_bits": src_bits, "scale": round(scale, 4),
                        "note": "linear in bits; the per-expert scales do not shrink, so this is an upper bound"}
     out["cache"] = {"kv_mib": round(mib(cache["kv_bytes"]), 1),
@@ -257,6 +266,8 @@ def main(argv: list[str]) -> int:
     # so a configuration that uses it is not certified rather than certified against arithmetic that
     # does not include its cost.
     out["ccs_gb"] = args.ccs or 0.0
+    if args.ccs:
+        out["vram_free_excludes_ccs"] = True
     out["certified"] = out["fits"] and not args.ccs
     if args.ccs:
         out["uncertified_reason"] = (
@@ -280,7 +291,8 @@ def main(argv: list[str]) -> int:
               f"{d['cache_mib']:.0f} MiB cache  ({d['layers']} layer(s))")
     print(f"  ngram    {out['ngram_table_mib']:9.0f} MiB streamed from disk (not resident)")
     print(f"  TOTAL    {out['vram_mib']:9.0f} MiB VRAM of {args.budget_vram_mb}"
-          f"  -> {out['vram_free_after_mib']:.0f} MiB free")
+          f"  -> {out['vram_free_after_mib']:.0f} MiB free"
+          + ("   (EXCLUDES the -ccs host tier: not a certified figure)" if args.ccs else ""))
     print(f"  reserve  {args.reserve_mb:9.0f} MiB held by the autosplit (counted against the card)")
     print(f"           {out['ram_mib']:9.0f} MiB host arena of {args.budget_ram_mb}"
           f"  -> {out['ram_free_after_mib']:.0f} MiB free")

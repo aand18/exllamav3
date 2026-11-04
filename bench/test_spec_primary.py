@@ -51,7 +51,59 @@ def test_a_single_run_per_arm_cannot_be_judged():
     assert code == 2 and any("fewer than two runs" in p for p in out["problems"])
 
 
+def _arm(cat, rid, tag, tok_s, acc="2.0", arm="DFlash (greedy)"):
+    return {"tag": tag, "run_id": rid, "category": cat, "arm": arm, "tok_s": str(tok_s), "acc": str(acc)}
+
+
+def test_a_baseline_row_is_never_part_of_the_arm():
+    rows = _rows({c: (100, 100, 110, 110) for c in PRIMARY_WEIGHTS})
+    # a baseline row that would drag the arm down if the filter let it in
+    rows.append(_arm("Agentic; code", "A1", "A1", 10, arm="Baseline"))
+    code, out = evaluate(rows, "A", "B")
+    assert out["categories"]["Agentic; code"]["control"] > 99
+
+
+def test_an_accuracy_regression_blocks_a_pass():
+    rows = _rows({c: (100, 100, 110, 110) for c in PRIMARY_WEIGHTS})
+    for r in rows:
+        if r["tag"].startswith("B"):
+            r["acc"] = "1.80"          # -0.20, well outside the +-0.05 band
+    code, out = evaluate(rows, "A", "B")
+    assert out["verdict"] == "inconclusive"
+
+
+def test_a_corpus_regression_blocks_a_pass():
+    """A gain on the 12 primary workloads cannot carry a corpus that falls below parity: the
+    corpus ratio is over every draft row, and it must be reported and must block the pass."""
+    rows = _rows({c: (100, 100, 110, 110) for c in PRIMARY_WEIGHTS})
+    rows += [_arm("Creative", "A1", "A1", 100), _arm("Creative", "A2", "A2", 100),
+             _arm("Creative", "B1", "B1", 60), _arm("Creative", "B2", "B2", 60)]
+    code, out = evaluate(rows, "A", "B")
+    assert out["corpus_ratio"] < 1.0
+    assert out["verdict"] != "pass"
+
+
+def test_a_secondary_category_below_the_guardrail_blocks_a_pass():
+    rows = _rows({c: (100, 100, 110, 110) for c in PRIMARY_WEIGHTS})
+    rows += [_arm("Creative", "A1", "A1", 100), _arm("Creative", "A2", "A2", 100),
+             _arm("Creative", "B1", "B1", 96), _arm("Creative", "B2", "B2", 96)]   # -4 %
+    code, out = evaluate(rows, "A", "B")
+    assert out["secondary"]["Creative"] < 0.97 and out["verdict"] == "inconclusive"
+
+
+def test_missing_primary_data_cannot_be_judged():
+    rows = _rows({c: (100, 100, 110, 110) for c in PRIMARY_WEIGHTS})
+    rows = [r for r in rows if not (r["category"] == "Coding" and r["tag"].startswith("B"))]
+    code, out = evaluate(rows, "A", "B")
+    assert code == 2
+
+
 TESTS = [
+    test_missing_primary_data_cannot_be_judged,
+    test_a_secondary_category_below_the_guardrail_blocks_a_pass,
+    test_a_corpus_regression_blocks_a_pass,
+    test_an_accuracy_regression_blocks_a_pass,
+    test_a_baseline_row_is_never_part_of_the_arm,
     test_a_clean_gain_passes,
     test_one_primary_category_below_the_floor_withdraws,
     test_a_flat_arm_is_inconclusive_not_a_pass,
