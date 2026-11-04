@@ -80,6 +80,15 @@ rule and a ruling from the smart seat (R15):
   remove the two env lines from `start_tuned.ps1`, restart. If the 24 GiB pin refuses at split 381,
   unset `EXL3_MOE_PINNED_ARENA` first rather than moving the split.
 
+## Follow-up for whoever owns the deployment
+
+The regime file (`bench/windows/state.json`) and its deployed copy in `_agent/v165/` still describe
+the pre-pin environment. They were **deliberately not touched here**: the deployed harness is
+read-only in this engagement, and `verify_task.py --pre` compares the two copies, so changing one
+without the other would turn a green pre-gate red. The delta is two keys in the `env` block —
+`EXL3_MOE_PINNED_ARENA=1`, `EXL3_MOE_PINNED_ARENA_GIB=24` — after which an arm that wants the pin off
+must pass `-Unset` rather than relying on the default.
+
 ## Limits
 
 One box, one workload, n = 2 per config, batch-1 decode without the drafter (`perf.py` loads no
