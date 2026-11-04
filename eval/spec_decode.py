@@ -292,24 +292,57 @@ def dynamic_placement(model, config):
                for m in list(reg) + list(getattr(model, "modules", None) or []))
 
 
+def reset_placement(model):
+    """Put every expert of `model` back where it was loaded, so the next arm starts from the same
+    placement the last one did. Returns the number of slots whose weights had to be moved back.
+
+    The defect: this runner measures two or more arms in one process, and with dynamic expert
+    placement on (EXL3_MOE_CPU_SWAP) the first arm promotes and demotes experts as it generates. The
+    second arm then starts from a *different* placement - more or fewer experts of each layer on the
+    card - so the arm-to-arm ratio compares two placements and not two drafters, which is what the
+    refusal below is about. Resetting between the arms removes that confound; it cannot remove the
+    one the refusal names (an arm that moves experts mid-generation generates different tokens), so a
+    multi-arm run with dynamic placement still needs -swap_ok.
+
+    The engine owns the mechanics (block_sparse_mlp_cpu.reset_placement): the map the load path
+    built, the weights in the slots it names, the transfers in flight and the promote bookkeeping.
+    Imported here rather than at module scope because the offline gates in bench/test_gates.py stub
+    the engine to import this file without a GPU stack.
+
+    main() calls it at every arm boundary, and only when the run has more than one arm: a single-arm
+    run has nothing to compare, and there the placement the warm pass settled is part of what the
+    arm measures.
+    """
+    from exllamav3.modules.block_sparse_mlp_cpu import reset_placement as engine_reset_placement
+    moved = engine_reset_placement(model)
+    if moved:
+        print(f" -- expert placement reset: {moved} slot(s) returned to their load-time map")
+    return moved
+
+
 def swap_refusal(arms: int, dynamic: bool) -> str | None:
     """Why a multi-arm comparison must not run with dynamic expert placement, or None.
 
     A placement change re-reads experts from the checkpoint mid-stream, and the engine's own note
-    in block_sparse_mlp_cpu.py says it "visibly derails a generation in progress". With it on, the
-    arms do not generate the same tokens from the same prompt - measured in
+    in block_sparse_mlp_cpu.py says it "visibly derails a generation in progress". With it on, an
+    arm that moves experts generates different tokens from one that does not - measured in
     wiki/plans/v165-reports/artifacts/logs/perf-val-spec-20261029-233352.log:61 vs :103, where
     Baseline and MTP (greedy) produced different greedy text - so the arm-to-arm ratio compares two
     different workloads. One arm cannot be miscompared, and static placement keeps every arm on the
     same tokens.
-    """
+
+    reset_placement() between the arms fixes the other half of the problem (the second arm used to
+    start from whatever placement the first one ended on), so both arms now start from the load-time
+    placement. The tokens still diverge once an arm's own placement moves, so this stays a refusal:
+    the reset makes -swap_ok's exploration comparable, not the ratio canonical."""
     if arms <= 1 or not dynamic:
         return None
     return (f"dynamic expert placement is active (EXL3_MOE_CPU_SWAP) and this run compares {arms} "
-            f"arms. Placement moves between arms, so they do not generate the same tokens and the "
+            f"arms. Placement moves mid-generation, so they do not generate the same tokens and the "
             f"arm-to-arm ratio is meaningless.\n"
             f"  remedy: re-run with EXL3_MOE_CPU_SWAP=0 for static placement.\n"
-            f"  deliberate exploration only: pass -swap_ok to measure it anyway.")
+            f"  deliberate exploration only: pass -swap_ok to measure it anyway (placement is reset "
+            f"between arms, so both start from the same experts in the same slots).")
 
 
 @torch.inference_mode()
@@ -323,14 +356,19 @@ def main(args):
 
     # Hard gate: a ratio between arms only means something when every arm generates the same
     # tokens. Placement is fixed at load, so this is the first moment it can be checked - and
-    # checking it beats reporting a number that measures two different generations.
-    refusal = swap_refusal(count_arms(args), dynamic_placement(model, config))
+    # checking it beats reporting a number that measures two different generations. Between the arms
+    # below, reset_placement() puts the placement back to that load-time state (see its docstring).
+    arms = count_arms(args)
+    refusal = swap_refusal(arms, dynamic_placement(model, config))
     if refusal:
         if args.swap_ok:
             print(f"{col_yellow}WARNING: {refusal}{col_default}", file = sys.stderr)
         else:
             print(f"{col_red}ERROR: {refusal}{col_default}", file = sys.stderr)
             sys.exit(2)
+    # ... and only between arms: a single-arm run has nothing to compare, and there the placement the
+    # warm pass settled is part of what the arm measures, i.e. today's number
+    reset_between_arms = arms > 1
 
     # Optionlly limit scope
     if sw := args.single_workload:
@@ -350,6 +388,10 @@ def main(args):
         warm_corpus(wg, tokenizer)
         reset_arm(wg)
         del wg
+        # The warm pass moved experts; every measured arm starts from the load-time placement so the
+        # arms differ by their drafter and not by what the pass before them left on the card
+        if reset_between_arms:
+            reset_placement(model)
 
     # Baseline
     result_baseline = None
@@ -364,6 +406,8 @@ def main(args):
         arm_line("baseline", result_baseline)
         reset_arm(generator)
         del generator
+        if reset_between_arms:
+            reset_placement(model)
 
     # N-gram draft
     result_ngram = None
@@ -385,6 +429,10 @@ def main(args):
         result_ngram = measure(generator, tokenizer, GreedySampler(), args.max_new_tokens, stats_sink)
         if args.temperature:
             result_ngram_temp = measure(generator, tokenizer, TopPSampler(0.9, 1), args.max_new_tokens)
+        # This arm moves placement too, and it has no reset_arm() of its own: the drafter's arm must
+        # still start from the load-time placement
+        if reset_between_arms:
+            reset_placement(model)
 
     # SD with draft model. With -rb_ab the arm is measured four times, ABBA over the module
     # flag generator._NO_BATCH_READBACK (batched vs. serial speculative-window readback);
@@ -416,6 +464,12 @@ def main(args):
         for rb_i, (rb_label, rb_flag) in enumerate(rb_arms):
             if rb_flag is not None:
                 exl_gen._NO_BATCH_READBACK = rb_flag
+            # ABBA repeats are arms too: each one starts from the load-time placement of both models,
+            # or the four runs differ by where the placement had drifted as well as by the flag
+            if reset_between_arms:
+                reset_placement(model)
+                if draft_model is not None:
+                    reset_placement(draft_model)
             res_draft = measure(generator, tokenizer, GreedySampler(), args.max_new_tokens, stats_sink if rb_i == 0 else None)
             arm_line(rb_label if rb_label else "draft", res_draft)
             if generator.sparse_head is not None:
@@ -526,7 +580,7 @@ if __name__ == "__main__":
     parser.add_argument("-tokens", "--max_new_tokens", type = int, help = "Max sampled tokens per round", default = 1024)
     parser.add_argument("-temp", "--temperature", action = "store_true", help = "Also sample with temperature")
     parser.add_argument("-swap_ok", "--swap_ok", action = "store_true",
-                        help = "Measure a multi-arm comparison with dynamic expert placement (EXL3_MOE_CPU_SWAP) still on. The arms do not generate the same tokens, so the ratios are exploration only")
+                        help = "Measure a multi-arm comparison with dynamic expert placement (EXL3_MOE_CPU_SWAP) still on. Placement is reset between arms, but an arm that moves placement mid-generation generates different tokens, so the ratios are exploration only")
     parser.add_argument("-single", "--single_workload", type = str, help = "Limit to single workload", default = None)
     parser.add_argument("-dstats", "--draft_stats", type = str, help = "Write per-round (position, window, accepted) records to JSON file", default = None)
     parser.add_argument("-nwarm", "--no_warmup_corpus", action = "store_true",

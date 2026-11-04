@@ -681,6 +681,153 @@ def _split_promote_verify(m, t):
                 f"demote verify failed: {key}.{an} (arena)"
 
 
+def _split_placement_map(m):
+    """The router->physical-slot map a split module loads with: physical ids [0, first) are the GPU
+    slots (the last `spares` of them start free), first + i is the worker's expert i. The spares'
+    experts start in their worker slots."""
+    first, spares = m.cpu_split_first, m._split_spares
+    return [r if r < first - spares else first + (r - (first - spares)) for r in range(m.num_experts)]
+
+
+def _split_map_initialise(m):
+    """Build a split module's load-time placement state: the router->slot map, the decayed hit
+    histogram, the promote path's free-slot lists and the step counters that go with them.
+
+    Called by BlockSparseMLP_CPU.cpu_post_load() and by reset_placement(), so what a reset restores is
+    the construction the load performed rather than a second copy of it that can drift. Only
+    placement state is here: the promotion/demotion counters the tier report prints as "since load"
+    are telemetry and keep counting across a reset."""
+    dev = torch.device(m.device)
+    first, spares = m.cpu_split_first, m._split_spares
+    mp = _split_placement_map(m)
+    m._split_map = torch.tensor(mp, dtype = torch.long, device = dev)
+    m._split_hist = torch.zeros(m.num_experts, dtype = torch.float, device = dev)
+    m._split_selcpu_t = None
+    m._swap_tick_count = 0      # steps since the last placement sweep (the sweep zeroes it)
+    m._split_step_count = 0     # steps since load: the profile save gates on this one
+    if spares:
+        m._split_mp = mp
+        m._split_free_gpu = list(range(first - spares, first))
+        m._split_free_cpu = []
+        m._split_pending = []        # in-flight transfers: dict(kind, r, gpu, cpu, ev)
+        m._split_busy = set()        # router ids with a transfer in flight
+
+
+def _split_placement_restore(m):
+    """Copy every expert back into the slot the load-time map puts it in, and return how many slots
+    had to move.
+
+    The map is only half of a placement: a promotion copies an expert's weights into a GPU slot and a
+    demotion copies them into the worker's arena, so restoring the map alone would leave the model
+    routing by one map and computing with the weights of another - silently, and with a plausible
+    speed number printed on top of it. The reads go through the checkpoint, exactly as the sweep's
+    own transfers do. A module with no worker (no cpu_host) or no saved split state cannot have
+    moved anything."""
+    if getattr(m, "cpu_host", None) is None or getattr(m, "_split_saved", None) is None:
+        return 0
+    first, spares = m.cpu_split_first, m._split_spares
+    load = _split_placement_map(m)
+    cur = [int(v) for v in m._split_map.cpu()]
+    if cur == load:
+        return 0
+    # inv[slot] = the router expert whose weights sit in that slot now. None: no expert is mapped
+    # there, which is what a promotion leaves behind in the worker slot it emptied. The slot space is
+    # the `first` GPU slots plus one worker slot per non-resident expert, i.e. num_experts + spares
+    inv = [None] * (m.num_experts + spares)
+    for r, slot in enumerate(cur):
+        inv[slot] = r
+    stc = m.config.stc
+    full_g, full_u, full_d = m._split_saved_lists_ref()
+    gpu_first = first - spares
+    moved = 0
+    # GPU slots [0, gpu_first) hold their own expert at load. A spare slot (gpu_first..first) is
+    # unmapped once the map is back, so whatever the last arm promoted into it is unreachable and
+    # needs no copy: the next promotion overwrites it
+    for g in range(gpu_first):
+        if inv[g] == g:
+            continue
+        proj = ([(full_g[g], m.gates[g].inner)] if m.gated else []) \
+            + [(full_u[g], m.ups[g].inner), (full_d[g], m.downs[g].inner)]
+        for src, dst in proj:
+            key = src.key
+            dst.trellis.copy_(stc.get_tensor(key + ".trellis", dst.trellis.device))
+            dst.suh.copy_(stc.get_tensor(key + ".suh", dst.suh.device, float2half = True))
+            dst.svh.copy_(stc.get_tensor(key + ".svh", dst.svh.device, float2half = True))
+            if getattr(dst, "bias", None) is not None:
+                b = stc.get_tensor(key + ".bias", dst.bias.device, optional = True, float2half = True)
+                if b is not None:
+                    dst.bias.copy_(b)
+        moved += 1
+    # Worker slot c holds expert gpu_first + c at load. Reinstalling re-reads it through the child's
+    # own handle, in place, and the aux copies the streamed prefill reads follow it. An unmapped slot
+    # is rewritten too: a promotion leaves it holding whatever it last held, which the map cannot
+    # answer, and a re-read can only make it what the load would have put there
+    for c in range(m.num_experts - gpu_first):
+        r = gpu_first + c
+        if inv[first + c] == r:
+            continue
+        keys = ([full_g[r].key] if m.gated else []) + [full_u[r].key, full_d[r].key]
+        m.cpu_host.install_expert(m.cpu_layer_idx, c, keys)
+        aux = m.cpu_host.aux.get(m.cpu_layer_idx)
+        if aux:
+            names = ([("suh_g", full_g), ("svh_g", full_g), ("bias_g", full_g)] if m.gated else []) \
+                + [("suh_u", full_u), ("svh_u", full_u), ("bias_u", full_u),
+                   ("suh_d", full_d), ("svh_d", full_d), ("bias_d", full_d)]
+            for name, full in names:
+                lst = aux.get(name)
+                if lst is None or lst[c] is None:
+                    continue
+                suffix = "." + name.split("_")[0]
+                t = stc.get_tensor(full[r].key + suffix, lst[c].device,
+                                   optional = name.startswith("bias"), float2half = True)
+                if t is not None:
+                    lst[c].copy_(t)
+        moved += 1
+    return moved
+
+
+@torch.inference_mode()
+def reset_placement(model):
+    """Restore every split module of `model` to the expert placement it was loaded with, and return
+    how many slots had to be moved back.
+
+    Why a runner needs it: eval/spec_decode.py measures two arms in one process (baseline, then the
+    same model with a drafter). With dynamic placement on (EXL3_MOE_CPU_SWAP) the first arm's
+    promotions are the second arm's starting state - a different set of experts on the card, so the
+    arm-to-arm ratio compares two placements rather than two drafters. Resetting at the arm boundary
+    gives both arms the same experts in the same slots, with the same weights behind them.
+
+    Every piece of state the load path built is rebuilt by the helper the load path uses
+    (_split_map_initialise), the promote bookkeeping on the config is dropped so the next arm rebuilds
+    it from the restored map, and a module with no split map (static placement, or no split at all)
+    is left untouched. Runs under inference mode for the same reason run_pending_swap_sweeps() does:
+    the map, the histogram and the slot tensors are inference tensors, and an in-place update to one
+    outside inference mode raises (issue #329)."""
+    targets = [m for m in (getattr(model, "modules", None) or [])
+               if getattr(m, "_split_map", None) is not None]
+    if not targets:
+        return 0
+    # Nothing may be in flight while the weights move: a promotion's DMA lands in exactly the slot
+    # the restore is about to rewrite. Quiesce every device holding a split layer, as the sweep does
+    if any([int(v) for v in m._split_map.cpu()] != _split_placement_map(m) for m in targets):
+        for d in sorted({torch.device(m.device).index or 0 for m in targets
+                         if m.device is not None and torch.device(m.device).type == "cuda"}):
+            torch.cuda.synchronize(d)
+    moved = 0
+    for m in targets:
+        moved += _split_placement_restore(m)
+        _split_map_initialise(m)
+        # The tier statistics mirror the map and refresh when this moves, so a coverage figure cannot
+        # freeze on a placement that changed underneath it
+        m._split_gen = getattr(m, "_split_gen", 0) + 1
+    ips = {id(ip): ip for ip in (getattr(getattr(m, "config", None), "infer_params", None)
+                                for m in targets) if ip is not None}
+    for ip in ips.values():
+        ip.moe_cpu_promote_state = None     # rebuilt from the restored _split_mp on the next step
+        ip.moe_cpu_swap_pending = False     # a sweep the last arm queued has nothing left to move
+    return moved
+
+
 def trellis_rate(tile_width: int):
     """Bitrate of an EXL3 trellis from its tile width (last dim): an integer 1..8 for 16 * K, a
     half-integer 1.5 / 2.5 / 3.5 for 16 * K + 8, None for anything the CPU kernels don't take"""
@@ -785,23 +932,9 @@ class BlockSparseMLP_CPU:
         # selection counts, and the shared module registry the sweep walks. The first
         # registered module owns the step counter
         if self.cpu_split_first is not None and getattr(self, "_split_dynamic", False):
-            dev = torch.device(self.device)
-            first, spares = self.cpu_split_first, self._split_spares
-            # Physical ids: [0, first) the GPU slots, first + i the worker's expert i. The spares'
-            # experts start in their worker slots, their GPU slots free
-            mp = [r if r < first - spares else first + (r - (first - spares)) for r in range(self.num_experts)]
-            self._split_map = torch.tensor(mp, dtype = torch.long, device = dev)
-            self._split_hist = torch.zeros(self.num_experts, dtype = torch.float, device = dev)
-            self._split_selcpu_t = None
-            self._swap_tick_count = 0      # steps since the last placement sweep (the sweep zeroes it)
-            self._split_step_count = 0     # steps since load: the profile save gates on this one
-            if spares:
-                self._split_mp = mp
-                self._split_free_gpu = list(range(first - spares, first))
-                self._split_free_cpu = []
-                self._split_pending = []        # in-flight transfers: dict(kind, r, gpu, cpu, ev)
-                self._split_busy = set()        # router ids with a transfer in flight
-                self._split_promo_n = 0
+            _split_map_initialise(self)
+            if self._split_spares:
+                self._split_promo_n = 0     # transfers since load, for the tier report
                 self._split_demo_n = 0
             ip2 = self.config.infer_params
             reg = getattr(ip2, "moe_cpu_swap_modules", None)
