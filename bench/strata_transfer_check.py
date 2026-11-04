@@ -35,7 +35,10 @@ review actually moves numbers FROM:
   must beat, ``promote_decay`` the per-step halving of that history. Strata's equivalent is
   ``adapt_swaps`` per round; the unit differs, which is the M2-churn row's point.
 * ``sweep_interval`` / ``sweep_max`` - the legacy (non-promote) placement sweep: every
-  ``sweep_interval`` decode steps, up to ``sweep_max`` swaps across the tier.
+  ``sweep_interval`` decode steps, up to ``sweep_max`` swaps across the tier. It may be dead at the
+  served config, which registers spare slots: ``_split_swap_tick`` promotes and returns before the
+  sweep when ``spares`` is set (``block_sparse_mlp_cpu.py:1204-1207``), so the sweep's cadence is a
+  property of the legacy path rather than of the deployed one.
 * ``sweep_source`` - where a swap's bytes come from, read out of ``_split_swap_experts``' body:
   ``checkpoint`` when it re-reads through ``stc.get_tensor``, ``ram-copy`` when it copies from the
   worker's ``arena_views`` and nothing else, ``unknown`` when the function is gone or carries neither.
@@ -50,7 +53,9 @@ review actually moves numbers FROM:
   experts per layer that run on the CPU, which a report should derive rather than copy.
 
 Conventions: floats are read as written (``0.7f`` -> ``0.7``), not as their float32 value, because a
-review compares defaults as authored. A value the source does not carry is ``None`` and gets no
+review compares defaults as authored. A default whose text will not cast to the knob's type - an int
+knob written ``6.0`` - is kept as written rather than raising, so ``check`` reports the knob, the text
+and the line as a disagreement. A value the source does not carry is ``None`` and gets no
 ``source_lines`` entry; ``source_lines`` otherwise maps the value's key to ``"<relative path>:<line>"``
 so a report can quote the line the number came from.
 
@@ -69,6 +74,11 @@ Usage::
     python3 bench/strata_transfer_check.py --fork     # print this fork's side instead
     python3 bench/strata_transfer_check.py --check    # the matrix against both trees, one line a row
     python3 bench/strata_transfer_check.py --selftest # run this module's own assertions (no pytest)
+
+``--selftest`` exits 2, not 1, when one of the two real trees is absent: the arms that read the source
+are the only ones that can see the drift this module exists to catch, so a fixtures-only run must not
+read as green. ``--allow-missing-tree`` accepts such a box deliberately - a reviewer's machine with no
+Strata checkout - and is the only way to turn the two tree-less arms back into a pass.
 """
 
 from __future__ import annotations
@@ -202,13 +212,22 @@ def _slot_pool(text: dict[str, list[str]]) -> tuple[str, str | None]:
 
 
 def _swap_source(text: dict[str, list[str]]) -> tuple[str, str | None]:
-    """Where a swapped expert's bytes come from, and the line that says so."""
-    for number, line in enumerate(text[GENERATE], 1):
-        if EXCHANGE_COMMENT.search(line):
-            return "ram-copy", f"{GENERATE}:{number}"
-    for number, line in enumerate(text[GENERATE], 1):
-        if SWAP_NAMES_CHECKPOINT.search(line):
-            return "checkpoint", f"{GENERATE}:{number}"
+    """Where a swapped expert's bytes come from, and the line that says so.
+
+    Both of the Strata side's files are read: the exchange sentence is a comment in ``generate.cpp``
+    today, but a swap that names a checkpoint can be declared in ``expert_cache.hpp`` instead, and a
+    header-only answer would otherwise be ``unknown`` while the detection still fired. The exchange
+    sentence wins over a checkpoint mention in either file, the precedence it already has inside
+    ``generate.cpp``.
+    """
+    for rel in (GENERATE, EXPERT_CACHE):
+        for number, line in enumerate(text[rel], 1):
+            if EXCHANGE_COMMENT.search(line):
+                return "ram-copy", f"{rel}:{number}"
+    for rel in (GENERATE, EXPERT_CACHE):
+        for number, line in enumerate(text[rel], 1):
+            if SWAP_NAMES_CHECKPOINT.search(line):
+                return "checkpoint", f"{rel}:{number}"
     return "unknown", None
 
 
@@ -292,17 +311,28 @@ def _state_field(lines: list[str], name: str, cast: type) -> tuple[object, str |
 
     The value is read from the text rather than through `json.loads` so that the line is part of the
     answer: the review quotes the number and the file:line together, and a parser gives no position.
+
+    The scan is bounded by the `active` block's own closing brace - brace depth, because the block
+    holds nested objects (`env`, `floors`) whose closing lines are not the block's. Unbounded, a later
+    top-level `split` (the `history` entries restate one) would answer for a block that lost the field,
+    which is a false pass rather than a missing value.
     """
-    start = 0
+    start = None
     for number, line in enumerate(lines):
         if ACTIVE_BLOCK.match(line):
             start = number
             break
+    if start is None:
+        return None, None
     pattern = re.compile(STATE_FIELD.pattern.format(name=re.escape(name)))
-    for number, line in enumerate(lines[start:], start + 1):
+    depth = 1                                   # the ACTIVE_BLOCK line opened it
+    for number, line in enumerate(lines[start + 1:], start + 2):
+        if depth <= 0:
+            break
         found = pattern.search(line)
         if found:
             return cast(found.group(1).strip('"')), f"{STATE}:{number}"
+        depth += line.count("{") - line.count("}")
     return None, None
 
 
@@ -326,7 +356,14 @@ def extract_exllama(root: pathlib.Path = REPO) -> dict:
         for number, line in enumerate(text[rel], 1):
             found = pattern.search(line)
             if found:
-                out[key] = cast(found.group(1))
+                try:
+                    out[key] = cast(found.group(1))
+                except ValueError:
+                    # An int knob written as a decimal (`6.0`): `_env_default` accepts the text and
+                    # `int()` does not. The text stands in for the value, with its line, so `check`
+                    # reports the knob, the text and the line as a disagreement - a traceback out of
+                    # an extractor is neither a finding nor a line a reviewer can go and read.
+                    out[key] = found.group(1)
                 source_lines[key] = f"{rel}:{number}"
                 break
 
@@ -411,9 +448,10 @@ MATRIX: list[dict] = [
         "verdict": "absent",
         "justification": (
             "the fork's 131 experts/layer is a static prefix of one uniform per-layer budget at the "
-            "measured split 381 (512 - 381; this worktree's state.json says 376, i.e. 136); Strata's "
-            "173/layer is 8301 global slots over 48 layers (15.74 GiB) that follow routing. Three "
-            "levers would move the fork: cache_size 262144 -> 32768/65536, memory.sysmem_kv_cache "
+            "measured split 381 (the split is the CPU tail count, model_init.py:68, so 512 - 381 is "
+            "what stays on the GPU; this worktree's state.json says 376, i.e. 136 on the GPU); "
+            "Strata's 173/layer is 8301 global slots over 48 layers (15.74 GiB) that follow routing. "
+            "Three levers would move the fork: cache_size 262144 -> 32768/65536, memory.sysmem_kv_cache "
             "~1800 MB, then cpu_moe_split_experts below 381. The KV bytes, from the checkpoint's "
             "config and the engine's cache shapes: 2 KV heads x 256 head_dim = 512 values/token/layer, "
             "at \"4,4\" 16 groups x 8 bits x 4 B + 32 B of fp16 scales = 576 B, plus 320 B of fp16 "
@@ -632,10 +670,11 @@ MATRIX: list[dict] = [
             "The fork adds 320 B/token/layer of fp16 indexer planes (896 B/token/layer) and keeps "
             "all of it in VRAM: 2.82 GB. Strata keeps 32768 cells resident (0.23 GB) and the other "
             "229376 cells, 1.59 GB, in pinned RAM. So the VRAM delta at one context is 2.82 - 0.23 = "
-            "2.59 GB - the same quantity the M1 lever frees (2.11-2.47 GB by target cell count), not "
-            "a second one. Concurrency is anti-scaled: the log's one overlapping pair ran 49.8 T/s "
+            "2.59 GB: the same class of quantity the M1 lever frees (fork VRAM KV against host KV), "
+            "though not the same number - that lever frees 2.11-2.47 GB by target cell count. "
+            "Concurrency is anti-scaled: the log's one overlapping pair ran 49.8 T/s "
             "on the 19.5k-token stream and 8.1 T/s on the 551-token stream that shared the window, "
-            "against 57.2-61.3 T/s for the three single-stream requests (note 1 section 2). No arm of "
+            "against 50.5-61.3 T/s for the three single-stream requests (note 1 section 2). No arm of "
             "either campaign varied batch or KV residency, so the divergence is real and unmeasured."
         ),
         "measured": "unmeasured",
@@ -839,13 +878,17 @@ def _fake_root(tree: dict[str, str]) -> pathlib.Path:
     return root
 
 
-def _selftest(root: pathlib.Path = STRATA, repo: pathlib.Path = REPO) -> int:
-    """The assertions pytest would run, for a box that has no pytest. 0 = all passed.
+def _selftest(root: pathlib.Path = STRATA, repo: pathlib.Path = REPO,
+              allow_missing_tree: bool = False) -> int:
+    """The assertions pytest would run, for a box that has no pytest. 0 = passed, 2 = a tree is absent.
 
     `root` is the Strata tree, `repo` this fork's; either side skips its real-tree arm when that tree
-    is not there, so a fixture-only box still runs the branches.
+    is not there. A skipped arm is not a pass: the arms that read the source are the only ones that can
+    see the drift this module exists to catch, so a missing tree returns 2 unless `allow_missing_tree`
+    says the fixtures-only run is the intended one.
     """
     failures: list[str] = []
+    missing: list[str] = []
     total = 0
 
     def expect(name: str, got: object, want: object) -> None:
@@ -894,6 +937,16 @@ def _selftest(root: pathlib.Path = STRATA, repo: pathlib.Path = REPO) -> int:
     expect("empty.slot_pool", extract_strata(_fake_root({}))["slot_pool"], "global")
     expect("empty.adapt_every", extract_strata(_fake_root({}))["adapt_every"], None)
 
+    # 3b. A checkpoint-naming swap can be declared in the header rather than in generate.cpp.  The
+    # arm is a header-only fixture: without it, the header is not scanned at all and a swap declared
+    # there reads "unknown" while the detection the docstring describes still fires.
+    header_swap = _fake_root({
+        EXPERT_CACHE: "    // a swap re-reads the expert from the checkpoint into the slot\n"})
+    got = extract_strata(header_swap)
+    expect("header-swap.swap_source", got["swap_source"], "checkpoint")
+    expect("header-swap.source_lines.swap_source",
+           got["source_lines"].get("swap_source"), f"{EXPERT_CACHE}:1")
+
     # 4. The real tree, when it is on this box: the values the review records, and honest file:lines.
     if (root / GENERATE).is_file():
         real = extract_strata(root)
@@ -920,17 +973,28 @@ def _selftest(root: pathlib.Path = STRATA, repo: pathlib.Path = REPO) -> int:
             # this extraction exists to make loud.
             line = text[rel][int(number) - 1]
             value = real.get(key)
-            if key in {"swap_source", "slot_pool"}:
-                token = {"swap_source": "exchange them with the GPU cache",
-                         "slot_pool": "expert_cache_per_layer" if rel == GENERATE else "per_layer_"}[key]
-            elif isinstance(value, float):
-                token = repr(value).rstrip("0").rstrip(".") or "0"
+            if key == "swap_source":
+                # Derived from the value, not hardcoded: a real tree whose swap names a checkpoint
+                # carries no "no file reads" sentence, and demanding one would stack a second, false
+                # failure on top of the value check's.
+                decided = (EXCHANGE_COMMENT if value == "ram-copy" else SWAP_NAMES_CHECKPOINT)
+                carries = decided.search(line) is not None
+                token = "the phrase that decided it"
+            elif key == "slot_pool":
+                token = "expert_cache_per_layer" if rel == GENERATE else "per_layer_"
+                carries = token in line
             else:
-                token = str(value)
-            if token not in line:
+                if isinstance(value, float):
+                    token = repr(value).rstrip("0").rstrip(".") or "0"
+                else:
+                    token = str(value)
+                carries = token in line
+            if not carries:
                 failures.append(f"FAIL real.source_lines[{key}]: {where} does not carry {token!r}: {line.strip()!r}")
     else:
         print(f"skip real tree: no {GENERATE} under {root} (set STRATA_ROOT to check another checkout)")
+        if not allow_missing_tree:
+            missing.append(f"the Strata tree (--root {root}, needs {GENERATE})")
 
     # 5. This fork's side, same rule: the shape of the three files, not the files.  The comment on
     # line 7 names the interval knob and carries no number (as block_sparse_mlp_cpu.py:1184 does), and
@@ -996,6 +1060,34 @@ def _selftest(root: pathlib.Path = STRATA, repo: pathlib.Path = REPO) -> int:
     expect("empty.sweep_source", extract_exllama(_fake_root({}))["sweep_source"], "unknown")
     expect("empty.promote_budget", extract_exllama(_fake_root({}))["promote_budget"], None)
 
+    # 6b. An int knob written as a decimal: `_env_default` accepts `6.0` and `int()` raises. The text
+    # stands in for the value, so `check` names the knob, the text and the line - a traceback names
+    # nothing a reviewer can read.
+    decimal = _fake_root({CPU_MLP:
+        '_PROMOTE_BUDGET = max(0, int(os.environ.get("EXL3_MOE_CPU_PROMOTE_BUDGET", 6.0)))\n'})
+    got = extract_exllama(decimal)
+    expect("decimal.promote_budget", got["promote_budget"], "6.0")
+    expect("decimal.source_lines.promote_budget",
+           got["source_lines"].get("promote_budget"), f"{CPU_MLP}:1")
+    decimal_row = {"id": "T-decimal", "strata": {}, "fork": {"promote_budget": 6},
+                   "verdict": "diverged", "justification": "a decimal in an int knob",
+                   "measured": "unmeasured"}
+    decimal_fail = [line for line in check({}, got, matrix=[decimal_row]) if line.startswith("FAIL")]
+    expect("decimal.check_names_knob", bool(decimal_fail) and "promote_budget" in decimal_fail[0], True)
+    expect("decimal.check_names_text", bool(decimal_fail) and "6.0" in decimal_fail[0], True)
+    expect("decimal.check_names_line", bool(decimal_fail) and f"{CPU_MLP}:1" in decimal_fail[0], True)
+
+    # 6c. The regime block ends at its own closing brace.  A `split` under `history` is not the
+    # regime's: unbounded, the scan would answer 376 for a block that lost the field - a check that
+    # passes on a value the served config no longer carries.
+    lost = _fake_root({STATE: (
+        '{\n  "active": {\n    "cache_size": 131072\n  },\n  "history": [\n    {\n'
+        '      "split": 376\n    }\n  ]\n}\n')})
+    got = extract_exllama(lost)
+    expect("state.bounded.split", got["split"], None)
+    expect("state.bounded.split_line", got["source_lines"].get("split"), None)
+    expect("state.bounded.cache_size", got["cache_size"], 131072)
+
     # 7. This fork's real tree.  Every value whose regex could miss is asserted twice: the value, and
     # the line recorded for it.  A regex that fails closed to the number the tree already carries would
     # pass the value check on its own while pointing at a line that never states it (mutation m1 in the
@@ -1054,6 +1146,8 @@ def _selftest(root: pathlib.Path = STRATA, repo: pathlib.Path = REPO) -> int:
                     f"{token!r} for {anchors[key]!r}: {line.strip()!r}")
     else:
         print(f"skip fork tree: no {CPU_MLP} under {repo}")
+        if not allow_missing_tree:
+            missing.append(f"this fork's tree (--repo-root {repo}, needs {CPU_MLP})")
 
     # 8a. The matrix's own schema, independent of either tree: unique ids, the verdict vocabulary, a
     # justification wherever one is owed, and `measured` a run id or the literal "unmeasured".
@@ -1109,13 +1203,24 @@ def _selftest(root: pathlib.Path = STRATA, repo: pathlib.Path = REPO) -> int:
     for line in failures:
         print(line)
     print(f"{total - len(failures)}/{total} checks passed")
-    return 1 if failures else 0
+    if failures:
+        return 1
+    for name in missing:
+        print(f"NO SUCH TREE: {name} - the arms that read it did not run, so this selftest checked "
+              "fixtures only. Pass --allow-missing-tree to accept a fixtures-only box as green.")
+    return 2 if missing else 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--selftest", action="store_true",
                         help="run this module's own assertions and exit non-zero on a failure")
+    parser.add_argument("--allow-missing-tree", action="store_true",
+                        help="with --selftest: accept a missing real tree (exit 0) instead of failing "
+                             "(exit 2). The real-tree arms are the only ones that read either "
+                             "engine's source, so their absence is a fail by default; the flag is for "
+                             "a box that has neither tree (a reviewer's machine) and only means to run "
+                             "the fixture arms")
     parser.add_argument("--check", action="store_true",
                         help="compare the matrix's recorded values and arithmetic with both trees")
     parser.add_argument("--fork", action="store_true",
@@ -1127,7 +1232,7 @@ def main(argv: list[str] | None = None) -> int:
                         help=f"this fork's tree, for --selftest (default: {REPO})")
     args = parser.parse_args(argv)
     if args.selftest:
-        return _selftest(args.root or STRATA, args.repo_root)
+        return _selftest(args.root or STRATA, args.repo_root, args.allow_missing_tree)
     if args.check:
         root = args.root or STRATA
         if not (root / GENERATE).is_file():
