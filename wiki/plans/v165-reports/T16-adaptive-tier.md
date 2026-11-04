@@ -203,11 +203,28 @@ are the subject of section 6.
    unresident resident, on 0.98-decayed counts) stops qualifying candidates after the first few
    hundred steps. The engine's own line agrees: 31.2-39.1 % hit over its last 128 steps, the same
    band as the control's 28.5 % pooled.
+
+   > **Superseded (2026-11-04, T31 §2/§7.1).** This item is the *pinned* campaign's reading and is
+   > kept as history. In the second round of t29 both "the policy is the cap" and "the count settles"
+   > were contradicted: with the pin budget unset and 16 spares,
+   > `t29-C1-pin-unset-20261103-221302` promoted **8 669** times by step 3 584 = **2.42/step**, a
+   > **12× realized promotion rate** over this campaign's 0.201/step (the 6/step `PROMOTE_BUDGET` was
+   > never the binding constraint in either arm), and pooled coverage went 31.7 → 72.3 %. What survives
+   > from this item is the hook's cost and the shape — the promote path shuffles each layer's own
+   > spares, Strata re-ranks one global pool — not the plateau.
+
 3. **Every spare is a hole in the tier.** At load the GPU slice is `first` slots with the spares'
    experts living in worker slots, so 4 spares cost 3 % of the tier and 16 cost 12 % *before any
    promotion happens*. Coverage fell monotonically with the spare count (28.5 → 27.7 → 25.4 %):
    the mechanism buys adaptability by giving away capacity, and on this workload the adaptability
    converts nothing.
+
+   > **Superseded (2026-11-04, T31 §7.1).** Same pinned campaign, same caveat: the coverage column here
+   > came from the instrument whose placement mirror is built once and never refreshed (section 10), so
+   > the 28.5 → 27.7 → 25.4 % ordering is not usable as evidence about the spare count. The accounting
+   > point — a spare is a slot the resident tier does not have — stands; "the adaptability converts
+   > nothing" does not: on the fixed instrument the second-round t29 arms read 72.3 % pooled with
+   > promotion against 31.7 % without, in one interleaved session.
 4. **The hook is not free**: 1.03 to 1.06 ms/step measured by the engine (the per-step pinned snapshot
    plus the numpy ranking over 48 x 512 counts). At ~28 ms/step that is ~4 % of decode, which is
    the size of B's and C's decode deltas.
@@ -277,6 +294,17 @@ route that needed it, and in a ladder whose prompt changes every 256 tokens that
 the one that will not be routed again. The next candidate in this family is not a bigger pool or a
 faster budget: it is a *ranking* that is right about the next thousand tokens rather than the last
 one — which is what the twin's `--adapt-forecast` tried, and lost 20.2 % there.
+
+> **Superseded as a verdict (2026-11-04, T31 §2 and §7.1 — kept as the campaign's own closing).** This
+> conclusion was drawn on the pinned arms and a frozen coverage column. The second-round t29 arms,
+> interleaved in one session on the fixed instrument, put promote-on-miss at **72.3 % pooled coverage
+> against 31.7 % for the pin-off control (+40.59 points)**, with decode still a null (+1.13 % TG inside
+> a 4.60 % repeat spread) — so "fails both" is wrong on the coverage half and holds only for tok/s. The
+> promote path's *source* is also not the divergence it was read as here: both measured arms are
+> promote-on-miss DMA out of the pinned arena (`moe_cpu_host.py:1884-1918`), and only the legacy sweep
+> re-reads the checkpoint. What this paragraph still contributes is the *ranking* argument — a policy
+> that reacts one step after the route — which the t29 rate (2.42 promotions/step against Strata's
+> 15.1 adaptations/round) leaves open. T31 is the current reading; this report is the campaign record.
 
 ## 8. End state of the box
 
@@ -395,8 +423,10 @@ the same venv, at this branch's HEAD, reports **119 passed, 63 skipped** — the
 3. **`EXL3_MOE_STREAM_MIN_ROWS=2` on top of arm D** — the research's M3 (decode-size PCIe split of
    misses), reachable as an env delta with no code.
 4. **Move the budget, not the pin**: D at `-CacheSize 32768 -MaxLength 32768` (plus the `-Split` and
-   `size_check.py` that follow) to buy the research's M1 (+10-13 experts/layer), reading coverage
-   with the fixed instrument and comparing pp at 4096/32768 rather than tg at 130816.
+   `size_check.py` that follow) to buy the research's M1 (**+23–27 experts/layer**, not the +10–13 the
+   research note divided by the wrong per-expert size — T31 §1 has the corrected arithmetic: 2.11 or
+   2.47 GB freed at 1.91 MB per expert is 1106 or 1291 slots, i.e. 131 → 154..158 of 512), reading
+   coverage with the fixed instrument and comparing pp at 4096/32768 rather than tg at 130816.
 5. **A/D/A/D interleaved, one with `EXL3_MOE_TIER_STATS=0`** — the same-session reference `AGENTS.md`
    requires, which also prices the instrument (the decode deltas in section 7 are all inside the
    noise floor without it).
