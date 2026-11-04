@@ -1,5 +1,14 @@
 # T31 — Strata → exllamav3 transfer: the matrix, and its verdicts machine-checked
 
+> **Update 2026-11-04 — two rows now have a measurement instead of a gap.** The campaigns this report
+> cites (`t27`, `t29`) measured decode once per cell; `T32-decode-pin.md` remeasured with three reps
+> and separated the two halves of the mechanism. The result: the **byte source** row stands (M2's
+> transfer source is faithful, RAM → VRAM from the arena), but the **churn** half of M2 is measured
+> dead — promotions add +0.08 % mean decode over eleven contexts and cost 2.2 % of prefill — so the
+> feature is not deployed. M1's budget lever (free KV to buy expert slots) remains unmeasured and the
+> pinned arena achieved the same end from the other side: `T33-capped-pin.md` shows 24 GiB of pinned
+> arena is worth +17–24 % decode at the production context. M3/M4/M5/M7 are unchanged.
+
 Written 2026-11-03/04 on `feat/adaptive-tier` (base `165-win-perf`). **No GPU and no measurement pass
 was started for this report:** every performance number below was already measured, and what is new
 here is the comparison — the one thing executed was `bench/size_check.py`, which reads the

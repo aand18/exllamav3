@@ -673,6 +673,14 @@ promotable should leave it unset.
 
 ### `EXL3_MOE_CPU_PROMOTE` (default: `4`)
 
+> **Not deployed (2026-11-04).** `T32-decode-pin.md` measured this mechanism against the pinned arena
+> alone over eleven decode contexts: **+0.08 % mean decode**, −2.2 % prefill, +8 s wall clock, with
+> its per-step hook at 2.311 ms/step — the coverage it buys does not reach the tokens. The shipped
+> launcher (`artifacts/deployed/start_tuned.ps1`) sets `EXL3_MOE_PINNED_ARENA=1` with a 24 GiB budget
+> (`T33`) and leaves this knob unset, i.e. the periodic sweep path. The code and the knobs stay for the
+> record, and because `bench/strata_transfer_check.py --check` and the transfer review bind to their
+> symbols.
+
 Spare GPU expert slots per layer for promote-on-miss in `--moe_cpu_split` mode with the pinned
 arena (`EXL3_MOE_PINNED_ARENA=1`); `0` keeps the periodic swap sweep instead. Each decode step, a
 routed expert the CPU worker had to compute is copied from the arena into a free spare slot on a
