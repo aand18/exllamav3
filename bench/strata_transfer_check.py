@@ -49,8 +49,9 @@ review actually moves numbers FROM:
 * ``cache_mode`` / ``cache_size`` / ``split`` - the served regime, read from
   ``bench/windows/state.json``: the KV cache's quantisation (the fork spells it ``cache_quant``; Q2 is
   ``"2,2"``, not ``Q2``), its size in tokens, and the ``-mcs`` / ``--moe_cpu_split`` tail-expert count
-  ``run_pass.ps1`` passes (``bench/windows/run_pass.ps1:234``). ``512 - split`` is the number of
-  experts per layer that run on the CPU, which a report should derive rather than copy.
+  ``run_pass.ps1`` emits as ``-mcs "$Split"`` (``bench/windows/run_pass.ps1:246``). ``split`` IS the
+  CPU tail, so ``512 - split`` is the number of experts per layer that stay on the GPU - a number a
+  report should derive rather than copy.
 
 Conventions: floats are read as written (``0.7f`` -> ``0.7``), not as their float32 value, because a
 review compares defaults as authored. A default whose text will not cast to the knob's type - an int
@@ -402,20 +403,19 @@ MOE_LAYERS = 48
 #: extractors and every derived number against its own recomputation, so a constant that drifts in
 #: either engine - or a division that no longer adds up - fails loudly instead of reading plausibly.
 #:
-#: Two regime values are recorded twice on purpose (M1, M7). This worktree's
-#: ``bench/windows/state.json`` says ``split 376, cache_size 131072, cache_quant "2,2"``; the arms in
-#: ``results/passes.csv`` ran ``-mcs 381 -cs 262144 -cq 4,4`` (the deployed ``_agent/v165`` copy of
-#: the same file). Both are stated, and M1's "131 of 512 experts per layer" is derived from the
-#: MEASURED 381 and labelled as such - 376 would give 136.
+#: Two rows read the regime file's three constants (M1, M7), so they are recorded twice on purpose:
+#: a drift in ``bench/windows/state.json`` then fails both. That file describes PRODUCTION - ``split
+#: 381, cache_size 262144, cache_quant "4,4"``, verified on the box 2026-11-02 per its own
+#: ``_comment`` - and the t27/t29 arms in ``results/passes.csv`` ran exactly that regime
+#: (``-mcs 381 -cs 262144 -cq 4,4``), which is why M1's residency is derived from this one value:
+#: the CPU tail is 381, so 131 experts per layer stay on the GPU.
 MATRIX: list[dict] = [
     {
         "id": "M1-budget",
         "strata": {"kv_resident_tokens": 0, "prefill_chunk": 0},
-        "fork": {"cache_size": 131072, "cache_mode": "2,2", "split": 376},
+        "fork": {"cache_size": 262144, "cache_mode": "4,4", "split": 381},
         "derived": {
-            "split_measured": 381,              # results/passes.csv, t27-*/t29-* args: -mcs 381
-            "experts_per_layer_repo": 136,      # 512 - 376, this worktree's state.json
-            "experts_per_layer_measured": 131,  # 512 - 381, the regime the arms ran
+            "experts_per_layer_repo": 131,      # 512 - 381: the CPU tail is 381, so 131 stay on the GPU
             "strata_slots": 8301,               # log: "expert cache 8301 slots, 15.74 GiB"
             "strata_experts_per_layer": 173,    # 8301 / 48
             "experts_short": 42,                # 173 - 131
@@ -448,8 +448,8 @@ MATRIX: list[dict] = [
         "verdict": "absent",
         "justification": (
             "the fork's 131 experts/layer is a static prefix of one uniform per-layer budget at the "
-            "measured split 381 (the split is the CPU tail count, model_init.py:68, so 512 - 381 is "
-            "what stays on the GPU; this worktree's state.json says 376, i.e. 136 on the GPU); "
+            "served split 381 (the split is the CPU tail count, model_init.py:68, and the CPU tail is "
+            "381, so 131 experts per layer stay on the GPU); "
             "Strata's 173/layer is 8301 global slots over 48 layers (15.74 GiB) that follow routing. "
             "Three levers would move the fork: cache_size 262144 -> 32768/65536, memory.sysmem_kv_cache "
             "~1800 MB, then cpu_moe_split_experts below 381. The KV bytes, from the checkpoint's "
@@ -633,9 +633,9 @@ MATRIX: list[dict] = [
     {
         "id": "M7-deploy",
         "strata": {},
-        "fork": {"cache_size": 131072, "cache_mode": "2,2", "split": 376},
+        "fork": {"cache_size": 262144, "cache_mode": "4,4", "split": 381},
         "derived": {
-            "kv_vram_tokens_measured": 262144,   # the deployed regime: -cs 262144, -cq 4,4
+            "kv_vram_tokens_measured": 262144,   # the served regime: -cs 262144, -cq 4,4
             "kv_resident_tokens_strata": 32768,  # start-logged.ps1:54, --kv-resident 32768
             "kv_ratio": 8,                       # 262144 / 32768
             "batch_fork": 2,                     # tabbyAPI/config.yml:217, max_batch_size
@@ -662,8 +662,8 @@ MATRIX: list[dict] = [
             "--slots) with 32768 of 262144 KV cells resident "
             "(/home/dev/UnbiasedStrata/start-logged.ps1:54); the fork's deployed regime serves "
             "max_batch_size 2 (tabbyAPI/config.yml:217, outside this tree) with the whole cache in "
-            "VRAM (sysmem_kv_cache 0, config.yml:441) - 262144 cells at the measured regime and "
-            "131072 in this worktree's state.json. Per token per layer the two engines agree on the "
+            "VRAM (sysmem_kv_cache 0, config.yml:441) - 262144 cells at \"4,4\", the regime "
+            "bench/windows/state.json records. Per token per layer the two engines agree on the "
             "K/V: 576 B (2 heads x 256 dims at 4 bits + fp16 scales) = 6912 B/token over 12 layers, "
             "1.81 GB at 262144 cells, which is exactly the log's \"K/V in 1.69 GiB of pinned RAM\" "
             "(/mnt/c/Users/yoho/Downloads/UnbiasedStrata/logs/server-20261029-172352.err.log:378). "
@@ -694,24 +694,25 @@ def _derived(row: dict) -> list[tuple[str, object]]:
     """
     rid, d = row["id"], row.get("derived") or {}
     if rid == "M1-budget":
-        measured = EXPERTS_PER_LAYER - d["split_measured"]
+        # The CPU tail is the split, so what stays on the GPU is 512 - split; there is one regime in
+        # the tree, so the recorded split is the only input this needs.
+        resident = EXPERTS_PER_LAYER - row["fork"]["split"]
         per_layer = round(d["strata_slots"] / MOE_LAYERS)
         # The lever's arithmetic, recomputed in bytes: the KV per token, then the freed bytes at each
         # target cache size converted to expert slots at the expert's own size.
         kv_per_token = d["kv_bytes_per_token_layer"] * d["kv_layers"]
         expert_bytes = round(d["expert_mb"] * 1e6)
         out = [
-            ("experts_per_layer_repo", EXPERTS_PER_LAYER - row["fork"]["split"]),
-            ("experts_per_layer_measured", measured),
+            ("experts_per_layer_repo", resident),
             ("strata_experts_per_layer", per_layer),
-            ("experts_short", per_layer - measured),
+            ("experts_short", per_layer - resident),
             ("trunk_gib", round(d["trunk_mib"] / 1024, 1)),
         ]
         for label in ("65536", "32768"):
             freed = (d["kv_cells_measured"] - d[f"kv_cells_{label}"]) * kv_per_token
             slots = freed // expert_bytes
             gain = round(slots / MOE_LAYERS)
-            after = measured + gain
+            after = resident + gain
             out += [
                 (f"freed_gb_{label}", round(freed / 1e9, 2)),
                 (f"slots_{label}", slots),
@@ -1102,12 +1103,12 @@ def _selftest(root: pathlib.Path = STRATA, repo: pathlib.Path = REPO,
         expect("real_fork.sweep_max", real["sweep_max"], 64)
         expect("real_fork.sweep_source", real["sweep_source"], "checkpoint")
         expect("real_fork.stream_min_rows", real["stream_min_rows"], 32)
-        expect("real_fork.cache_mode", real["cache_mode"], "2,2")
-        expect("real_fork.cache_size", real["cache_size"], 131072)
-        # The regime's split, not the review plan's: the plan says 381, state.json says 376 and its
-        # own history records the 400 -> 376 re-founding.  512 - split also moves with it (136, not
-        # 131), so a report must derive that number from this one rather than copy the plan.
-        expect("real_fork.split", real["split"], 376)
+        expect("real_fork.cache_mode", real["cache_mode"], "4,4")
+        expect("real_fork.cache_size", real["cache_size"], 262144)
+        # The regime's split, read from the regime file: state.json describes production (381, the CPU
+        # tail), and its own _comment records the 2026-11-02 verification.  512 - split is the
+        # residency (131), so a report must derive that number from this one rather than copy a plan.
+        expect("real_fork.split", real["split"], 381)
         fork_text = {rel: _lines(repo / rel) for rel in (CPU_MLP, MOE_HOST, STATE)}
         # Written out here rather than imported from _CPU_ENV: the point is an INDEPENDENT statement
         # of which knob each line must name, so a renamed table entry is visible instead of agreeing
