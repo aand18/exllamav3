@@ -690,17 +690,26 @@ promotable should leave it unset.
 > symbols.
 
 Spare GPU expert slots per layer for promote-on-miss in `--moe_cpu_split` mode with the pinned
-arena (`EXL3_MOE_PINNED_ARENA=1`); `0` keeps the periodic swap sweep instead. Each decode step, a
+arena (`EXL3_MOE_PINNED_ARENA=1`); `0` keeps the periodic swap sweep instead. Each placement pass, a
 routed expert the CPU worker had to compute is copied from the arena into a free spare slot on a
 side stream, and once the copy has landed the placement map sends later routes to the GPU; the
 least-used resident that was not routed goes the other way into the worker slot the promotion
 freed, so the resident set follows the conversation token by token instead of once per sweep, and
 no transfer reads the checkpoint or stops the worker. Needs the pinned arena because the parent
 process DMAs the expert bytes straight between the GPU slots and the worker's memory. Up to
-`EXL3_MOE_CPU_PROMOTE_BUDGET` promotions per step over all layers and as many demotions; the
+`EXL3_MOE_CPU_PROMOTE_BUDGET` promotions per placement pass over all layers and as many demotions; the
 spares' own experts start in the worker. `EXL3_MOE_CPU_SWAP_DEBUG=1` prints the transfer counts,
 the hit rate and the step's bookkeeping cost every 128 steps, and `EXL3_MOE_TIER_STATS` reports the
 same coverage per generation.
+
+Two corrections (2026-11-04, `2026-11-04-decode-to-strata.md` task 1). A routing adds 1 to an
+expert's count while the decay takes `(1 - decay) * count` of it, so from count 50 up at the shipped
+0.98 the snapshot of an expert that *was* routed no longer exceeds its previous count: comparing the
+two directly (`cur > prev`) read every hot CPU expert as unrouted, and the hotter the expert the more
+certainly the policy was blind to the promotion that would have paid. The comparison now undoes the
+decay first (`cur - prev * decay > 0.5`), which recovers a pass's hits at any count magnitude. Second,
+a prefill-size batch routes the *prompt* into the same histograms, so a prefill now zeroes them and
+drops the comparison window instead of letting the first decode steps rank experts by prompt routing.
 
 Only experts whose arena chunk is page-locked can be promoted (`MoeCpuHost.promote_ready`): where
 the driver runs out of pinned memory, or where `EXL3_MOE_PINNED_ARENA_GIB` caps it, the experts
@@ -712,7 +721,8 @@ stranded) so a total miss cannot read as an ordinary line.
 
 ### `EXL3_MOE_CPU_PROMOTE_BUDGET` (default: `6`)
 
-Promotions issued per decode step over *all* split layers, and as many demotions. Each one moves an
+Promotions issued per placement pass over *all* split layers, and as many demotions (one pass per
+decode step unless `EXL3_MOE_CPU_PROMOTE_EVERY` says otherwise). Each one moves an
 expert's trellis block (~1.95 MB at 3.18 bpw on Qwen3.8-Flash-Next) over PCIe on the promotion
 stream — about 73 us pinned at 26.8 GB/s — and each avoided host expert is worth about 41 us of
 worker time on this box, so one promotion pays for itself after roughly two reuses. Raise it in
@@ -722,10 +732,22 @@ the transfers become the cost.
 ### `EXL3_MOE_CPU_PROMOTE_RATIO` (default: `1.5`) / `EXL3_MOE_CPU_PROMOTE_DECAY` (default: `0.98`)
 
 A miss is promoted when its decayed selection count is this many times the count of the least-used
-unrouted resident it would displace, and the per-layer counts are multiplied by the decay each
-step. Together they set how fast the resident set follows a change of subject: a higher ratio (or
-a slower decay) keeps the tier steadier, a lower ratio churns it. The sweep path has its own pair
-in `EXL3_MOE_CPU_SWAP_HYST` / `EXL3_MOE_CPU_SWAP_FLOOR`.
+unrouted resident it would displace, and the per-layer counts are multiplied by the decay once per
+placement pass. Together they set how fast the resident set follows a change of subject: a higher
+ratio (or a slower decay) keeps the tier steadier, a lower ratio churns it. The sweep path has its own
+pair in `EXL3_MOE_CPU_SWAP_HYST` / `EXL3_MOE_CPU_SWAP_FLOOR`.
+
+### `EXL3_MOE_CPU_PROMOTE_EVERY` (default: `1`)
+
+Decode steps between placement passes. The default decides — and issues its transfers — once per
+step, which is what the fork shipped; `4` decides once every four steps and multiplies the counts by
+`EXL3_MOE_CPU_PROMOTE_DECAY ** 4` on that pass, so the history's half-life stays measured in steps and
+the resident set still follows the conversation on the same clock. This is the fork's counterpart to
+Strata's `adapt_every`: pair it with `EXL3_MOE_CPU_PROMOTE_BUDGET` (per pass) for `adapt_swaps`, and
+with `EXL3_MOE_CPU_PROMOTE_DECAY` (`0.7` there) for `adapt_decay`. The tier statistics correct a
+pass's change in the counts by the same decay (`_promote_cadence`), so coverage stays a number about
+the policy rather than about the cadence. A prefill-size batch is never a pass: it zeroes the counts
+instead (see `EXL3_MOE_CPU_PROMOTE` above).
 
 ### `EXL3_MOE_TIER_STATS` (default: `0`)
 

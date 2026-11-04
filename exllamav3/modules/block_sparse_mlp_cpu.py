@@ -171,6 +171,18 @@ _TIER_STATS = int(os.environ.get("EXL3_MOE_TIER_STATS", 0) or 0)
 _TIER_STATS_EVERY = max(1, int(os.environ.get("EXL3_MOE_TIER_STATS_EVERY", 128)))
 
 
+def _promote_cadence():
+    """(decode steps per placement pass, the decay one pass applies), from
+    EXL3_MOE_CPU_PROMOTE_EVERY (int, default 1) and EXL3_MOE_CPU_PROMOTE_DECAY (float, default
+    _PROMOTE_DECAY). A pass every N steps decays by N steps' worth, so the history's half-life stays
+    measured in steps rather than in passes: that is what lets a cadence like Strata's
+    adapt-every-N-rounds be a delta here instead of a fork. Read per step rather than at import, so an
+    arm can set it without reloading the module; the two other env reads in _split_promote_step do
+    the same."""
+    every = max(1, int(os.environ.get("EXL3_MOE_CPU_PROMOTE_EVERY", 1) or 1))
+    return every, float(os.environ.get("EXL3_MOE_CPU_PROMOTE_DECAY", _PROMOTE_DECAY)) ** every
+
+
 class _PromoteState:
     """Promote-on-miss bookkeeping over every split module with spares, as [modules, experts] host
     tensors so one step is a few vector ops: the hit-count snapshots (pinned, one device-to-host copy
@@ -200,21 +212,70 @@ class _PromoteState:
             m._split_snap = None          # the per-module snapshot is superseded by the shared one
 
 
+def _routed_mask(cur, prev, decay):
+    """Which experts were routed between snapshot `prev` and snapshot `cur`.
+
+    A routing adds 1 to a count, and the policy's decay removes (1 - decay) * count of it, so the
+    snapshot of a routed expert *falls* once its count exceeds 1 / (1 - decay) -- 50 at 0.98. Compared
+    against the raw previous count, `cur > prev`, every one of those experts reads as unrouted: the
+    hottest CPU experts were the ones the policy could not see. Undoing the decay first recovers the
+    pass's hits at any count magnitude, and 0.5 admits a hit over float noise."""
+    return (cur - prev * decay) > 0.5
+
+
+def _promote_reset(ps):
+    """Forget every route count the placement policy has accumulated: the per-module histograms, the
+    snapshots in flight and the counts they were compared against. A prefill-size batch routes the
+    prompt into the same histograms the placement policy reads, and prompt routing says nothing about
+    which experts decode needs; left alone it ranks the first decode steps by the prompt. The next
+    decode step re-arms the comparison window instead of promoting on it."""
+    for m in ps.modules:
+        m._split_hist.zero_()
+    ps.snap_ev.clear()
+    ps.prev = None
+
+
+def _promote_snapshot(ps, decay):
+    """(3) The previous pass's hit counts land in pinned memory, and this pass's snapshots go out.
+    Returns the mask of experts routed since `ps.prev` was taken, or None when there is nothing to
+    compare against yet (the first pass after a load, or the first one after a reset)."""
+    have = bool(ps.snap_ev)
+    for ev in ps.snap_ev.values():
+        ev.synchronize()
+    routed = None
+    if have:
+        cur = ps.snap_np.copy()
+        if ps.prev is not None:
+            routed = _routed_mask(cur, ps.prev, decay)
+        ps.prev = cur
+    for i, m in enumerate(ps.modules):
+        dev = torch.device(m.device)
+        with torch.cuda.device(dev):
+            ps.snap[i, :m.num_experts].copy_(m._split_hist, non_blocking = True)
+    for d in ps.devices:
+        ev = torch.cuda.Event()
+        ev.record(torch.cuda.current_stream(d))
+        ps.snap_ev[d] = ev
+    return routed
+
+
 def _split_promote_step(ip, modules, rows):
     """One decode step of promote-on-miss for every split module (called from the first module's
     submit, before any layer's selection translate of this step).
 
     (1) Transfers that landed take effect in the map, on the compute stream ahead of this step's
     translate kernels; the slot they vacated is free from this step on, since nothing maps to it any
-    more. (2) The previous step's hit counts (snapshotted to pinned memory) name the routed experts;
-    those the worker computed are the misses. (3) The misses, ranked by count over all layers, take
-    free GPU slots of their layer when their count clears the layer's least-used unrouted resident's
-    by _PROMOTE_RATIO, up to _PROMOTE_BUDGET per step: the block is copied from the arena on the
-    promotion stream, ordered after everything the compute stream had enqueued (the slot's last
-    reader was a previous step). (4) The worker slots promotions freed take the least-used unrouted
-    residents, copied out on the promotion stream; the map flips once the copy has landed. Every
-    transfer leaves the expert live where it was until its copy is complete, so a route always finds
-    valid weights. Nothing is issued on a prefill-size step (its stager reads worker slots)."""
+    more. (2) A prefill-size batch routes the prompt rather than the conversation: its counts are
+    dropped and nothing is issued (its stager reads worker slots). (3) The previous pass's hit counts
+    (snapshotted to pinned memory) name the routed experts; those the worker computed are the misses.
+    (4) The misses, ranked by count over all layers, take free GPU slots of their layer when their
+    count clears the layer's least-used unrouted resident's by _PROMOTE_RATIO, up to _PROMOTE_BUDGET
+    per pass: the block is copied from the arena on the promotion stream, ordered after everything the
+    compute stream had enqueued (the slot's last reader was a previous step). (5) The worker slots
+    promotions freed take the least-used unrouted residents, copied out on the promotion stream; the
+    map flips once the copy has landed. Every transfer leaves the expert live where it was until its
+    copy is complete, so a route always finds valid weights. The pass itself runs every
+    EXL3_MOE_CPU_PROMOTE_EVERY steps (see _promote_cadence)."""
     import time
     t0 = time.perf_counter()
     ps = getattr(ip, "moe_cpu_promote_state", None)
@@ -222,6 +283,7 @@ def _split_promote_step(ip, modules, rows):
         ps = ip.moe_cpu_promote_state = _PromoteState(modules)
     verify = os.environ.get("EXL3_MOE_CPU_PROMOTE_VERIFY")
     debug = os.environ.get("EXL3_MOE_CPU_SWAP_DEBUG")
+    every, decay = _promote_cadence()
     # (1) landed transfers
     for i, m in enumerate(ps.modules):
         if not m._split_pending:
@@ -252,25 +314,21 @@ def _split_promote_step(ip, modules, rows):
             dev = torch.device(m.device)
             with torch.cuda.device(dev):
                 m._split_map[torch.tensor(idx, device = dev)] = torch.tensor(val, device = dev)
-    # (2) last step's routes: the snapshots land, the next ones go out
-    have = bool(ps.snap_ev)
-    for ev in ps.snap_ev.values():
-        ev.synchronize()
-    if have:
-        cur = ps.snap_np.copy()
-        routed = cur > ps.prev
-        ps.prev = cur
-    for i, m in enumerate(ps.modules):
-        dev = torch.device(m.device)
-        with torch.cuda.device(dev):
-            ps.snap[i, :m.num_experts].copy_(m._split_hist, non_blocking = True)
-    for d in ps.devices:
-        ev = torch.cuda.Event()
-        ev.record(torch.cuda.current_stream(d))
-        ps.snap_ev[d] = ev
+    # (2) A prefill-size batch routes the prompt into the same histograms this policy reads, and
+    # prompt routing says nothing about which experts decode needs. Drop the counts and the comparison
+    # window, and issue nothing: the next decode step arms a fresh window rather than promoting on
+    # the prompt's routing
+    if rows >= modules[0].cpu_host.stream_min_rows:
+        _promote_reset(ps)
+        return
+    # The pass runs every `every` decode steps, decaying by `every` steps' worth on that pass
+    if modules[0]._split_step_count % every:
+        return
+    # (3) last pass's routes: the snapshots land, the next ones go out
+    routed = _promote_snapshot(ps, decay)
     hists = [m._split_hist for m in ps.modules]
-    torch._foreach_mul_(hists, _PROMOTE_DECAY)
-    if have and rows < ps.modules[0].cpu_host.stream_min_rows:
+    torch._foreach_mul_(hists, decay)
+    if routed is not None:
         import numpy as np
         resident = ps.mp < ps.first
         quiet = resident & ~routed & ~ps.busy                 # demotion candidates
@@ -280,7 +338,7 @@ def _split_promote_step(ip, modules, rows):
         if debug:
             ps.stats["routed"] += int(routed.sum())
             ps.stats["missed"] += int((routed & ~resident).sum())
-        # (3) promotions: the misses that clear the ratio, best counts first, one per layer per step
+        # (4) promotions: the misses that clear the ratio, best counts first, one per layer per pass
         ok = misses & (ps.prev >= _PROMOTE_RATIO * victim.reshape(-1, 1))
         if ok.any():
             score = np.where(ok, ps.prev, -1.0).reshape(-1)
@@ -305,7 +363,7 @@ def _split_promote_step(ip, modules, rows):
                 m._split_pending.append(dict(kind = "p", r = r, gpu = g, cpu = c, ev = ev))
                 ps.busy[i, r] = True
                 seen.add(i)
-        # (4) demotions into the worker slots promotions freed: the least-used unrouted residents
+        # (5) demotions into the worker slots promotions freed: the least-used unrouted residents
         for i, m in enumerate(ps.modules):
             k = len(m._split_free_cpu)
             if not k:
@@ -399,9 +457,11 @@ class _TierStats:
                 # point alone decides residency
                 slots = np.arange(m.num_experts, dtype = np.int64)
             self.mp[i, :m.num_experts] = slots
-        # The decay the placement policy applies to the counts between two snapshots, and the two
-        # masks the sums are split over: live experts, and those the map sends to the worker
-        self.decay = _PROMOTE_DECAY if (self.modules and getattr(self.modules[0], "_split_spares", 0)) else 1.0
+        # The decay the placement policy applies to the counts between two snapshots -- a pass every N
+        # steps decays by N steps' worth, so the instrument must undo the same amount or it scores the
+        # steps a pass never decayed as routed -- and the two masks the sums are split over: live
+        # experts, and those the map sends to the worker
+        self.decay = _promote_cadence()[1] if (self.modules and getattr(self.modules[0], "_split_spares", 0)) else 1.0
         self.worker = (self.mp < (1 << 30)) & ~(self.mp < self.first)
         try:
             self.snap = torch.zeros(self.shape, dtype = torch.float).pin_memory()
