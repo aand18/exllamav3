@@ -57,7 +57,14 @@ def test_a_checkpoint_with_no_experts_is_refused():
         assert main(["--model", d, "--mcs", "381", "--tail-bpw", "2.0"]) == 2
 
 
+def test_more_spares_than_the_gpu_slice_does_not_wrap_the_slice():
+    """first = 4 - 3 = 1 and spares = 2: the worker holds the whole layer, not one expert."""
+    plan = build_plan(_hdr(n=4), mcs=3, tail_bpw=2.0, source_bits=4.0, spares=2)
+    assert plan["layers"][0]["tail_experts"] == 4
+
+
 TESTS = [
+    test_more_spares_than_the_gpu_slice_does_not_wrap_the_slice,
     test_parse_expert_reads_layer_expert_projection_suffix,
     test_only_scales_are_exempt_from_the_rate,
     test_the_tail_is_the_experts_beyond_the_gpu_slice_and_scales_do_not_shrink,

@@ -108,13 +108,20 @@ def build_plan(headers: dict[str, dict], mcs: int, tail_bpw: float, source_bits:
 
     layers = {}
     total_now = total_then = 0
+    if profile:
+        first_layer = min(by_layer) if by_layer else None
+        if first_layer is not None and _profile_counts(first_layer, max(by_layer[first_layer]) + 1,
+                                                       profile) is None:
+            print("warning: --stats did not match any layer (expected the save_expert_stats shape "
+                  '{"layers": {"model.language_model.layers.N.mlp": counts}}); the tail is in '
+                  "index order, which is NOT the hot-first order the load path uses", file=sys.stderr)
     for layer in sorted(by_layer):
         experts = by_layer[layer]
         num = max(experts) + 1
         order = hot_first_order(layer, num, profile)
         first = num - mcs                      # the GPU keeps the first `first` of the order
         # with the pinned arena the worker also holds the `spares` experts the GPU slice gave up
-        tail = order[first - spares:] if spares else order[first:]
+        tail = order[max(0, first - spares):] if spares else order[first:]
         now = then = 0
         keys = []
         for e in tail:

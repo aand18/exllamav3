@@ -12,7 +12,7 @@ mount end to end without a GPU; a later quantizer swaps the payload for a re-enc
 everything else about this file alone.
 
     bench/tail_variant_write.py --plan plan.json --model /mnt/d/llms/... --out /mnt/d/llms/tailvariant
-    # then:  run_pass.ps1 -Extra "-or 'model.language_model.layers.*.mlp.experts.*=D:\\llms\\tailvariant'"
+    # then mount the YAML it writes:  -or D:\llms\tailvariant\override.yml
 
 Pure Python: the shard is copied as raw bytes, so no torch and no checkpoint load. Exit 2 when a
 planned tensor is missing from every shard (a plan that names tensors the checkpoint does not have
