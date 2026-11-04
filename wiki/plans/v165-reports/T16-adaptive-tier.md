@@ -1,5 +1,13 @@
 # T16 — the adaptive expert tier: a pin budget, a promote rate, and the coverage number
 
+> **Update 2026-11-04 — the decode question is answered, and it splits the two halves of this feature.**
+> `T32-decode-pin.md` and `T33-capped-pin.md` measured both halves with three decode reps per cell
+> (the campaigns below ran one): the **pinned arena** is worth **+17–24 % decode** at the production
+> context and **+16 % prefill**, while **promote-on-miss is worth nothing** (+0.08 % mean decode,
+> −2.2 % prefill) and is not deployed. The "no proven decode gain" readings in §7 and the transfer
+> review's M2/M4 rows describe the unpinned, instrumented campaigns and are superseded by those two
+> reports. The coverage numbers in §7 remain valid as coverage; they are not a speed claim.
+
 Written 2026-11-02 on `feat/adaptive-tier` (base `165-win-perf`), and **run on 2026-11-03**: the four
 arms in §7 are measured, the suite ran on the Windows venv (§9), a review doubled back over both (§10),
 and §6 records how the patch was installed. What this file was first written as — an unbuilt plan — is
