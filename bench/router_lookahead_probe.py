@@ -669,7 +669,8 @@ def run(args) -> int:
     is_recurrent = model.caps.get("recurrent_states", False)
     prefill_ids = prompt[:-1]
     past = len(prefill_ids)
-    batch_shape = (1, max(past + decode + 256, 256))
+    # the cache allocates in 256-token pages and asserts the shape is a whole number of them
+    batch_shape = (1, max(256, ((past + decode + 256 + 255) // 256) * 256))
 
     generated = []
     with torch.inference_mode():
