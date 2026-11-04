@@ -37,16 +37,18 @@ this branch unless the cell says otherwise.
 
 | mechanism | Strata (value, file:line) | fork (value, file:line) | verdict | justification (short; full text in the row's section) | measured |
 |---|---|---|---|---|---|
-| **M1-budget** — VRAM on the expert tier instead of KV/embedding | `kv_resident 0` (default; deployed run passes 32768) `src/program/generate.cpp:311`, `prefill_chunk 0` `:431`; 8301 slots = **173 experts/layer** of 15.74 GiB, Strata's `server log:390,395` | `cache_size 131072` `bench/windows/state.json:10`, `cache_quant "2,2"` `:11`, `split 376` `:7` — **measured regime: `-cs 262144 -cq 4,4 -mcs 381`** (`results/passes.csv`, t27/t29 `args`) ⇒ **131 of 512 experts/layer** | `absent` | three levers (cache_size, `sysmem_kv_cache`, split) are worth +23..27 experts/layer, i.e. 131 → 154..158 of 173; 80 % by residency needs ≈38 GB of expert weights on a 24 GiB card (§1) | `unmeasured` |
+| **M1-budget** — VRAM on the expert tier instead of KV/embedding | `kv_resident 0` (default; deployed run passes 32768) `src/program/generate.cpp:311`, `prefill_chunk 0` `:431`; 8301 slots = **173 experts/layer** of 15.74 GiB, Strata's `server log:390,395` | `cache_size 262144` `bench/windows/state.json:10`, `cache_quant "4,4"` `:11`, `split 381` `:7` ⇒ **131 of 512 experts/layer** (the split is the CPU tail, so 512 − 381 stay on the card) | `absent` | three levers (cache_size, `sysmem_kv_cache`, split) are worth +23..27 experts/layer, i.e. 131 → 154..158 of 173; 80 % by residency needs ≈38 GB of expert weights on a 24 GiB card (§1) | `unmeasured` |
 | **M2-churn** — the adaptive tier's cadence and source | `adapt_every 4` `generate.cpp:474`, `adapt_swaps 96` `:497`, `adapt_decay 0.7` `:475`, `slot_pool global` `:382` + `/home/dev/UnbiasedStrata/include/strata/core/expert_cache.hpp:221`, `swap_source ram-copy` `:4590` | `promote_budget 6` `block_sparse_mlp_cpu.py:161`, `ratio 1.5` `:162`, `decay 0.98` `:163`, `spares 4` `:1088`, `sweep_interval 128` `:1208`, `sweep_max 64` `:141`, `sweep_source checkpoint` `:1293` | `diverged` | 15.1 swaps/round (measured) against 0.20/step at the t27 operating point: **75×**, 31× per committed token — and the bytes come from RAM on both sides (the fork's promote path DMAs the pinned arena, `moe_cpu_host.py:1884-1918`; only the legacy sweep re-reads the checkpoint), so what diverges is the cadence and the pool, not the source (§2) | `t29-C1-pin-unset-20261103-221302` |
 | **M3-miss-split** — the miss is split CPU/DMA | `pcie_frac -1.0` = the model's own, nominal **0.55** for native packs before the startup probe scales it `generate.cpp:470`, `:2051-2063` (read by hand: not an extracted key) | `stream_min_rows 32` `model/moe_cpu_host.py:141`; second gate `stream_t 8` `:139` (by hand) | `absent` | a 5-row window (the pending token + the 4 drafts appended to it) is 6.4× below the gate and 1.6× below the per-expert gate; the arm that tests it is `EXL3_MOE_STREAM_MIN_ROWS=2` + `EXL3_MOE_STREAM_T=2` (§3) | `unmeasured` |
 | **M4-spec-yield** — what one verify pass buys | MTP ≤3 drafts + prompt lookup, cost-model chosen, `docs/upstream/DETAILS.md:1032-1035`; **2.5–3.5 tokens/window** `server log:425,444,453` | DFlash2 `num_draft_tokens 4`, `dynamic_draft` shortens only, `generator.py:1128-1146`; **2.2–2.4 tokens/window** from note 1 §2's live-log derivation, against **2.17–2.40 accepted drafts** = 3.17–3.40 tokens/round in `results/arms.csv` | `diverged` | a ceiling of 4 offered drafts in a 5-row window against a policy that picks a window per round; the fork is behind on note 1's reading and at parity or ahead on the harness's own column, so the size and the sign are unresolved (§4) | `unmeasured` |
 | **M5-ple** — the n-gram table read on the decode path | row cache 1M rows (≈90 MiB), up to ~82 % of reads **on a frozen corpus**, 20–34 % recurrence `include/strata/ngram/ple_reader.hpp:13-16`; issue/collect split `:5-11`; un-hidden gather 2.1–2.6 ms/token `generate.cpp:393-395` | no row cache: `ext.ngram_gather_cpu` per gather `modules/row_table.py:282-312`; `PREFETCH_MIN_TOKENS 256` `:27` declined at `ngram_embedding.py:334`; `advise()` is `posix_fadvise`, a no-op on Windows `row_table.py:208-215` | `absent` | three defences absent; 16 × 90 B = 1440 B/token is the byte scale, Strata's own un-hidden 2.1–2.6 ms/token the ceiling (§5) | `unmeasured` |
-| **M7-deploy** — deployment policy, not an engine property | one request at a time (`batch 0` `generate.cpp:456`; no `--slots`), `--kv-resident 32768` of 262144 `/home/dev/UnbiasedStrata/start-logged.ps1:54` | `max_batch_size 2` (`tabbyAPI/config.yml:217`, outside this tree), `sysmem_kv_cache 0` `:441`, whole cache in VRAM: `cache_size 131072` `bench/windows/state.json:10`, measured `262144` | `diverged` | 2.82 GB of KV + indexer planes in VRAM against Strata's 0.23 GB resident (8× the cells, 2.59 GB of bytes); the one overlapping pair ran 49.8 T/s on the long stream and 8.1 on the short one against 50.5–61.3 T/s single (§6) | `unmeasured` |
+| **M7-deploy** — deployment policy, not an engine property | one request at a time (`batch 0` `generate.cpp:456`; no `--slots`), `--kv-resident 32768` of 262144 `/home/dev/UnbiasedStrata/start-logged.ps1:54` | `max_batch_size 2` (`tabbyAPI/config.yml:217`, outside this tree), `sysmem_kv_cache 0` `:441`, whole cache in VRAM: `cache_size 262144` `bench/windows/state.json:10` | `diverged` | 2.82 GB of KV + indexer planes in VRAM against Strata's 0.23 GB resident (8× the cells, 2.59 GB of bytes); the one overlapping pair ran 49.8 T/s on the long stream and 8.1 on the short one against 50.5–61.3 T/s single (§6) | `unmeasured` |
 
-Two regime values are recorded twice on purpose (M1, M7): this worktree's `state.json` and the
-deployment's disagree (376/131072/"2,2" against 381/262144/"4,4"), so both are stated and M1's
-"131 of 512" is derived from the **measured** 381 and labelled as such. §9 works the disagreement out.
+M1 and M7 read the same three regime constants, so they are recorded twice on purpose: a drift in
+`bench/windows/state.json` fails both. That file describes **production** — `split 381`,
+`cache_size 262144`, `cache_quant "4,4"`, verified on the box 2026-11-02 per its own `_comment` — and
+the t27/t29 arms in `results/passes.csv` ran exactly that regime (`-mcs 381 -cs 262144 -cq 4,4`), which
+is why the matrix cites them: one value serves both, and M1's "131 of 512" is 512 − 381 (§9).
 
 The `measured` column is what `MATRIX` records and therefore what `--check` prints, unchanged — the
 five `unmeasured` cells are the checker's verdict, not an omission, and §7 cashes each one: the run
@@ -56,12 +58,12 @@ half of it.
 `--check` on this tree prints, one line per row:
 
 ```
-PASS M1-budget: 20 comparison(s) - strata.kv_resident_tokens=0 (src/program/generate.cpp:311), strata.prefill_chunk=0 (src/program/generate.cpp:431), fork.cache_size=131072 (bench/windows/state.json:10) +2 more; derived experts_per_layer_repo=136, experts_per_layer_measured=131, strata_experts_per_layer=173, experts_short=42, trunk_gib=17.1, freed_gb_65536=2.11, slots_65536=1106, gain_65536=23, experts_after_65536=154, short_65536=19, freed_gb_32768=2.47, slots_32768=1291, gain_32768=27, experts_after_32768=158, short_32768=15; absent, measured unmeasured
+PASS M1-budget: 19 comparison(s) - strata.kv_resident_tokens=0 (src/program/generate.cpp:311), strata.prefill_chunk=0 (src/program/generate.cpp:431), fork.cache_size=262144 (bench/windows/state.json:10) +2 more; derived experts_per_layer_repo=131, strata_experts_per_layer=173, experts_short=42, trunk_gib=17.1, freed_gb_65536=2.11, slots_65536=1106, gain_65536=23, experts_after_65536=154, short_65536=19, freed_gb_32768=2.47, slots_32768=1291, gain_32768=27, experts_after_32768=158, short_32768=15; absent, measured unmeasured
 PASS M2-churn: 19 comparison(s) - strata.adapt_every=4 (src/program/generate.cpp:474), strata.adapt_swaps=96 (src/program/generate.cpp:497), strata.adapt_decay=0.7 (src/program/generate.cpp:475) +9 more; derived swaps_per_round_cap=24, swaps_per_round_measured=15.1, sweep_swaps_per_step=0.5, promotions_per_step_t27=0.201, churn_ratio=75, promotions_per_step_t29=2.42, promotion_raise_ratio=12; diverged, measured t29-C1-pin-unset-20261103-221302
 PASS M3-miss-split: 3 comparison(s) - fork.stream_min_rows=32 (exllamav3/model/moe_cpu_host.py:141); derived rows_short=27, gate_factor=6.4; absent, measured unmeasured
 PASS M4-spec-yield: 3 comparison(s) - no extracted constant on either side (see justification); derived tokens_per_round_low=3.17, tokens_per_round_high=3.4, unused_draft_rows=1.6; diverged, measured unmeasured
 PASS M5-ple: 2 comparison(s) - no extracted constant on either side (see justification); derived bytes_per_token=1440, cache_mib=90; absent, measured unmeasured
-PASS M7-deploy: 10 comparison(s) - fork.cache_size=131072 (bench/windows/state.json:10), fork.cache_mode='2,2' (bench/windows/state.json:11), fork.split=376 (bench/windows/state.json:7); derived kv_ratio=8, batch_delta=2, fork_kv_gb=2.82, strata_kv_whole_gb=1.81, strata_kv_whole_gib=1.69, strata_kv_resident_gb=0.23, kv_vram_delta_gb=2.59; diverged, measured unmeasured
+PASS M7-deploy: 10 comparison(s) - fork.cache_size=262144 (bench/windows/state.json:10), fork.cache_mode='4,4' (bench/windows/state.json:11), fork.split=381 (bench/windows/state.json:7); derived kv_ratio=8, batch_delta=2, fork_kv_gb=2.82, strata_kv_whole_gb=1.81, strata_kv_whole_gib=1.69, strata_kv_resident_gb=0.23, kv_vram_delta_gb=2.59; diverged, measured unmeasured
 6/6 rows PASS
 ```
 
@@ -69,9 +71,9 @@ PASS M7-deploy: 10 comparison(s) - fork.cache_size=131072 (bench/windows/state.j
 
 **`MATRIX["M1-budget"]["justification"]`** (reflowed for the page; typography and spacing normalised —
 `—`, `×`, `≈`, `≤`, `§`; the code is authoritative): the fork's 131 experts/layer is a static prefix of
-one uniform per-layer budget at the measured split 381 (the split is the CPU tail count,
-`model_init.py:68`, so 512 − 381 is what stays on the GPU; this worktree's `state.json` says 376, i.e.
-136 on the GPU); Strata's 173/layer is 8301 global slots over 48 layers (15.74 GiB)
+one uniform per-layer budget at the served split 381 (the split is the CPU tail count,
+`model_init.py:68`, and the CPU tail is 381, so 131 experts per layer stay on the GPU); Strata's
+173/layer is 8301 global slots over 48 layers (15.74 GiB)
 that follow routing. Three levers would move the fork: `cache_size` 262144 → 32768/65536,
 `memory.sysmem_kv_cache` ~1800 MB, then `cpu_moe_split_experts` below 381. The KV bytes, from the
 checkpoint's config and the engine's cache shapes: 2 KV heads × 256 head_dim = 512 values/token/layer,
@@ -92,8 +94,7 @@ The arithmetic, spelled out:
 
 | step | number | source |
 |---|---|---|
-| experts per layer **on the GPU** at the measured regime (the CPU tail keeps 381) | 512 − 381 = **131** | `results/passes.csv`, t27/t29 `args` (`-mcs 381`) |
-| … **on the GPU** at this worktree's regime (CPU tail 376) | 512 − 376 = **136** | `bench/windows/state.json:7` |
+| experts per layer **on the GPU** at the served regime (the CPU tail keeps 381) | 512 − 381 = **131** | `bench/windows/state.json:7`, and every t27/t29 `args` (`-mcs 381`) in `results/passes.csv` |
 | expert bytes per expert | ≈1.91 MB (47.03 GB / 512 / 48) | note 1 §M1, from `quantization_config.json` |
 | the fork's experts on the card | 131 × 48 × 1.91 MB = **12.0 GB** | derived |
 | Strata's expert tier | 8301 slots / 48 layers = **173/layer**, 15.74 GiB | Strata's `logs/server-…err.log:390,395` |
@@ -124,11 +125,11 @@ So the levers are real but bounded: they close 23-27 of the 42-expert gap — ab
 "third" an earlier draft of this section claimed — and the rest is not a setting. Strata reaches
 79–95 % coverage *from* a 34 %-of-experts tier because the tier follows the conversation, which is
 M2's mechanism, and the fork's static prefix has no such follower. Moving the split the other way is
-not a loss either: `-mcs` counts the **CPU** tail (`model_init.py:68`), so `381 → 376` keeps
-512 − 376 = **136** experts per layer on the card against 131 — 3.8 % *more* residency — and hands the
-worker 5 × 48 × 1.91 MB ≈ 0.44 GB of arena back in exchange for the same bytes of VRAM. That is why
-the row states both regimes rather than quietly picking one, and why a split change is not a lever of
-its own in §8: it is where the cache lever's freed bytes go.
+not a loss either: `-mcs` counts the **CPU** tail (`model_init.py:68`), so `381 → 376` — the earlier
+3.18 boundary the file's own `notes` still record — keeps 512 − 376 = **136** experts per layer on the
+card against 131, 3.8 % *more* residency, and hands the worker 5 × 48 × 1.91 MB ≈ 0.44 GB of arena back
+in exchange for the same bytes of VRAM. That is why a split change is not a lever of its own in §8: it
+is where the cache lever's freed bytes go.
 
 ## 2. M2-churn — the unit trap: 15 swaps/round against 0.20/step
 
@@ -310,7 +311,7 @@ request at a time (`batch 0` default, `src/program/generate.cpp:456`, and
 `/home/dev/UnbiasedStrata/start-logged.ps1` passes no `--slots`) with 32768 of 262144 KV cells resident
 (`/home/dev/UnbiasedStrata/start-logged.ps1:54`); the fork's deployed regime serves `max_batch_size 2`
 (`tabbyAPI/config.yml:217`, outside this tree) with the whole cache in VRAM (`sysmem_kv_cache 0`,
-`config.yml:441`) — 262144 cells at the measured regime and 131072 in this worktree's `state.json`. Per
+`config.yml:441`) — 262144 cells at "4,4", the regime `bench/windows/state.json` records. Per
 token per layer the two engines agree on the K/V: 576 B (2 heads × 256 dims at 4 bits + fp16 scales)
 = 6912 B/token over 12 layers, 1.81 GB at 262144 cells, which is exactly the log's "K/V in 1.69 GiB of
 pinned RAM" (`server log:378`). The
@@ -479,7 +480,7 @@ Three notes on the table:
   reaches that test, so a one-variable arm would be a null. §3 is the arithmetic; run the line as
   printed, and only with the operator's consent — like every arm here, it stops the served model.
 
-## 9. The two regime files (R5, widened)
+## 9. The regime file, and who ran it
 
 `results/passes.csv`'s `t27-*` and `t29-*` rows and the t29 dry-run's `ARGS` line say what the measured
 arms actually ran:
@@ -488,23 +489,24 @@ arms actually ran:
 -m … -cs 262144 -chunk_size 4096 -ambs 2 -cq 4,4 -max_length 131072 -mcs 381 -mct 16 -sd
 ```
 
-The deployed harness's `state.json` (`_agent/v165/state.json`, and `165-win-perf`'s copy of it) agrees:
-`split 381, cache_size 262144, cache_quant "4,4"`. **This branch's** `bench/windows/state.json` says
-`split 376, cache_size 131072, cache_quant "2,2", max_length 131072`, and its own note explains the
-131072 as "the measurement length; 262144 is a single final confirmation". So there are two regimes in
-the tree, and the review quotes both wherever the number matters:
+`bench/windows/state.json` describes that same regime — **production**, verified on the box 2026-11-02
+per the file's own `_comment`: `split 381` (`:7`, "the dynamic floor; the static harness floor at this
+cache is 389"), `cache_size 262144` (`:10`), `cache_quant "4,4"` (`:11`), DFlash2 with
+`num_draft_tokens 4` and `dynamic_draft true` (`:24-32`). So the t27/t29 arms ran **exactly** the regime
+the file states — `-mcs 381 -cs 262144 -cq 4,4` — which is why the matrix cites them beside it, and the
+`-max_length` difference is the one deliberate departure: the arms ran 131072, one value the deployment
+sets at 262144.
 
-| value | this worktree's `state.json` | the measured arms | in the matrix as |
+| value | `bench/windows/state.json` | the measured arms | in the matrix as |
 |---|---|---|---|
-| split | 376 (`:7`) | 381 | `fork.split 376` + `derived.split_measured 381`; 131 = 512 − 381, labelled measured |
-| cache_size | 131072 (`:10`) | 262144 | `fork.cache_size 131072` + `derived.kv_vram_tokens_measured 262144` |
-| cache_quant | `"2,2"` (`:11`) | `4,4` | `fork.cache_mode "2,2"`; the measured `4,4` is in M7's prose |
-| draft | `mode mtp`, `num_draft_tokens 2`, `dynamic_draft false` (`:24-32`) | DFlash2, 4, dynamic true | M4's prose: no `perf` arm carried a draft, and the campaign's one `spec_decode` arm failed (`t27-A-base`) |
+| split | 381 (`:7`) | 381 (`-mcs 381`) | `fork.split 381`; 131 = 512 − 381 is derived from it |
+| cache_size | 262144 (`:10`) | 262144 (`-cs 262144`) | `fork.cache_size 262144` |
+| cache_quant | `"4,4"` (`:11`) | `4,4` (`-cq 4,4`) | `fork.cache_mode "4,4"` |
+| draft | DFlash2, `num_draft_tokens 4`, `dynamic_draft true` (`:24-32`) | no t27/t29 `perf` arm carried a draft; the campaign's one `spec_decode` arm failed (`t27-A-base`) | M4's prose |
 
-`extract_exllama` reads this branch's file, so the machine-checked value is 376/131072/"2,2" — that is
-the only one a drift check can pin to a line in this tree. The measured column's numbers are the
-deployment's, quoted with their provenance, and no report should quote 131 without saying it is 512 −
-381.
+`extract_exllama` reads this file, so the machine-checked value is 381/262144/"4,4" — pinned to a line
+in this tree, and no longer a value the review had to state twice. No report should quote 131 without
+saying it is 512 − 381, the CPU tail (`model_init.py:68`).
 
 ## 10. How to re-run, in order
 
@@ -532,7 +534,8 @@ python3 bench/strata_transfer_check.py --fork           # this fork's side as JS
 ```
 
 To point the check at another Strata checkout (`--root`) or another fork tree (`--repo-root`), and to
-see the failure paths — a drifted `adapt_swaps` and a drifted `split`:
+see the failure paths — a drifted `adapt_swaps` and a drifted `split` (the second tree is a scratch copy
+of this one with `split 376` and the promote budget raised to 16):
 
 ```bash
 python3 bench/strata_transfer_check.py --check --root /tmp/opencode/drift3
@@ -540,9 +543,9 @@ python3 bench/strata_transfer_check.py --check --root /tmp/opencode/drift3
 # 5/6 rows PASS, exit 1
 
 python3 bench/strata_transfer_check.py --check --repo-root /tmp/opencode/forkdrift
-# FAIL M1-budget: fork.split recorded 376, source says 381 (bench/windows/state.json:7)
-# FAIL M2-churn: fork.promote_budget recorded 6, source says 16 (…:161)
-# FAIL M7-deploy: fork.split recorded 376, source says 381 (bench/windows/state.json:7)
+# FAIL M1-budget: fork.split recorded 381, source says 376 (bench/windows/state.json:7)
+# FAIL M2-churn: fork.promote_budget recorded 6, source says 16 (exllamav3/modules/block_sparse_mlp_cpu.py:161)
+# FAIL M7-deploy: fork.split recorded 381, source says 376 (bench/windows/state.json:7)
 # 3/6 rows PASS, exit 1
 ```
 
@@ -598,7 +601,7 @@ No GPU, no process.
 
 ```
 $ python3 bench/strata_transfer_check.py --check            # this worktree
-PASS M1-budget: 20 comparison(s) - … ; absent, measured unmeasured
+PASS M1-budget: 19 comparison(s) - … ; absent, measured unmeasured
 PASS M2-churn: 19 comparison(s) - … ; diverged, measured t29-C1-pin-unset-20261103-221302
 PASS M3-miss-split: 3 comparison(s) - … ; absent, measured unmeasured
 PASS M4-spec-yield: 3 comparison(s) - no extracted constant on either side (see justification); … ; diverged, measured unmeasured
