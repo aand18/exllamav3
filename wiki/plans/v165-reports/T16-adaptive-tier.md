@@ -339,7 +339,7 @@ no `FAIL` line printed and the exit code is 0. The `--cites-failure` argument is
 rule in practice: `t27-A-base` is the void drafting attempt of section 6, cited as evidence of a
 failure, so without that flag the gate reads it as a measurement and fails.
 
-## 9. Tests (2026-11-03)
+## 9. Tests (2026-11-03, re-run 2026-11-04 after the handle fix)
 
 The suite was run against the **source tree with the patch** (`tests/conftest.py` puts the repo first
 on `sys.path`, so the tests exercise the branch, not the installed copy), on the Windows venv
@@ -378,6 +378,34 @@ restored, and the counts are identical:
 - `test_ptx_portable` (no `nvcc`/arch match), `test_run_blocks_until_marker_across_processes`
   (cross-process sync), `test_sm_overflow` (shared-memory overflow segments) and the `parity` setup
   errors (HF `transformers` device-map API) are all platform/dependency gaps, identical on base.
+
+### 9.1 After the handle fix (2026-11-04, `4edc3955`)
+
+The suite was re-run as **one invocation** at `1fb1696b`, against the branch tree on the Windows venv,
+with the production server stopped (the CUDA tests need the card):
+
+```
+11 failed, 6097 passed, 951 skipped, 7 errors in 638.35s (0:10:38)
+```
+
+| | before (`2df1b005` + the two patched files) | after the fix |
+|---|---|---|
+| `modules` | **131 failed**, 315 passed | **4 failed** |
+| whole tree | 138 failed, 7 errors | **11 failed, 7 errors** |
+
+The cascade is gone, and it was one mechanism: `tests/testlib/checkpoint.py` now returns a
+`SelfClosingCollection` whose `__del__` closes the loader's streams (`4edc3955`). The count is 8
+streams per collection off Linux (`STLOADER_THREADS`, `exllamav3_ext/stloader.h`), so the 512-entry
+CRT fd table fills at **~64 collections**, not ~500 — the failure arrives at case 63. The regression
+test (`tests/loader/test_collection_lifetime.py`) counts **kernel handles**, because CPython's own
+I/O layer is not bounded by MSVCRT `maxstdio` and an `os.open` probe cannot see the leak.
+
+The 11 remaining failures are pre-existing, measured as one selection on a pristine `2df1b005` copy:
+**11 failed, 23 passed**, the same eleven ids. Three `conversion/test_optimizer_targets`, one
+`kernels/portability/test_ptx_portable`, one `kernels/tp/test_tp_context`, four
+`modules/draft/test_dflash2`, two `tp/test_sm_overflow`. The seven `parity` errors are setup errors —
+`ValueError: Using a device_map … requires accelerate`. Against base the branch is **three reds
+better**: the two `test_shm_capacity` cases and `test_swap_sweep_inference_mode`.
 
 **Two suite defects were fixed**, because they were red *only* for staleness (commit `acfbd7ac`,
 both verified to fail on base first): `test_swap_sweep_inference_mode`'s stub lacked
