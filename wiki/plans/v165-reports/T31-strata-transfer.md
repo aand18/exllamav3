@@ -15,7 +15,9 @@ The rows' `justification` strings in the code are the sections below, quoted.
 
 Sources: `bench/strata_transfer_check.py:MATRIX` (authoritative), Strata at `/home/dev/UnbiasedStrata`
 (read-only), this branch, `results/passes.csv` of the deployed harness, `wiki/plans/v165-reports/
-T16-adaptive-tier.md` §7, and `/tmp/opencode/t29-pin-unset.md`.
+T16-adaptive-tier.md` §7, and `/tmp/opencode/t29-pin-unset.md`. "Note 1" below is
+`/home/dev/research/strata-vs-exllamav3-2026-11-02.md` (the seven-mechanism note); "note 2" is
+`/tmp/opencode/strata-vs-exllama-research.md` (the coverage-attribution note).
 
 ## The matrix
 
@@ -25,12 +27,12 @@ this branch unless the cell says otherwise.
 
 | mechanism | Strata (value, file:line) | fork (value, file:line) | verdict | justification (short; full text in the row's section) | measured |
 |---|---|---|---|---|---|
-| **M1-budget** — VRAM on the expert tier instead of KV/embedding | `kv_resident 0` (default; deployed run passes 32768) `src/program/generate.cpp:311`, `prefill_chunk 0` `:431`; 8301 slots = **173 experts/layer** of 15.74 GiB, `logs/server-20261029-172352.err.log:390,395` | `cache_size 131072` `bench/windows/state.json:10`, `cache_quant "2,2"` `:11`, `split 376` `:7` — **measured regime: `-cs 262144 -cq 4,4 -mcs 381`** (`results/passes.csv`, t27/t29 `args`) ⇒ **131 of 512 experts/layer** | `absent` | three levers (cache_size, `sysmem_kv_cache`, split) buy +10..13 experts/layer; 80 % by residency needs ≈38 GB of expert weights on a 24 GiB card (§1) | `unmeasured` |
-| **M2-churn** — the adaptive tier's cadence and source | `adapt_every 4` `generate.cpp:474`, `adapt_swaps 96` `:497`, `adapt_decay 0.7` `:475`, `slot_pool global` `:382` + `expert_cache.hpp:221`, `swap_source ram-copy` `:4590` | `promote_budget 6` `block_sparse_mlp_cpu.py:161`, `ratio 1.5` `:162`, `decay 0.98` `:163`, `spares 4` `:1088`, `sweep_interval 128` `:1208`, `sweep_max 64` `:141`, `sweep_source checkpoint` `:1293` | `diverged` | 15.1 swaps/round (measured) against 0.20/step at the t27 operating point: **75×**, and a checkpoint read per swap against a RAM copy (§2) | `t29-C1-pin-unset-20261103-221302` |
+| **M1-budget** — VRAM on the expert tier instead of KV/embedding | `kv_resident 0` (default; deployed run passes 32768) `src/program/generate.cpp:311`, `prefill_chunk 0` `:431`; 8301 slots = **173 experts/layer** of 15.74 GiB, Strata's `logs/server-20261029-172352.err.log:390,395` | `cache_size 131072` `bench/windows/state.json:10`, `cache_quant "2,2"` `:11`, `split 376` `:7` — **measured regime: `-cs 262144 -cq 4,4 -mcs 381`** (`results/passes.csv`, t27/t29 `args`) ⇒ **131 of 512 experts/layer** | `absent` | three levers (cache_size, `sysmem_kv_cache`, split) are worth +23..27 experts/layer, i.e. 131 → 154..158 of 173; 80 % by residency needs ≈38 GB of expert weights on a 24 GiB card (§1) | `unmeasured` |
+| **M2-churn** — the adaptive tier's cadence and source | `adapt_every 4` `generate.cpp:474`, `adapt_swaps 96` `:497`, `adapt_decay 0.7` `:475`, `slot_pool global` `:382` + `/home/dev/UnbiasedStrata/include/strata/core/expert_cache.hpp:221`, `swap_source ram-copy` `:4590` | `promote_budget 6` `block_sparse_mlp_cpu.py:161`, `ratio 1.5` `:162`, `decay 0.98` `:163`, `spares 4` `:1088`, `sweep_interval 128` `:1208`, `sweep_max 64` `:141`, `sweep_source checkpoint` `:1293` | `diverged` | 15.1 swaps/round (measured) against 0.20/step at the t27 operating point: **75×**, and a checkpoint read per swap against a RAM copy (§2) | `t29-C1-pin-unset-20261103-221302` |
 | **M3-miss-split** — the miss is split CPU/DMA | `pcie_frac -1.0` = the model's own, **0.55 DMA** for native packs `generate.cpp:470` (read by hand: not an extracted key) | `stream_min_rows 32` `model/moe_cpu_host.py:141`; second gate `stream_t 8` `:139` (by hand) | `absent` | a 4-row window is 8× below the gate and 2× below the per-expert gate; the arm that tests it is `EXL3_MOE_STREAM_MIN_ROWS=2` + `EXL3_MOE_STREAM_T=2` (§3) | `unmeasured` |
 | **M4-spec-yield** — what one verify pass buys | MTP ≤3 drafts + prompt lookup, cost-model chosen, `docs/upstream/DETAILS.md:1032-1035`; **2.5–3.5 tokens/window** `logs/server-20261029-172352.err.log:425,444,453` | DFlash2 `num_draft_tokens 4`, `dynamic_draft` shortens only, `generator.py:1128-1146`; **2.2–2.4 of 4 rows** (note 1 §2) | `diverged` | tokens/window = 1 + Σ acceptance, truncated at 4: 1.59× at best, 1.04× at worst; no arm carries a draft (§4) | `unmeasured` |
 | **M5-ple** — the n-gram table read on the decode path | row cache 1M rows (≈90 MiB), up to ~82 % of reads, 20–34 % recurrence `include/strata/ngram/ple_reader.hpp:13-16`; issue/collect split `:5-11`; un-hidden gather 2.1–2.6 ms/token `generate.cpp:393-395` | no row cache: `ext.ngram_gather_cpu` per gather `modules/row_table.py:282-312`; `PREFETCH_MIN_TOKENS 256` `:27` declined at `ngram_embedding.py:334`; `advise()` is `posix_fadvise`, a no-op on Windows `row_table.py:208-215` | `absent` | three defences absent; 16 × 90 B = 1440 B/token is the byte scale, Strata's own un-hidden 2.1–2.6 ms/token the ceiling (§5) | `unmeasured` |
-| **M7-deploy** — deployment policy, not an engine property | one request at a time (`batch 0` `generate.cpp:456`; no `--slots`), `--kv-resident 32768` of 262144 `start-logged.ps1:54` | `max_batch_size 2` (`tabbyAPI/config.yml:217`, outside this tree), `sysmem_kv_cache 0` `:441`, whole cache in VRAM: `cache_size 131072` `bench/windows/state.json:10`, measured `262144` | `diverged` | 8× KV residency and 2-vs-1 concurrency; the second stream costs 8.1 T/s against 57.2 single (§6) | `unmeasured` |
+| **M7-deploy** — deployment policy, not an engine property | one request at a time (`batch 0` `generate.cpp:456`; no `--slots`), `--kv-resident 32768` of 262144 `/home/dev/UnbiasedStrata/start-logged.ps1:54` | `max_batch_size 2` (`tabbyAPI/config.yml:217`, outside this tree), `sysmem_kv_cache 0` `:441`, whole cache in VRAM: `cache_size 131072` `bench/windows/state.json:10`, measured `262144` | `diverged` | 2.82 GB of KV + indexer planes in VRAM against Strata's 0.23 GB resident (8× the cells, 2.59 GB of bytes); the one overlapping pair ran 49.8 T/s on the long stream and 8.1 on the short one against 57.2–61.3 single (§6) | `unmeasured` |
 
 Two regime values are recorded twice on purpose (M1, M7): this worktree's `state.json` and the
 deployment's disagree (376/131072/"2,2" against 381/262144/"4,4"), so both are stated and M1's
@@ -39,28 +41,36 @@ deployment's disagree (376/131072/"2,2" against 381/262144/"4,4"), so both are s
 `--check` on this tree prints, one line per row:
 
 ```
-PASS M1-budget: 9 comparison(s) - strata.kv_resident_tokens=0 (src/program/generate.cpp:311), strata.prefill_chunk=0 (src/program/generate.cpp:431), fork.cache_size=131072 (bench/windows/state.json:10) +2 more; derived experts_per_layer_repo=136, experts_per_layer_measured=131, strata_experts_per_layer=173, experts_short=42; absent, measured unmeasured
-PASS M2-churn: 18 comparison(s) - strata.adapt_every=4 (src/program/generate.cpp:474), strata.adapt_swaps=96 (src/program/generate.cpp:497), strata.adapt_decay=0.7 (src/program/generate.cpp:475) +9 more; derived swaps_per_round_cap=24, swaps_per_round_measured=15.1, sweep_swaps_per_step=0.5, promotions_per_step_t27=0.201, churn_ratio=75, promotions_per_step_t29=2.42; diverged, measured t29-C1-pin-unset-20261103-221302
+PASS M1-budget: 20 comparison(s) - strata.kv_resident_tokens=0 (src/program/generate.cpp:311), strata.prefill_chunk=0 (src/program/generate.cpp:431), fork.cache_size=131072 (bench/windows/state.json:10) +2 more; derived experts_per_layer_repo=136, experts_per_layer_measured=131, strata_experts_per_layer=173, experts_short=42, trunk_gib=17.1, freed_gb_65536=2.11, slots_65536=1106, gain_65536=23, experts_after_65536=154, short_65536=19, freed_gb_32768=2.47, slots_32768=1291, gain_32768=27, experts_after_32768=158, short_32768=15; absent, measured unmeasured
+PASS M2-churn: 19 comparison(s) - strata.adapt_every=4 (src/program/generate.cpp:474), strata.adapt_swaps=96 (src/program/generate.cpp:497), strata.adapt_decay=0.7 (src/program/generate.cpp:475) +9 more; derived swaps_per_round_cap=24, swaps_per_round_measured=15.1, sweep_swaps_per_step=0.5, promotions_per_step_t27=0.201, churn_ratio=75, promotions_per_step_t29=2.42, budget_raise_ratio=12; diverged, measured t29-C1-pin-unset-20261103-221302
 PASS M3-miss-split: 3 comparison(s) - fork.stream_min_rows=32 (exllamav3/model/moe_cpu_host.py:141); derived rows_short=28, gate_factor=8.0; absent, measured unmeasured
 PASS M4-spec-yield: 3 comparison(s) - no extracted constant on either side (see justification); derived yield_ratio_low=1.04, yield_ratio_high=1.59, window_cap_minus_high=1.6; diverged, measured unmeasured
 PASS M5-ple: 2 comparison(s) - no extracted constant on either side (see justification); derived bytes_per_token=1440, cache_mib=90; absent, measured unmeasured
-PASS M7-deploy: 5 comparison(s) - fork.cache_size=131072 (bench/windows/state.json:10), fork.cache_mode='2,2' (bench/windows/state.json:11), fork.split=376 (bench/windows/state.json:7); derived kv_ratio=8, batch_delta=2; diverged, measured unmeasured
+PASS M7-deploy: 10 comparison(s) - fork.cache_size=131072 (bench/windows/state.json:10), fork.cache_mode='2,2' (bench/windows/state.json:11), fork.split=376 (bench/windows/state.json:7); derived kv_ratio=8, batch_delta=2, fork_kv_gb=2.82, strata_kv_whole_gb=1.81, strata_kv_whole_gib=1.69, strata_kv_resident_gb=0.23, kv_vram_delta_gb=2.59; diverged, measured unmeasured
 6/6 rows PASS
 ```
 
 ## 1. M1-budget — where the VRAM goes, and the ≈38 GB wall
 
-**`MATRIX["M1-budget"]["justification"]`** (reflowed for the page; typography and spacing normalised — `—`, `×`, `≈`, `≤`, `§`; the code is
-  authoritative): the fork's 131 experts/layer is a static
-prefix of one uniform per-layer budget at the measured split 381 (512 − 381; this worktree's
+**`MATRIX["M1-budget"]["justification"]`** (reflowed for the page; typography and spacing normalised —
+`—`, `×`, `≈`, `≤`, `§`; the code is authoritative): the fork's 131 experts/layer is a static prefix of
+one uniform per-layer budget at the measured split 381 (512 − 381; this worktree's
 `state.json` says 376, i.e. 136); Strata's 173/layer is 8301 global slots over 48 layers (15.74 GiB)
 that follow routing. Three levers would move the fork: `cache_size` 262144 → 32768/65536,
-`memory.sysmem_kv_cache` ~1800 MB, then `cpu_moe_split_experts` below 381. Their arithmetic bounds the
-gain: 1.9–2.4 GB of freed KV = 500–650 slots = +10..13 experts/layer, so 131 → 141..144, still ~30
-short of 173. Reaching 80 % by residency instead needs 410 of 512 experts/layer = 410 × 48 × 1.91 MB
-= 37.6 GB ≈ 38 GB of VRAM, against a 24 GiB card whose dense trunk already holds 17.5 GiB
-(`bench/size_check.py`, t29 artefact §1). No `cache_size` or split delta closes it, so the mechanism
-is **absent**, not diverged.
+`memory.sysmem_kv_cache` ~1800 MB, then `cpu_moe_split_experts` below 381. The KV bytes, from the
+checkpoint's config and the engine's cache shapes: 2 KV heads × 256 head_dim = 512 values/token/layer,
+at "4,4" 16 groups × 8 bits × 4 B + 32 B of fp16 scales = 576 B, plus 320 B of fp16 indexer planes that
+do not scale with the width (`cache/qsa.py:16-19`) = 896 B/token/layer over 12 attention layers, so
+2.82 GB at 262144 cells. Dropping to 65536 or 32768 cells frees 2.11 or 2.47 GB, which at 1.91 MB per
+expert (47.03 GB / 512 / 48) is 1106 or 1291 slots = +23..27 experts/layer, so 131 → 154..158: still
+15-19 short of 173. Research note 1's M1 verdict ("~1.9-2.4 GB VRAM ~ 500-650 more expert slots ~
++10-13 experts per layer") does not divide by the 1.91 MB per expert that note states in its own
+section M9: 1.9-2.4 GB / 1.91 MB is 1000-1250 slots, and the conversion above is the corrected one.
+Reaching 80 % by residency instead needs 410 of 512 experts/layer = 410 × 48 × 1.91 MB = 37.6 GB ≈
+38 GB of VRAM, against a 24 GiB card whose dense trunk already holds 17 551 MiB = 17.1 GiB (`bench/size_check.py`,
+t29 artefact §1). And residency alone does not buy Strata's coverage: a static profile at 8000 slots
+covers 28.4 % of reads (note 2 §2.2), the rest comes from the tier following routing, i.e. from M2.
+**Absent**, not diverged.
 
 The arithmetic, spelled out:
 
@@ -70,18 +80,31 @@ The arithmetic, spelled out:
 | … at this worktree's regime | 512 − 376 = **136** | `bench/windows/state.json:7` |
 | expert bytes per expert | ≈1.91 MB (47.03 GB / 512 / 48) | note 1 §M1, from `quantization_config.json` |
 | the fork's expert tier | 131 × 48 × 1.91 MB = **12.0 GB** | derived |
-| Strata's expert tier | 8301 slots / 48 layers = **173/layer**, 15.74 GiB | `logs/server-…err.log:390,395` |
-| lever 1+2: KV 262144 → 32768/65536 + `sysmem_kv_cache` ~1800 | frees **1.9–2.4 GB** = 500–650 slots | note 1 §M1 |
-| … in experts per layer | 500–650 / 48 = **+10..13**, i.e. 131 → 141..144 | derived |
-| still short of Strata | 173 − 131 = **42** experts/layer | derived |
+| Strata's expert tier | 8301 slots / 48 layers = **173/layer**, 15.74 GiB | Strata's `logs/server-…err.log:390,395` |
+| KV bytes per token per layer, fork at `-cq 4,4` | 16 groups × (4+4) bits × 4 B = 512 B + 2 × 16 fp16 scales × 2 B = 64 B + 320 B fp16 indexer planes = **896 B** | `cache/quant.py:36-47`, `cache/qsa.py:16-31`, config (`2` KV heads × `256` dims, `indexer_head_dim 128`, ratio `4`) |
+| … per token, 12 full-attention layers | 896 × 12 = **10 752 B** | `full_attention_interval: 4` of 48 layers |
+| the fork's KV at 262144 cells | 262144 × 10 752 B = **2.82 GB** (2688 MiB) | `bench/size_check.py`, t29 artefact §1 |
+| lever 1+2: cache 262144 → 65536 / 32768 cells | 2.82 − 0.70 = **2.11 GB** / 2.82 − 0.35 = **2.47 GB** freed | derived |
+| … at 1.91 MB per expert | 2.11 GB / 1.91 MB = **1106 slots**; 2.47 GB / 1.91 MB = **1291 slots** | derived |
+| … in experts per layer | 1106/48 = **+23**; 1291/48 = **+27** → 131 → **154..158** | derived |
+| still short of Strata | 173 − 154 = **19**; 173 − 158 = **15** experts/layer | derived |
 | reaching 80 % by residency | 410 × 48 × 1.91 MB = **37.6 GB ≈ 38 GB** | derived |
-| VRAM the card has | 24 564 MiB, of which the trunk alone is 17 551 MiB | `bench/size_check.py` output, t29 artefact §1 |
+| VRAM the card has | 24 564 MiB, of which the trunk alone is 17 551 MiB = **17.1 GiB** | `bench/size_check.py` output, t29 artefact §1 |
 
-So the levers are real but bounded: they close about a third of the slot gap, and the rest is not a
-setting — Strata reaches 79–95 % coverage *from* a 34 %-of-experts tier because the tier follows the
-conversation, which is M2's mechanism, and the fork's static prefix has no such follower. Passing
-`split 381 → 376` in the other direction makes it worse, not better (136 experts, 3 % of the tier
-given away), which is why the row states both regimes rather than quietly picking one.
+Note 1's own M1 verdict says the same levers are worth "≈500-650 more expert slots ≈ +10-13 experts per
+layer" (`/home/dev/research/strata-vs-exllamav3-2026-11-02.md:156-157`, repeated at `:492`), and that
+pair is the one this task's review rounds on: at the 1.91 MB per expert that note states itself
+(`:458`), 1.9-2.4 GB is ~1000-1250 slots, not 500-650, so the note divided 1.9-2.4 GB by roughly 3.7 MB
+per slot. The corrected gain is larger — +23..27, not +10..13 — and the conclusion it feeds is
+*narrower* in effect, not wider: 154..158 is still short of 173, and the residency count was never the
+mechanism (28.4 % of reads from an 8000-slot static profile, note 2 §2.2).
+
+So the levers are real but bounded: they close 23-27 of the 42-expert gap — about 55-64 %, not the
+"third" an earlier draft of this section claimed — and the rest is not a setting. Strata reaches
+79–95 % coverage *from* a 34 %-of-experts tier because the tier follows the conversation, which is
+M2's mechanism, and the fork's static prefix has no such follower. Passing `split 381 → 376` in the
+other direction makes it worse, not better (136 experts, 3 % of the tier given away), which is why the
+row states both regimes rather than quietly picking one.
 
 ## 2. M2-churn — the unit trap: 15 swaps/round against 0.20/step
 
@@ -93,8 +116,10 @@ t27 operating point promoted **710** times over the 3528-step perf ladder = **0.
 `PROMOTE_BUDGET 6/step`, ratio 1.5, decay 0.98), and its legacy sweep is 64 swaps per 128 steps =
 0.5/step with two checkpoint reads per swap (`sweep_source checkpoint`). 15.1/0.201 = **75×**, the
 review's 75×. Per committed token it is **31×** (Strata 15.1/2.45 = 6.2; a perf step is one token
-because `perf.py` registers no draft), and `t29-C1` shows the budget raised 13×: 8669 promotions /
-3584 steps = **2.42/step** for +40.6 points of coverage (31.7 → 72.3 % pooled).
+because `perf.py` registers no draft), and `t29-C1` shows what the budget does once the pool stops
+capping it: 8669 promotions / 3584 steps = **2.42/step**, **12×** the t27 rate (2.42/0.201 = 12.0,
+8669/710 = 12.2; the arm also raised the spare count 4 → 16), for +40.6 points of coverage
+(31.7 → 72.3 % pooled).
 
 The two campaign's numbers, as read:
 
@@ -206,20 +231,45 @@ at all".
 ## 6. M7-deploy — batch and KV residency
 
 **`MATRIX["M7-deploy"]["justification"]`** (reflowed; typography and spacing normalised — `×`, `≈`, `≤`, `§`): deployment, not engine: Strata serves one
-request at a time (`batch 0` default, `generate.cpp:456`, and `start-logged.ps1` passes no `--slots`)
-with 32768 of 262144 KV cells resident (`start-logged.ps1:54`); the fork's deployed regime serves
-`max_batch_size 2` (`tabbyAPI/config.yml:217`, outside this tree) with the whole cache in VRAM
-(`sysmem_kv_cache 0`, `config.yml:441`) — 262144 cells at the measured regime and 131072 in this
-worktree's `state.json`. That 8× KV-residency delta is exactly the M1 lever, and concurrency is
-anti-scaled on this box (49.8 T/s for the second stream against 57.2 T/s single, note 1 §2). No arm of
-either campaign varied batch or KV residency, so the divergence is real and `unmeasured`.
+request at a time (`batch 0` default, `src/program/generate.cpp:456`, and
+`/home/dev/UnbiasedStrata/start-logged.ps1` passes no `--slots`) with 32768 of 262144 KV cells resident
+(`/home/dev/UnbiasedStrata/start-logged.ps1:54`); the fork's deployed regime serves `max_batch_size 2`
+(`tabbyAPI/config.yml:217`, outside this tree) with the whole cache in VRAM (`sysmem_kv_cache 0`,
+`config.yml:441`) — 262144 cells at the measured regime and 131072 in this worktree's `state.json`. Per
+token per layer the two engines agree on the K/V: 576 B (2 heads × 256 dims at 4 bits + fp16 scales)
+= 6912 B/token over 12 layers, 1.81 GB at 262144 cells, which is exactly the log's "K/V in 1.69 GiB of
+pinned RAM" (`/mnt/c/Users/yoho/Downloads/UnbiasedStrata/logs/server-20261029-172352.err.log:378`). The
+fork adds 320 B/token/layer of fp16 indexer planes (896 B/token/layer) and keeps all of it in VRAM:
+2.82 GB. Strata keeps 32768 cells
+resident (0.23 GB) and the other 229376 cells, 1.59 GB, in pinned RAM. So the VRAM delta at one context
+is 2.82 − 0.23 = **2.59 GB** — the same quantity the M1 lever frees (2.11–2.47 GB by target cell
+count), not a second one. Concurrency is anti-scaled: the log's one overlapping pair ran 49.8 T/s on
+the 19.5k-token stream and 8.1 T/s on the 551-token stream that shared the window, against 57.2–61.3
+T/s for the three single-stream requests (note 1 §2). No arm of either campaign varied batch or KV
+residency, so the divergence is real and `unmeasured`.
 
-Arithmetic: 262144 / 32768 = **8×**; at 896 B/token/layer × 12 attention layers the fork's VRAM cache is
-≈2.8 GB where Strata's resident window is 1.69 GiB in pinned RAM — the difference is ~1.9–2.4 GB of
-VRAM, which is exactly the M1 lever's input. Concurrency: 57.2 tok/s single-stream against 49.8 for the
-stream that overlapped another (and 8.1 T/s for the second stream itself, note 1 §2), so two sessions
-cost more than they yield on this box — a deployment decision, not an engine property, and the deployed
-`max_batch_size: 2` was never A/B'd by either campaign.
+Arithmetic, in bytes rather than in a range:
+
+| quantity | fork (deployed, `-cq 4,4`, `-cs 262144`) | Strata (`--kv q4_0`, `--kv-resident 32768`) |
+|---|---|---|
+| K/V bytes per token per layer | 512 B codes + 64 B fp16 scales = **576 B** | **576 B** (`kv_q4.hpp:3-6`, K+V of both heads) |
+| indexer planes per token per layer | **320 B**, fp16 at any width (`cache/qsa.py:16-19`) | not in this figure |
+| bytes per token, 12 full-attention layers | 896 × 12 = **10 752 B** | 576 × 12 = **6912 B** |
+| the whole table at 262144 cells | 262144 × 10 752 = **2.82 GB** | 262144 × 6912 = **1.81 GB = 1.69 GiB** (the log's line, `:378`) |
+| where it lives | **all in VRAM** (`sysmem_kv_cache 0`) | 32768 cells in VRAM = **0.23 GB**; 229376 cells = **1.59 GB** in pinned RAM |
+| VRAM at this context | **2.82 GB** | **0.23 GB** |
+| delta, fork − Strata | **2.82 − 0.23 = 2.59 GB** | — |
+
+So the two engines do not differ in bytes per token — both are 576 B of 4-bit K/V per token per layer,
+which is why Strata's 1.69 GiB line and the fork's `-cq 4,4` agree — they differ in *residency*. The
+fork's 2.82 GB (planes included) against Strata's 0.23 GB is a **2.59 GB** VRAM delta, the same
+quantity the M1 lever frees when the fork shrinks its own cache to 32768 or 65536 cells (2.47 or
+2.11 GB); the 1.9–2.4 GB an earlier draft quoted here was neither side's figure. Concurrency, one
+reading: the log's single overlapping pair ran 49.8 T/s on the 19 497-token stream (#6) and 8.1 T/s on
+the 551-token stream (#5) that shared its window, against 50.5 / 61.3 / 57.2 T/s for the three
+single-stream requests (cold, fully cached, warm) — so two sessions cost more than they yield on this
+box, a deployment decision rather than an engine property, and the deployed `max_batch_size: 2` was
+never A/B'd by either campaign.
 
 ## 7. The two regime files (R5, widened)
 

@@ -382,6 +382,31 @@ MATRIX: list[dict] = [
             "strata_slots": 8301,               # log: "expert cache 8301 slots, 15.74 GiB"
             "strata_experts_per_layer": 173,    # 8301 / 48
             "experts_short": 42,                # 173 - 131
+            # The lever's own arithmetic, in bytes rather than in a quoted range. A QSA layer holds
+            # 2 KV heads x 256 head_dim = 512 values/token: at "4,4" that is 16 groups x (4+4) bits
+            # x 4 B + 2 x 16 fp16 scales x 2 B = 576 B, plus the fp16 indexer planes
+            # (128 + 128/4) x 2 B = 320 B that do NOT scale with the width (cache/qsa.py:16-19) =
+            # 896 B/token/layer over 12 full-attention layers = 10 752 B/token (bench/size_check.py
+            # gives the same 2688 MiB at 262144 cells). At 1.91 MB per expert (47.03 GB / 512 / 48).
+            "kv_bytes_per_token_layer": 896,
+            "kv_layers": 12,
+            "kv_cells_measured": 262144,
+            "kv_cells_65536": 65536,
+            "kv_cells_32768": 32768,
+            "freed_gb_65536": 2.11,             # (262144 - 65536) x 896 x 12 / 1e9
+            "freed_gb_32768": 2.47,             # (262144 - 32768) x 896 x 12 / 1e9
+            "expert_mb": 1.91,
+            "slots_65536": 1106,                # freed bytes / 1.91 MB
+            "slots_32768": 1291,
+            "gain_65536": 23,                   # slots / 48
+            "gain_32768": 27,
+            "experts_after_65536": 154,         # 131 + 23
+            "experts_after_32768": 158,         # 131 + 27
+            "short_65536": 19,                  # 173 - 154
+            "short_32768": 15,                  # 173 - 158
+            # The card, from bench/size_check.py's own output in the t29 artefact section 1.
+            "trunk_mib": 17551,
+            "trunk_gib": 17.1,
         },
         "verdict": "absent",
         "justification": (
@@ -389,12 +414,22 @@ MATRIX: list[dict] = [
             "measured split 381 (512 - 381; this worktree's state.json says 376, i.e. 136); Strata's "
             "173/layer is 8301 global slots over 48 layers (15.74 GiB) that follow routing. Three "
             "levers would move the fork: cache_size 262144 -> 32768/65536, memory.sysmem_kv_cache "
-            "~1800 MB, then cpu_moe_split_experts below 381. Their arithmetic bounds the gain: "
-            "1.9-2.4 GB of freed KV = 500-650 slots = +10..13 experts/layer, so 131 -> 141..144, "
-            "still ~30 short of 173. Reaching 80% by residency instead needs 410 of 512 "
-            "experts/layer = 410 x 48 x 1.91 MB = 37.6 GB ~ 38 GB of VRAM, against a 24 GiB card "
-            "whose dense trunk already holds 17.5 GiB (bench/size_check.py, t29 artefact section 1). "
-            "No cache_size or split delta closes it, so the mechanism is absent, not diverged."
+            "~1800 MB, then cpu_moe_split_experts below 381. The KV bytes, from the checkpoint's "
+            "config and the engine's cache shapes: 2 KV heads x 256 head_dim = 512 values/token/layer, "
+            "at \"4,4\" 16 groups x 8 bits x 4 B + 32 B of fp16 scales = 576 B, plus 320 B of fp16 "
+            "indexer planes that do not scale with the width (cache/qsa.py:16-19) = 896 B/token/layer "
+            "over 12 attention layers, so 2.82 GB at 262144 cells. Dropping to 65536 or 32768 cells "
+            "frees 2.11 or 2.47 GB, which at 1.91 MB per expert (47.03 GB / 512 / 48) is 1106 or 1291 "
+            "slots = +23..27 experts/layer, so 131 -> 154..158: still 15-19 short of 173. Research note "
+            "1's M1 verdict (\"~1.9-2.4 GB VRAM ~ 500-650 more expert slots ~ +10-13 experts per "
+            "layer\") does not divide by the 1.91 MB per expert that note states in its own section "
+            "M9: 1.9-2.4 GB / 1.91 MB is 1000-1250 slots, and the conversion above is the corrected "
+            "one. Reaching 80% by residency "
+            "instead needs 410 of 512 experts/layer = 410 x 48 x 1.91 MB = 37.6 GB ~ 38 GB of VRAM, "
+            "against a 24 GiB card whose dense trunk already holds 17 551 MiB = 17.1 GiB "
+            "(bench/size_check.py, t29 artefact section 1). And residency alone does not buy Strata's "
+            "coverage: a static profile at 8000 slots covers 28.4% of reads (note 2 section 2.2), the "
+            "rest comes from the tier following routing, i.e. from M2. Absent, not diverged."
         ),
         "measured": "unmeasured",
     },
@@ -420,6 +455,7 @@ MATRIX: list[dict] = [
             "promotions_t29": 8669,                 # t29-C1, "/ 8669, at step 3584"
             "steps_t29": 3584,                      # 28 x 128
             "promotions_per_step_t29": 2.42,        # 8669 / 3584
+            "budget_raise_ratio": 12,               # 2.42 / 0.201 (8669 / 710 = 12.2)
         },
         "verdict": "diverged",
         "justification": (
@@ -431,9 +467,10 @@ MATRIX: list[dict] = [
             "PROMOTE_BUDGET 6/step, ratio 1.5, decay 0.98), and its legacy sweep is 64 swaps per 128 "
             "steps = 0.5/step with two checkpoint reads per swap (sweep_source checkpoint). "
             "15.1/0.201 = 75x, the review's 75x. Per committed token it is 31x (Strata 15.1/2.45 = "
-            "6.2; a perf step is one token because perf.py registers no draft), and t29-C1 shows the "
-            "budget raised 13x: 8669 promotions / 3584 steps = 2.42/step for +40.6 points of "
-            "coverage (31.7 -> 72.3 % pooled)."
+            "6.2; a perf step is one token because perf.py registers no draft), and t29-C1 shows "
+            "what the budget does once the pool stops capping it: 8669 promotions / 3584 steps = "
+            "2.42/step, 12x the t27 rate (2.42/0.201 = 12.0, 8669/710 = 12.2; the arm also raised "
+            "the spare count 4 -> 16), for +40.6 points of coverage (31.7 -> 72.3 % pooled)."
         ),
         "measured": "t29-C1-pin-unset-20261103-221302",
     },
@@ -531,21 +568,43 @@ MATRIX: list[dict] = [
             "kv_vram_tokens_measured": 262144,   # the deployed regime: -cs 262144, -cq 4,4
             "kv_resident_tokens_strata": 32768,  # start-logged.ps1:54, --kv-resident 32768
             "kv_ratio": 8,                       # 262144 / 32768
-            "batch_fork": 2,                     # tabbyAPI config.yml:217, max_batch_size
+            "batch_fork": 2,                     # tabbyAPI/config.yml:217, max_batch_size
             "batch_strata": 0,                   # generate.cpp:456, one request at a time
             "batch_delta": 2,                    # 2 - 0
+            # Per-token bytes for both sides at the same context, so the VRAM delta is arithmetic and
+            # not a range. The two engines agree on the K/V itself (2 heads x 256 dims at 4 bits + fp16
+            # scales = 576 B/token/layer: the fork's packed words, Strata's kv_q4 cells); they differ
+            # in the indexer planes (fork: 320 B/token/layer, fp16 at any width) and in where the
+            # bytes LIVE. 12 full-attention layers in both.
+            "fork_kv_bytes_token_layer": 896,     # 576 + 320 planes
+            "strata_kv_bytes_token_layer": 576,   # Q4_0, K+V both heads, no planes (kv_q4.hpp:3-6)
+            "kv_layers": 12,
+            "fork_kv_gb": 2.82,                   # 262144 x 896 x 12 / 1e9
+            "strata_kv_whole_gb": 1.81,           # 262144 x 576 x 12 / 1e9
+            "strata_kv_whole_gib": 1.69,          # that table, in GiB: the log's "1.69 GiB" (log:378)
+            "strata_kv_resident_gb": 0.23,        # 32768 x 576 x 12 / 1e9, in VRAM
+            "kv_vram_delta_gb": 2.59,             # 2.82 - 0.23
         },
         "verdict": "diverged",
         "justification": (
             "deployment, not engine: Strata serves one request at a time (batch 0 default, "
-            "generate.cpp:456, and start-logged.ps1 passes no --slots) with 32768 of 262144 KV cells "
-            "resident (start-logged.ps1:54); the fork's deployed regime serves max_batch_size 2 "
-            "(tabbyAPI/config.yml:217, outside this tree) with the whole cache in VRAM "
-            "(sysmem_kv_cache 0, config.yml:441) - 262144 cells at the measured regime and 131072 in "
-            "this worktree's state.json. That 8x KV-residency delta is exactly the M1 lever, and "
-            "concurrency is anti-scaled on this box (49.8 T/s for the second stream against 57.2 T/s "
-            "single, note 1 section 2). No arm of either campaign varied batch or KV residency, so "
-            "the divergence is real and unmeasured."
+            "src/program/generate.cpp:456, and /home/dev/UnbiasedStrata/start-logged.ps1 passes no "
+            "--slots) with 32768 of 262144 KV cells resident "
+            "(/home/dev/UnbiasedStrata/start-logged.ps1:54); the fork's deployed regime serves "
+            "max_batch_size 2 (tabbyAPI/config.yml:217, outside this tree) with the whole cache in "
+            "VRAM (sysmem_kv_cache 0, config.yml:441) - 262144 cells at the measured regime and "
+            "131072 in this worktree's state.json. Per token per layer the two engines agree on the "
+            "K/V: 576 B (2 heads x 256 dims at 4 bits + fp16 scales) = 6912 B/token over 12 layers, "
+            "1.81 GB at 262144 cells, which is exactly the log's \"K/V in 1.69 GiB of pinned RAM\" "
+            "(/mnt/c/Users/yoho/Downloads/UnbiasedStrata/logs/server-20261029-172352.err.log:378). "
+            "The fork adds 320 B/token/layer of fp16 indexer planes (896 B/token/layer) and keeps "
+            "all of it in VRAM: 2.82 GB. Strata keeps 32768 cells resident (0.23 GB) and the other "
+            "229376 cells, 1.59 GB, in pinned RAM. So the VRAM delta at one context is 2.82 - 0.23 = "
+            "2.59 GB - the same quantity the M1 lever frees (2.11-2.47 GB by target cell count), not "
+            "a second one. Concurrency is anti-scaled: the log's one overlapping pair ran 49.8 T/s "
+            "on the 19.5k-token stream and 8.1 T/s on the 551-token stream that shared the window, "
+            "against 57.2-61.3 T/s for the three single-stream requests (note 1 section 2). No arm of "
+            "either campaign varied batch or KV residency, so the divergence is real and unmeasured."
         ),
         "measured": "unmeasured",
     },
@@ -566,22 +625,43 @@ def _derived(row: dict) -> list[tuple[str, object]]:
     if rid == "M1-budget":
         measured = EXPERTS_PER_LAYER - d["split_measured"]
         per_layer = round(d["strata_slots"] / MOE_LAYERS)
-        return [
+        # The lever's arithmetic, recomputed in bytes: the KV per token, then the freed bytes at each
+        # target cache size converted to expert slots at the expert's own size.
+        kv_per_token = d["kv_bytes_per_token_layer"] * d["kv_layers"]
+        expert_bytes = round(d["expert_mb"] * 1e6)
+        out = [
             ("experts_per_layer_repo", EXPERTS_PER_LAYER - row["fork"]["split"]),
             ("experts_per_layer_measured", measured),
             ("strata_experts_per_layer", per_layer),
             ("experts_short", per_layer - measured),
+            ("trunk_gib", round(d["trunk_mib"] / 1024, 1)),
         ]
+        for label in ("65536", "32768"):
+            freed = (d["kv_cells_measured"] - d[f"kv_cells_{label}"]) * kv_per_token
+            slots = freed // expert_bytes
+            gain = round(slots / MOE_LAYERS)
+            after = measured + gain
+            out += [
+                (f"freed_gb_{label}", round(freed / 1e9, 2)),
+                (f"slots_{label}", slots),
+                (f"gain_{label}", gain),
+                (f"experts_after_{label}", after),
+                (f"short_{label}", per_layer - after),
+            ]
+        return out
     if rid == "M2-churn":
         s, f = row["strata"], row["fork"]
         measured = round(d["measured_swaps_per_adaptation"] / s["adapt_every"], 1)
+        rate = round(d["promotions_t29"] / d["steps_t29"], 2)
         return [
             ("swaps_per_round_cap", s["adapt_swaps"] // s["adapt_every"]),
             ("swaps_per_round_measured", measured),
             ("sweep_swaps_per_step", round(f["sweep_max"] / f["sweep_interval"], 3)),
             ("promotions_per_step_t27", round(d["promotions_t27"] / d["ladder_steps"], 3)),
             ("churn_ratio", round(measured / d["promotions_per_step_t27"])),
-            ("promotions_per_step_t29", round(d["promotions_t29"] / d["steps_t29"], 2)),
+            ("promotions_per_step_t29", rate),
+            # The raise the review quotes: the t29 arm's rate over the t27 arm's, on the same ladder.
+            ("budget_raise_ratio", round(rate / d["promotions_per_step_t27"])),
         ]
     if rid == "M3-miss-split":
         gate = row["fork"]["stream_min_rows"]
@@ -601,9 +681,19 @@ def _derived(row: dict) -> list[tuple[str, object]]:
             ("cache_mib", d["cache_rows"] * d["row_bytes"] // (1 << 20)),
         ]
     if rid == "M7-deploy":
+        cells = d["kv_vram_tokens_measured"]
+        fork_gb = cells * d["fork_kv_bytes_token_layer"] * d["kv_layers"] / 1e9
+        whole_gb = cells * d["strata_kv_bytes_token_layer"] * d["kv_layers"] / 1e9
+        resident_gb = d["kv_resident_tokens_strata"] * d["strata_kv_bytes_token_layer"] \
+            * d["kv_layers"] / 1e9
         return [
-            ("kv_ratio", d["kv_vram_tokens_measured"] // d["kv_resident_tokens_strata"]),
+            ("kv_ratio", cells // d["kv_resident_tokens_strata"]),
             ("batch_delta", d["batch_fork"] - d["batch_strata"]),
+            ("fork_kv_gb", round(fork_gb, 2)),
+            ("strata_kv_whole_gb", round(whole_gb, 2)),
+            ("strata_kv_whole_gib", round(whole_gb * 1e9 / (1 << 30), 2)),
+            ("strata_kv_resident_gb", round(resident_gb, 2)),
+            ("kv_vram_delta_gb", round(fork_gb - resident_gb, 2)),
         ]
     return []
 
