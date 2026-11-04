@@ -690,7 +690,9 @@ Only experts whose arena chunk is page-locked can be promoted (`MoeCpuHost.promo
 the driver runs out of pinned memory, or where `EXL3_MOE_PINNED_ARENA_GIB` caps it, the experts
 past that point stay CPU-computed and keep using the sweep. Because the arena fills in layer order,
 a pinned prefix makes the first layers promotable and strands the rest — `arena_pin_report()` prints
-the covered layer range on every tier line for exactly this reason.
+the covered layer range on every tier line for exactly this reason, and names the two extremes in
+their own words (`0 of N layer(s) promotable` for a pin that covered none, `all N` when nothing is
+stranded) so a total miss cannot read as an ordinary line.
 
 ### `EXL3_MOE_CPU_PROMOTE_BUDGET` (default: `6`)
 

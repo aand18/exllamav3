@@ -1823,7 +1823,13 @@ class MoeCpuHost:
     def arena_pin_report(self):
         """Arena pin state in one phrase, for the tier-stats line: how much of the arena is
         page-locked, over how many chunks, which layers that makes promotable, and whether the
-        explicit budget or the driver set the limit"""
+        explicit budget or the driver set the limit.
+
+        The promotable count is printed in all three cases - none, some, all - because a phrase that
+        appears only for the partial case cannot be told apart from a pin that covered no layer at
+        all: both print nothing, and only one of them voids the experiment. The total is the layers
+        that have acked expert blocks, not `len(layer_blocks)` (which counts the ones still empty),
+        so "all" means every layer that could promote did."""
         if not self.pinned:
             return "pinned arena off"
         pinned = [v for v in self.arena_views if v is not None]
@@ -1834,9 +1840,14 @@ class MoeCpuHost:
         text = (f"arena {self.arena_pinned_bytes / (1 << 20):.0f} MiB pinned in {len(pinned)} of "
                 f"{len(self.arena_views)} chunk(s), {limit}")
         layers = self.pinned_layers()
-        if layers and len(layers) < len(self.layer_blocks):
-            text += (f", {len(layers)} of {len(self.layer_blocks)} layer(s) promotable "
+        total = sum(1 for b in self.layer_blocks if b)
+        if not layers:
+            text += f", 0 of {total} layer(s) promotable"
+        elif len(layers) < total:
+            text += (f", {len(layers)} of {total} layer(s) promotable "
                      f"({layers[0]}..{layers[-1]})")
+        else:
+            text += f", all {total} layer(s) promotable"
         return text
 
     def _promo_state(self, device):
