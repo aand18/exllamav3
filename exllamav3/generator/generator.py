@@ -31,12 +31,185 @@ from ..util import profile_opt
 # (launch-all-samplers, one pinned stage, one synchronize) path
 _NO_BATCH_READBACK = False
 
+
+# --- Draft window cost model (EXL3_DRAFT_COST_MODEL) ---------------------------------------------
+#
+# The dynamic draft path shrinks the verified window on a confidence cutoff alone, which answers how
+# far a draft may reach, not what the reach is worth. Every rejected draft still routes the round's
+# experts across all 48 split layers, so on live traffic - where the DFlash2 window accepts 39.6 %
+# of its drafts, 1.58 of 4, against 58.5 % on the benchmark corpus
+# (wiki/plans/v165-STATE.md:203) - a window that is likely to fail pays the CPU expert tier ~2x the
+# expert bytes for the tokens it does return. The model below picks the window by cost instead:
+# score(k) = expected_tokens(k) / expected_ms(k, distinct_experts), and the widest k within
+# `_DRAFT_WINDOW_SLACK` of the best score wins.
+#
+# ACCEPTANCE PRIOR. T14 is the only per-context acceptance evidence this box has. Its live log
+# (760,980 drafts, 39.6 % accepted; wiki/plans/v165-reports/T14-config-catalog.md:48) is bucketed by
+# prompt length with a median acceptance per bucket (T14:40-46):
+#
+#     <16k  64.7 %   |   16-64k  48.9 %   |   64-128k  43.1 %   |   128-200k  42.4 %   |   >200k  39.5 %
+#
+# Those five medians are the curve, interpolated linearly at each band's centre and clamped outside;
+# the plan asked for the two aggregate points (39.6 % live at the long-context end, 58.5 % corpus at
+# the short end, STATE:203) and T14 carries more than that, so the per-bucket medians are used and
+# the corpus aggregate is not mixed into them - it is a different workload measured at a different
+# length. Band centres are the midpoint of each bucket, the last one capped at the served 262144-token
+# cache. THE MODEL IS ONLY AS GOOD AS THESE POINTS: there is no measured per-band acceptance curve by
+# position, no per-position decline, and no acceptance data at all for the 200k-262k tail.
+_DRAFT_ACCEPT_BANDS = (
+    (8_192, 0.647),     # <16k
+    (40_960, 0.489),    # 16-64k
+    (98_304, 0.431),    # 64-128k
+    (163_840, 0.424),   # 128-200k
+    (229_376, 0.395),   # >200k, centre capped at the 262144-token cache
+)
+
+# The band medians are acceptance per drafted token over the served 4-position window, so they invert
+# to a per-position probability at that width
+_DRAFT_ACCEPT_WINDOW = 4
+
+# COST. expected_ms(k, d) = _DRAFT_STEP_MS + _DRAFT_EXPERT_ROW_MS * d * k, in milliseconds:
+#
+#   _DRAFT_STEP_MS        the fixed cost of a round - the drafter's own forward over the block, the
+#                         sampler, the row bookkeeping - which a wider window does not buy more of
+#   _DRAFT_EXPERT_ROW_MS  one (row, distinct expert) of CPU expert work, summed over the 48 split
+#                         layers: doc/specter-moe.md:61 measures 44 us per expert on this box's
+#                         sibling engine, so 50 us is that order of magnitude with the per-row share
+#                         folded in
+#
+# Both are order-of-magnitude, not profiled: no pass on this box has split a speculative round into
+# a fixed part and a per-row expert part, and the ratio between them is exactly what the arm this
+# knob exists for has to measure. The ratio matters more than either value: at the long-context end
+# the expert term is what makes a wide, likely-to-fail window expensive, which is the defect.
+_DRAFT_STEP_MS = 1.0
+_DRAFT_EXPERT_ROW_MS = 0.05
+
+# The widest window whose score is within this fraction of the best one wins, so a tie goes to the
+# window that returns more tokens
+_DRAFT_WINDOW_SLACK = 0.02
+
+# Share of a round's routed slots that are DISTINCT experts: the live round routes 10 experts across
+# 5 rows in 48 layers and the plan prices its long-context case at 22 distinct of those 50
+# (wiki/plans/2026-11-04-decode-to-strata.md:141). That 22 is an input to this plan, not a
+# measurement, so the overlap factor is an assumption the arm inherits.
+_DRAFT_EXPERT_OVERLAP = 0.44
+
+_DRAFT_COST_ENV = "EXL3_DRAFT_COST_MODEL"
+
+
+def _draft_acceptance_at(context_len: int) -> float:
+    """
+    T14's live acceptance per drafted token for this context, linearly interpolated between the band
+    centres and clamped outside them. See _DRAFT_ACCEPT_BANDS for the bands and their limits.
+    """
+    if context_len <= _DRAFT_ACCEPT_BANDS[0][0]:
+        return _DRAFT_ACCEPT_BANDS[0][1]
+    for (c0, r0), (c1, r1) in zip(_DRAFT_ACCEPT_BANDS, _DRAFT_ACCEPT_BANDS[1:]):
+        if context_len <= c1:
+            t = (context_len - c0) / (c1 - c0)
+            return r0 + t * (r1 - r0)
+    return _DRAFT_ACCEPT_BANDS[-1][1]
+
+
+def _draft_position_acceptance(rate: float) -> float:
+    """
+    The per-position acceptance `q` that yields `rate` accepted tokens per drafted token at the
+    measured window width: a draft position is accepted while it clears `q`, so expected tokens are
+    q + q**2 + ... + q**_DRAFT_ACCEPT_WINDOW (the product-of-reach model the calibrator uses, see
+    draft_confidence.py:94-110 and the `reach` loop in iterate_draftmodel_gen). Solved by bisection -
+    the sum is monotone in q - so this stays pure Python and needs no numpy at import time.
+    """
+    rate = min(max(rate, 1e-6), 1.0 - 1e-6)
+    lo, hi = 0.0, 1.0
+    for _ in range(60):
+        mid = (lo + hi) * 0.5
+        total, reach = 0.0, 1.0
+        for _ in range(_DRAFT_ACCEPT_WINDOW):
+            reach *= mid
+            total += reach
+        if total < _DRAFT_ACCEPT_WINDOW * rate:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) * 0.5
+
+
+def draft_cost_model_enabled() -> bool:
+    """
+    Whether the draft window may be priced by cost (EXL3_DRAFT_COST_MODEL, 0/1, default 0).
+
+    Read per call, not at import: the knob is default-off, so an unset variable has to hold for the
+    process that never set it, and a test has to be able to flip it.
+    """
+    return os.environ.get(_DRAFT_COST_ENV, "0").strip() not in ("", "0")
+
+
+def choose_draft_window(acceptance: float, context_len: int, distinct_experts: float, base: int) -> int:
+    """
+    Pick the verified draft window by cost instead of by confidence alone. Pure: no environment, no
+    model state, no I/O.
+
+    `acceptance`         the round's own per-position acceptance estimate (the calibrator's mapping
+                         of the drafter's confidence), in (0, 1]
+    `context_len`        K/V position the round runs at, in tokens
+    `distinct_experts`   distinct experts the round routes, per split layer
+    `base`               the widest window the confidence cutoff allows
+
+    Scores every k in 1..base as
+
+        expected_tokens(k) / expected_ms(k, distinct_experts)
+
+    where expected_tokens(k) = q + q**2 + ... + q**k for the effective per-position acceptance q, and
+    expected_ms(k, d) = _DRAFT_STEP_MS + _DRAFT_EXPERT_ROW_MS * d * k (constants documented above).
+    Returns the largest k whose score is within _DRAFT_WINDOW_SLACK of the best, never 0 and never
+    above base.
+
+    q is the lower of the caller's estimate and the T14 band prior for this context: the calibrator's
+    own reach product can be optimistic on a workload it has not seen, and no round may be priced as
+    accepting more than the live log measured at that context. The result is therefore conservative
+    at long context, which is where the defect is.
+    """
+    if base <= 0:
+        return 0
+    if base == 1:
+        return 1
+    q = min(min(max(acceptance, 0.0), 1.0), _draft_position_acceptance(_draft_acceptance_at(context_len)))
+    if q <= 0.0:
+        return 1
+    d = max(float(distinct_experts), 0.0)
+    scores = []
+    tokens, reach = 0.0, 1.0
+    for k in range(1, base + 1):
+        reach *= q
+        tokens += reach
+        scores.append(tokens / (_DRAFT_STEP_MS + _DRAFT_EXPERT_ROW_MS * d * k))
+    floor = max(scores) * (1.0 - _DRAFT_WINDOW_SLACK)
+    for k in range(base, 0, -1):
+        if scores[k - 1] >= floor:
+            return k
+    return 1
+
+
+def cost_model_window(window: int, acceptance: float, context_len: int, distinct_experts: float) -> int:
+    """
+    The window a round should verify: the cost model's choice when EXL3_DRAFT_COST_MODEL is on, and
+    `window` unchanged when it is off. This is the caller's gate - the only place the knob is read.
+    """
+    if not draft_cost_model_enabled():
+        return window
+    return choose_draft_window(acceptance, context_len, distinct_experts, window)
+
+
 class Generator:
 
     # Sparse drafting head and its per-round flag (set up in the constructor when enabled; class-level
     # defaults keep iterate() valid on stubbed instances)
     sparse_head = None
     _sparse_flag = False
+
+    # Experts one token routes, read once for the draft cost model (0 = the target has no routed MoE,
+    # in which case the model has nothing to price)
+    _router_top_k = 0
 
     def __init__(
         self,
@@ -434,6 +607,14 @@ class Generator:
         self._draft_conf_round = None
         if self.dynamic_draft and self.draft_model is not None:
             self.draft_calibrator = DraftConfidenceCalibrator(draft_confidence)
+
+        # Routed experts per token, for the draft cost model (EXL3_DRAFT_COST_MODEL): read from the
+        # first routed MoE module rather than assumed, so a dense target simply never prices a window
+        # (getattr: the generator tests drive stubbed models that carry no module list)
+        for m in getattr(model, "modules", None) or ():
+            self._router_top_k = int(getattr(m, "num_experts_per_tok", 0) or 0)
+            if self._router_top_k:
+                break
 
         # Sparse drafting head over a frequency-selected vocabulary subset (layer-split mode only)
         self.sparse_head = None
@@ -1283,6 +1464,62 @@ class Generator:
         return self.draft_ids_pinned[:, :window]
 
 
+    def _round_context_len(self) -> int:
+        """Longest K/V position in the batch: the context the round's acceptance is priced at."""
+        ctx = 0
+        for job in self.active_jobs:
+            if not job.is_prefill_done():
+                continue
+            for seq in job.sequences:
+                ctx = max(ctx, int(seq.kv_position))
+        return ctx
+
+
+    def _round_distinct_experts(self, window: int) -> float:
+        """
+        Distinct experts one round routes per split layer, for the draft cost model: the router's
+        top-k over the rows the round processes (window + 1: the drafted tokens and the token the
+        round starts from), times the share of those slots that are distinct
+        (_DRAFT_EXPERT_OVERLAP). Per row, not per batch, because a batch multiplies the tokens and
+        the expert rows alike and would otherwise shrink the window for no reason a single stream
+        shares. 0 when the target routes nothing, which switches the model off.
+        """
+        if self._router_top_k <= 0:
+            return 0.0
+        return _DRAFT_EXPERT_OVERLAP * self._router_top_k * (window + 1)
+
+
+    def _cost_model_window(self, window: int, conf) -> int:
+        """
+        The window to verify this round when EXL3_DRAFT_COST_MODEL is on, else `window` unchanged -
+        the default path takes this call and keeps the configured window byte for byte.
+
+        `conf` is the round's per-position draft confidence ([rows, positions], the same tensor the
+        confidence cutoff above reads). The round's acceptance estimate is its calibrated geometric
+        mean per position (the mapping at draft_confidence.py:94-110), taken over the most confident
+        row because the verification pass is rectangular and the cutoff above already takes the
+        longest cut across rows. Nothing is estimated without a calibrator: a round with no labels
+        keeps the cutoff's window.
+        """
+        if not draft_cost_model_enabled() or conf is None or self.draft_calibrator is None:
+            return window
+        if window <= 1:
+            return window
+        distinct = self._round_distinct_experts(window)
+        if distinct <= 0.0:
+            return window
+        cal = self.draft_calibrator
+        acceptance = 0.0
+        for row in conf[:, :window].float().tolist():
+            if not row:
+                continue
+            reach = 1.0
+            for v in row:
+                reach *= cal.estimate(v)
+            acceptance = max(acceptance, reach ** (1.0 / len(row)))
+        return cost_model_window(window, acceptance, self._round_context_len(), distinct)
+
+
     # TODO: Refactor, share code with other draft fns
     def iterate_draftmodel_dflash_gen(self, results: list, window: int):
 
@@ -1383,6 +1620,11 @@ class Generator:
             if w_used == 0:
                 return None
             window = w_used
+            # Cost-modelled window (EXL3_DRAFT_COST_MODEL=1): the cutoff above decides how far a
+            # draft may reach, this decides whether the reach is worth the CPU expert rows it costs.
+            # Off by default, in which case the window stays exactly what the cutoff chose.
+            window = self._cost_model_window(window, conf[:, :w_used])
+            self._draft_conf_round["window"] = window
 
         self.draft_ids_pinned[:batch_size, :window].copy_(new_ids[:batch_size, :window])
         return self.draft_ids_pinned[:, :window]

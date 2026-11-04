@@ -359,6 +359,20 @@ samples from the same distribution. Stacks the collapse does not recognize fall 
 step-by-step path by design. Set to `0` to disable collapsing entirely, e.g. for A/B validation
 against the reference implementation.
 
+## Speculative decoding
+
+### `EXL3_DRAFT_COST_MODEL` (default: `0`)
+
+Price the verified draft window by cost instead of by confidence alone. With the knob on, the DFlash2
+path takes the window the confidence cutoff allows as a ceiling and picks the widest one whose
+`expected_tokens(k) / expected_ms(k, distinct_experts)` score is within 2 % of the best, where the
+expected tokens follow the per-position survival curve (a position is accepted while it clears one
+acceptance probability) and the round's cost is a fixed step cost plus per-row CPU expert work. The
+acceptance is the lower of the round's calibrated estimate and T14's live per-band acceptance for this
+context, so a long context cannot be priced as if it accepted like the corpus. Off (unset or `0`), the
+window is exactly what the confidence cutoff chose. Read per call rather than at import; the constants
+and their provenance are documented above `choose_draft_window` in `exllamav3/generator/generator.py`.
+
 ## CPU MoE offload
 
 Experimental: `-mcl`/`--moe_cpu_offload` (main model) and `-dmcl`/`--draft_moe_cpu_layers`
