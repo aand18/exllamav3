@@ -276,10 +276,32 @@ def test_pin_report_states_the_promotable_range():
     assert "2 of 4 layer(s) promotable (0..1)" in report
 
 
+def test_pin_report_states_zero_and_all_layers_explicitly():
+    # The two extremes are the cases the phrase has to separate: a pin that covered no layer voids an
+    # experiment, and a pin that covered every layer is the settled policy. Printing nothing for
+    # either (the old behaviour) reads the same as "partial", the one case that did print
+    host = _arena_host([[(2, 0)], [(2, 4096)]], [[_expert(2)], [_expert(2)]], pinned_chunks = [0, 1])
+    assert "0 of 2 layer(s) promotable" in host.arena_pin_report()
+    host = _arena_host([[(0, 0)], [(0, 4096)]], [[_expert(0)], [_expert(0)]], pinned_chunks = [0, 1])
+    assert "all 2 layer(s) promotable" in host.arena_pin_report()
+
+
+def test_pin_report_counts_only_layers_that_acked_blocks():
+    # The total is the layers that can promote at all, not len(layer_blocks): a layer with no blocks
+    # yet (or one the arena never received) cannot promote at any budget and must not be counted
+    # against the phrase's denominator, or the same pin would read "2 of 3" here and "all 2" on a
+    # box where that layer had acked
+    host = _arena_host([[(0, 0)], None, [(0, 4096)]], [[_expert(0)], None, [_expert(0)]],
+                       pinned_chunks = [0, 1])
+    assert "all 2 layer(s) promotable" in host.arena_pin_report()
+
+
 def test_pin_report_says_nothing_about_a_range_when_nothing_is_stranded():
     host = _arena_host([[(0, 0)], [(0, 4096)]], [[_expert(0)], [_expert(0)]], pinned_chunks = [0, 1])
     report = host.arena_pin_report()
-    assert "driver limit" in report and "promotable" not in report
+    # Every layer promotable: it says "all", and no range, because there is no stranded layer to name
+    assert "driver limit" in report and "all 2 layer(s) promotable" in report
+    assert "promotable (" not in report
     # And an arena that is not pinned at all says so instead of reporting zero layers
     host.pinned = False
     assert host.arena_pin_report() == "pinned arena off"
