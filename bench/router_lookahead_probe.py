@@ -525,8 +525,15 @@ class RouterLookaheadProbe:
         pre = st.pre.reshape(-1, H)
         post = st.post.reshape(-1, H)
         if pre.shape[0] != st.sel.shape[0]:
+            # The two common causes are different and the message must not blur them: a deferred
+            # residual broadcast onto a decode row (the 4-stream hyper-connection this model carries)
+            # versus a hook that captured the wrong tensor. Naming the ratio is what tells them apart.
+            ratio = (pre.shape[0] / st.sel.shape[0]) if st.sel.shape[0] else None
+            hint = (f" - the input carries {ratio:g} rows per routed row, which is the shape of a "
+                    f"multi-stream residual, and this probe does not know the stream collapse the "
+                    f"block applies after attention") if ratio and ratio == int(ratio) and ratio > 1 else ""
             self._fail(st, f"row mismatch: {pre.shape[0]} pre-attention rows against "
-                           f"{st.sel.shape[0]} routed rows")
+                           f"{st.sel.shape[0]} routed rows{hint}")
             return
 
         # The layer's own router input pipeline, with the pre-attention residual substituted for the
