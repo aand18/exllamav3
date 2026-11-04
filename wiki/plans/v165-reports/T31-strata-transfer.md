@@ -91,10 +91,10 @@ The arithmetic, spelled out:
 
 | step | number | source |
 |---|---|---|
-| experts per layer on the CPU at the measured regime | 512 − 381 = **131** | `results/passes.csv`, t27/t29 `args` (`-mcs 381`) |
-| … at this worktree's regime | 512 − 376 = **136** | `bench/windows/state.json:7` |
+| experts per layer **on the GPU** at the measured regime (the CPU tail keeps 381) | 512 − 381 = **131** | `results/passes.csv`, t27/t29 `args` (`-mcs 381`) |
+| … **on the GPU** at this worktree's regime (CPU tail 376) | 512 − 376 = **136** | `bench/windows/state.json:7` |
 | expert bytes per expert | ≈1.91 MB (47.03 GB / 512 / 48) | note 1 §M1, from `quantization_config.json` |
-| the fork's expert tier | 131 × 48 × 1.91 MB = **12.0 GB** | derived |
+| the fork's experts on the card | 131 × 48 × 1.91 MB = **12.0 GB** | derived |
 | Strata's expert tier | 8301 slots / 48 layers = **173/layer**, 15.74 GiB | Strata's `logs/server-…err.log:390,395` |
 | KV bytes per token per layer, fork at `-cq 4,4` | 16 groups × (4+4) bits × 4 B = 512 B + 2 × 16 fp16 scales × 2 B = 64 B + 320 B fp16 indexer planes = **896 B** | `cache/quant.py:36-47`, `cache/qsa.py:16-31`, config (`2` KV heads × `256` dims, `indexer_head_dim 128`, ratio `4`) |
 | … per token, 12 full-attention layers | 896 × 12 = **10 752 B** | `full_attention_interval: 4` of 48 layers |
@@ -105,6 +105,11 @@ The arithmetic, spelled out:
 | still short of Strata | 173 − 154 = **19**; 173 − 158 = **15** experts/layer | derived |
 | reaching 80 % by residency | 410 × 48 × 1.91 MB = **37.6 GB ≈ 38 GB** | derived |
 | VRAM the card has | 24 564 MiB, of which the trunk alone is 17 551 MiB = **17.1 GiB** | `bench/size_check.py` output, t29 artefact §1 |
+
+`-mcs` is the **CPU** tail (`moe_cpu_split`: "run the TAIL N routed experts of every eligible
+block-sparse MoE layer on the CPU", `model_init.py:68` of the venv's engine), so every fork-side
+"experts per layer" figure above is the card's: the worker keeps `-mcs` experts and the GPU holds
+512 − `-mcs`.
 
 Note 1's own M1 verdict says the same levers are worth "≈500-650 more expert slots ≈ +10-13 experts per
 layer" (`/home/dev/research/strata-vs-exllamav3-2026-11-02.md:156-157`, repeated at `:492`), and that
@@ -117,9 +122,12 @@ mechanism (28.4 % of reads from an 8000-slot static profile, note 2 §2.2).
 So the levers are real but bounded: they close 23-27 of the 42-expert gap — about 55-64 %, not the
 "third" an earlier draft of this section claimed — and the rest is not a setting. Strata reaches
 79–95 % coverage *from* a 34 %-of-experts tier because the tier follows the conversation, which is
-M2's mechanism, and the fork's static prefix has no such follower. Passing `split 381 → 376` in the
-other direction makes it worse, not better (136 experts, 3 % of the tier given away), which is why the
-row states both regimes rather than quietly picking one.
+M2's mechanism, and the fork's static prefix has no such follower. Moving the split the other way is
+not a loss either: `-mcs` counts the **CPU** tail (`model_init.py:68`), so `381 → 376` keeps
+512 − 376 = **136** experts per layer on the card against 131 — 3.8 % *more* residency — and hands the
+worker 5 × 48 × 1.91 MB ≈ 0.44 GB of arena back in exchange for the same bytes of VRAM. That is why
+the row states both regimes rather than quietly picking one, and why a split change is not a lever of
+its own in §8: it is where the cache lever's freed bytes go.
 
 ## 2. M2-churn — the unit trap: 15 swaps/round against 0.20/step
 
@@ -172,12 +180,16 @@ The arithmetic:
 - a verify window is at most `num_draft_tokens` + 1 = **4 rows** wide on the fork's deployed regime; the
   gate is 32: **8× short**, 28 rows short (`derived.rows_short`).
 - the second gate is per expert: an expert qualifies for staging at `stream_t = 8` assigned tokens
-  (`moe_cpu_host.py:139`); 4 rows can route an expert at most 4 times, so **no decode expert can ever
-  qualify** even after the row gate is dropped.
-- therefore the arm that tests the fork's half needs *both* env deltas — the one this report names,
-  `EXL3_MOE_STREAM_MIN_ROWS=2`, and `EXL3_MOE_STREAM_T=2` — and it is still an experiment, not a port:
-  the fork's own calibration says 4 rows lost to 8 at prefill sizes (`:1078-1118`), which is a
-  prefill measurement and does not transfer to a 4-row window either way.
+  (`moe_cpu_host.py:139`, applied at `:2009`), and an explicit `EXL3_MOE_STREAM_T` bypasses the
+  bandwidth calibration that would otherwise raise it (`:1726-1727`); 4 rows can route an expert at
+  most 4 times, so **no decode expert can ever qualify** even after the row gate is dropped.
+- therefore the arm that tests the fork's half is **two variables by design**, not an untidy command:
+  `EXL3_MOE_STREAM_MIN_ROWS=2` opens the path and `EXL3_MOE_STREAM_T=2` is what makes the second gate
+  reachable at a 4-row window. Dropping either one is a null arm — with `stream_t` still 8 no expert
+  qualifies, and without the row gate the call never reaches the per-expert test — so the pair is the
+  smallest delta that can move the mechanism at all. It remains an experiment, not a port: the fork's
+  own calibration says 4 rows lost to 8 at prefill sizes (`:1078-1118`), which is a prefill
+  measurement and does not transfer to a 4-row window either way.
 
 The exact command, if the operator consents (it stops the served model; restore per T16 §8):
 
@@ -313,7 +325,7 @@ mechanism, and its run ids appear nowhere in this report.
 | **M1-budget** | `unmeasured` | the *pin* half: `t29-C1-pin-unset-20261103-221302` **72.347 %** pooled coverage against `t29-A1-pin-off-20261103-220854` **31.760 %** (+40.59 points; the repeats agree: C2 72.331, A2 31.735), with `arena 30720 MiB pinned in 30 of 34 chunk(s), driver limit, 42 of 48 layer(s) promotable (0..41)` | expert bytes in page-locked host RAM, with promote-on-miss filling the spare GPU slots, is worth +40.59 points of coverage at one context — the residency half of the row, measured | the row's own three levers moved in **no** arm: all 17 t27/t29 passes carry `-mcs 381`, and the 16 `perf` arms carry `-cs 262144` (the one `spec_decode` arm sizes its cache from `draft.spec_decode_cache_size`), so 131 of 512 experts/layer is the only residency point ever run (§8 prices the arm) |
 | **M2-churn** | `t29-C1-pin-unset-20261103-221302` | **8 669** promotions by step 3 584 = **2.42/step** (C2: 8 646, 0.27 % below); promote-on-miss hook **2.318 ms/step** mean over 28 windows (1.39 to 4.23) against 0.201 promotions/step and ~1.05 ms/step at the 8 GiB arm | the rate and its price are both measured in one session: 12× the t27 budget, 2.3 ms of a ~25.9 ms step | whether the traffic pays: TG at 130816 is **+1.13 %** against a 4.6 % repeat spread — unresolved, not absent |
 | **M3-miss-split** | `unmeasured` | nothing: no row of `passes.csv` (186 rows, every campaign) sets `EXL3_MOE_STREAM_MIN_ROWS` or `EXL3_MOE_STREAM_T` in its `env` | the arithmetic (a 4-row window against a 32-row gate, and a per-expert gate at 8) stands on the sources alone; nothing contradicts it and nothing supports it | the arm: one `-Env` string, `t31-M3-rows2` (§8). **`unmeasured` — needs an arm** |
-| **M4-spec-yield** | `unmeasured` | the campaigns carry no draft — every t27/t29 `perf` arm's `args` ends `-sd`, and `perf.py` registers no draft flag, while the campaign's only draft arm is the failed `t27-A-base` — **but the harness's `results/arms.csv` does hold acceptance**: `t7-dflash2-w4-20261030-071928` **2.40 accepted of 4.00 drafted** over 8 rounds, `t16-q4-ref2-20261102-172722` **2.35 of 4.00**, `t19-qdrafter-381-20261102-194803` **2.17 of 4.00**, and `t7-dflash2-w6-20261030-072942` **2.94 of 6.00** | the fork's window yield at 4 drafted rows is 2.2 to 2.4 accepted drafts per round — the row's own range, produced by this harness | the *unit*: `acc` is accepted draft tokens per verification round (`spec_decode.py:142-151`), so tokens per round is 1 + acc = 3.17 to 3.40, and §4's ratio against Strata's 2.5–3.5 depends on which unit Strata's log prints. A window-4 arm at the current regime settles it (§8) |
+| **M4-spec-yield** | `unmeasured` | the campaigns carry no draft — every t27/t29 `perf` arm's `args` ends `-sd`, and `perf.py` registers no draft flag, while the campaign's only draft arm is the failed `t27-A-base` — **but the harness's `results/arms.csv` does hold acceptance**: `t7-dflash2-w4-20261030-071928` **2.40 accepted of 4.00 drafted** over 8 rounds, `t7-dflash2-w6-20261030-072942` **2.94 of 6.00**, and two later 4-row draft repeats whose `-dm` is confirmed DFlash2 in `passes.csv` — `t16-q4-ref2-20261102-172722` **2.35 of 4.00** (`-dm …-DFlash2`) and `t19-qdrafter-381-20261102-194803` **2.17 of 4.00** (`-dm …-DFlash2-exl3`, the exl3-quantized drafter, which is why its tag is `qdrafter`) | the fork's window yield at 4 drafted rows is 2.2 to 2.4 accepted drafts per round — the row's own range, produced by this harness | the *unit*: `acc` is accepted draft tokens per verification round (`spec_decode.py:142-151`), so tokens per round is 1 + acc = 3.17 to 3.40, and §4's ratio against Strata's 2.5–3.5 depends on which unit Strata's log prints. A window-4 arm at the current regime settles it (§8) |
 | **M5-ple** | `unmeasured` | one of the three defences is measured and it is the one that fails: the RAM-resident table (`-ngr` / `EXL3_NGRAM_STREAM=0`) breached the RAM floor 27 s in with 637 MB free (tag `t12-ngram-ram`, T12 §2); the PLE gather knob that does exist, `EXL3_PLE_SUB_CHUNK`, was A/B'd in the same campaign — `t12-ple1024-20261030-105757` (default) against `t12-ple512-20261030-104213` and `t12-ple0-20261030-103851`, prefill only, inside a 2 % band | two of Strata's three defences are either absent from this engine or not a lever at decode: the RAM copy does not fit, and the sub-chunk is a prefill knob | the row cache itself: no arm, because no such object exists in this fork (`modules/row_table.py:282-312` goes straight to `ext.ngram_gather_cpu`). The price is code, not a flag (§8) |
 | **M7-deploy** | `unmeasured` | no arm varied batch or KV residency: every t27/t29 `args` carries `-ambs 2`, a regime flag `-Extra` may not restate, and `sysmem_kv_cache 0` is a tabbyAPI setting no pass reads. The only concurrency measurement on the box is Strata's own (`server log:378` ff.): 49.8 T/s on the 19 497-token stream against 8.1 on the 551-token one sharing the window, vs 50.5 / 61.3 / 57.2 single | that the divergence is real (2.82 GB against 0.23 GB of KV in VRAM) and that its *performance* claim is not this harness's to make | batch and residency on the fork: a served-config edit or a second instance, not an arm — so this row stays `unmeasured` by construction (§6, §8) |
 
@@ -364,10 +376,13 @@ list (§10) carries the A/B that would measure it.
 **§4's "never measured by this harness" is wrong, and its own range comes from the harness.**
 `results/arms.csv` holds DFlash2 acceptance rows from the T7 campaign: 2.40 accepted of 4.00 drafted
 (`t7-dflash2-w4-20261030-071928`), 2.94 of 6.00 (`t7-dflash2-w6-20261030-072942`), and the 4-row
-point repeats at 2.35 and 2.17 in later campaigns. So the fork's spec-yield *has* been measured by
-this harness; what no t27/t29 arm carried is a draft. The verdict does not move — the row still
-diverges on the mechanism, a hard ceiling of 4 against a policy that chooses a window per round — but
-the sentence that overstated the gap is corrected, and the row's 2.2–2.4 now has a citation.
+point repeats at 2.35 (`t16-q4-ref2-20261102-172722`) and 2.17 (`t19-qdrafter-381-20261102-194803`,
+a draft repeat under the `qdrafter` tag) in later campaigns. Both `-dm` values are checked against
+`passes.csv` rather than assumed: `…\Qwen3.8-Flash-Next-DFlash2` for t16 and `…-DFlash2-exl3` for t19,
+the exl3-quantized drafter. So the fork's spec-yield *has* been measured by this harness; what no
+t27/t29 arm carried is a draft. The verdict does not move — the row still diverges on the mechanism, a
+hard ceiling of 4 against a policy that chooses a window per round — but the sentence that overstated
+the gap is corrected, and the row's 2.2–2.4 now has a citation.
 
 **§5's 90 B and 26.8 GiB are Strata's table, not this fork's.** Note 1 puts Strata's table at
 `IQ4_NL`, 90 B/row, 26.8–28.8 GB (`/home/dev/research/strata-vs-exllamav3-2026-11-02.md:65`), and the
@@ -389,7 +404,7 @@ live traffic, every one of these passes stops the served model, and restoring it
 | row | the port is | price | the arm, exactly | measured? |
 |---|---|---|---|---|
 | **M1-budget** | a regime delta: `-CacheSize 32768 -MaxLength 32768 -Split 354`. The split is not a separate decision — it is what the freed 2.47 GB buys (131 → 158 of 512 experts/layer), so a pass that shrinks the cache and keeps `-mcs 381` spends the VRAM on nothing. `sysmem_kv_cache` is **1 line** in the served config (`tabbyAPI/config.yml:441`, default `0`) and **no pass can measure it**: `perf.py` loads the model directly, so tabbyAPI is not in the loop | 3 harness flags + 1 served-config line | `-Tag t31-M1-cs32k -Runner perf -CacheSize 32768 -MaxLength 32768 -Split 354` | `unmeasured` |
-| **M3-miss-split** | an env delta, and it is two variables: `EXL3_MOE_STREAM_MIN_ROWS=2` **and** `EXL3_MOE_STREAM_T=2` — §3 shows the row gate alone is inert for a 4-row window because the per-expert gate is 8 | one `-Env` string; 0 flags, 0 lines of code | `-Tag t31-M3-rows2 -Runner perf -MaxLength 131072 -Env "EXL3_MOE_TIER_STATS=1,EXL3_MOE_STREAM_MIN_ROWS=2,EXL3_MOE_STREAM_T=2"` | `unmeasured` — needs an arm |
+| **M3-miss-split** | an env delta, and it is **two variables by design**: `EXL3_MOE_STREAM_MIN_ROWS=2` **and** `EXL3_MOE_STREAM_T=2`. §3 is the arithmetic: the row gate alone is inert for a 4-row window because the per-expert gate (`stream_t`, `moe_cpu_host.py:2009`) is 8, and an explicit `EXL3_MOE_STREAM_T` is what bypasses the bandwidth calibration that would otherwise hold it up (`:1726-1727`), so either variable alone spends a pass to change nothing | one `-Env` string; 0 flags, 0 lines of code; needs the operator's consent like every arm here — the pass stops the served model | `-Tag t31-M3-rows2 -Runner perf -MaxLength 131072 -Env "EXL3_MOE_TIER_STATS=1,EXL3_MOE_STREAM_MIN_ROWS=2,EXL3_MOE_STREAM_T=2"` | `unmeasured` — needs an arm |
 | **M4-spec-yield** | a runner switch, not a flag: `-Runner spec_decode` is the only runner the harness emits draft args for (`-dm`/`-ndt`/`-dds` come from `state.active.draft`; `-MaxLength` is stripped for it), and the deployed state's `knob_arms_disable_swap: true` makes the harness set `EXL3_MOE_CPU_SWAP=0` by itself — the guard that killed the campaign's only draft arm (`t27-A-base`, `status=fail` 42 s in, no ARM line) | 1 word, plus `-Extra "-dstats <file>"` if per-position records are wanted | `-Tag t31-M4-w4 -Runner spec_decode` | yield already in `arms.csv` (2.17 to 2.40 of 4); the unit question is not, so the arm re-measures at the current regime |
 | **M5-ple** | code: a bounded row cache in front of `_gather_rows` (`exllamav3/modules/row_table.py:282-312`), keyed on the resolved uids and capped in rows — **≈50 lines in that file**, no new dependency and no kernel change. Neither knob that exists is the row cache: `EXL3_PLE_SUB_CHUNK` is a prefill gather knob (T12, ~2 % bands) and `-ngr`/`EXL3_NGRAM_STREAM=0` was measured unavailable (RAM floor breached in 27 s, T12 §2) | ≈50 lines of engine code | none until the code exists; then the arm is T12's repeat-heavy corpus at `-MaxLength 131072` | `unmeasured` |
 
@@ -404,10 +419,11 @@ Three notes on the table:
   31 010 MiB, `verdict FITS`. The lever is self-financing — the cache drops 2911 → 559 MiB and the
   trunk grows 17 551 → 19 916 MiB, i.e. the same bytes move from KV to experts — so the arm measures
   coverage and throughput, not whether the box can hold it.
-- The M3 arm as written carries one variable more than the plan's spelling, which named
-  `EXL3_MOE_STREAM_MIN_ROWS=2` alone. §3 is the reason: with `stream_t 8` still in force no decode
-  expert can qualify, so the shorter form would spend a pass to change nothing. Run the line as
-  printed.
+- The M3 arm carries two variables where the plan's spelling named `EXL3_MOE_STREAM_MIN_ROWS=2`
+  alone. That is the mechanism, not an untidy command: with `stream_t 8` still in force no decode
+  expert can qualify (the per-expert gate, `moe_cpu_host.py:2009`), and the row gate alone never
+  reaches that test, so a one-variable arm would be a null. §3 is the arithmetic; run the line as
+  printed, and only with the operator's consent — like every arm here, it stops the served model.
 
 ## 9. The two regime files (R5, widened)
 
@@ -483,7 +499,10 @@ result usable by the next:
 -Tag t31-inst-1 -Runner perf -MaxLength 131072 -Env "EXL3_MOE_TIER_STATS=1"
 -Tag t31-inst-0 -Runner perf -MaxLength 131072 -Env "EXL3_MOE_TIER_STATS=0"
 
-# 2. M3, the fork's half of the miss split: env deltas only, no regime flag, both gates (§3, §8)
+# 2. M3, the fork's half of the miss split: env deltas only, no regime flag, both gates (§3, §8).
+#    Two variables on purpose — `stream_t` is gated per expert (moe_cpu_host.py:2009) and an explicit
+#    value bypasses the bandwidth calibration (:1726), so either one alone is a null arm.
+#    Needs the operator's consent: the pass stops the served model.
 -Tag t31-M3-rows2 -Runner perf -MaxLength 131072 \
   -Env "EXL3_MOE_TIER_STATS=1,EXL3_MOE_STREAM_MIN_ROWS=2,EXL3_MOE_STREAM_T=2"
 #    its control in the same session: the same line with no EXL3_MOE_STREAM_* variables
