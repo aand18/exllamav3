@@ -471,8 +471,11 @@ class RouterLookaheadProbe:
         def forward(x, params, out_dtype = None):
             if not probe.active:
                 return orig(x, params, out_dtype)
-            residual = params.get("residual")
-            st.post = None if residual is None else residual.detach().clone()
+            # The router's input IS this tensor: the MoE module receives the post-attention hidden
+            # state. The first real run showed this architecture does not publish params["residual"]
+            # at the MLP site, so take `x` and keep the residual only as a fallback.
+            post = x if x is not None else params.get("residual")
+            st.post = None if post is None else post.detach().clone()
             st.sel = st.weights = st.router_in = None
             out = orig(x, params, out_dtype)
             probe._evaluate(st)
