@@ -1,10 +1,12 @@
 # T31 — Strata → exllamav3 transfer: the matrix, and its verdicts machine-checked
 
-Written 2026-11-03/04 on `feat/adaptive-tier` (base `165-win-perf`). **No GPU, no torch, no process
-was started for this report:** every number below was already measured, and what is new here is the
-comparison. Six mechanisms (M1, M2, M3, M4, M5, M7) get one row each: the value **both** engines'
-sources state, with the `file:line` it came from, a verdict, the reason for it, and the run id that
-measured it or the literal `unmeasured`.
+Written 2026-11-03/04 on `feat/adaptive-tier` (base `165-win-perf`). **No GPU and no measurement pass
+was started for this report:** every performance number below was already measured, and what is new
+here is the comparison — the one thing executed was `bench/size_check.py`, which reads the
+checkpoint's tensor headers to price a configuration (§8). Six mechanisms (M1, M2, M3, M4, M5, M7) get
+one row each: the value **both** engines' sources state, with the `file:line` it came from, a verdict,
+the reason for it, and the run id that measured it or the literal `unmeasured` — with the run ids and
+their numbers cashed row by row in §7, and what a port would cost in §8.
 
 The matrix is not prose. It lives in `bench/strata_transfer_check.py` as `MATRIX`, and
 `python3 bench/strata_transfer_check.py --check` compares every recorded constant against a
@@ -19,6 +21,14 @@ T16-adaptive-tier.md` §7, and `/tmp/opencode/t29-pin-unset.md`. "Note 1" below 
 `/home/dev/research/strata-vs-exllamav3-2026-11-02.md` (the seven-mechanism note); "note 2" is
 `/tmp/opencode/strata-vs-exllama-research.md` (the coverage-attribution note).
 
+**How evidence is cited here.** A harness run is cited by its run id — tag + UTC stamp — because
+that is the key `results/passes.csv` holds and the key the post gate resolves; its log is
+`logs/perf-<run id>.log`, and written out in full that name is itself read as a run id and reported
+as a missing row. Strata's own log is cited as `server log:<lines>`: it is the 2026-10-29 17:23:52
+one, `server-<stamp>.err.log` under `/mnt/c/Users/yoho/Downloads/UnbiasedStrata/logs/`, stamp
+`20261029-172352`, and the same gate reads that name the same way. Both elisions are of the *name*
+only — the stamp, the run ids and the line numbers are exact.
+
 ## The matrix
 
 `faithful` is the only verdict that may omit a justification; all six rows below carry one, so each
@@ -27,16 +37,21 @@ this branch unless the cell says otherwise.
 
 | mechanism | Strata (value, file:line) | fork (value, file:line) | verdict | justification (short; full text in the row's section) | measured |
 |---|---|---|---|---|---|
-| **M1-budget** — VRAM on the expert tier instead of KV/embedding | `kv_resident 0` (default; deployed run passes 32768) `src/program/generate.cpp:311`, `prefill_chunk 0` `:431`; 8301 slots = **173 experts/layer** of 15.74 GiB, Strata's `logs/server-20261029-172352.err.log:390,395` | `cache_size 131072` `bench/windows/state.json:10`, `cache_quant "2,2"` `:11`, `split 376` `:7` — **measured regime: `-cs 262144 -cq 4,4 -mcs 381`** (`results/passes.csv`, t27/t29 `args`) ⇒ **131 of 512 experts/layer** | `absent` | three levers (cache_size, `sysmem_kv_cache`, split) are worth +23..27 experts/layer, i.e. 131 → 154..158 of 173; 80 % by residency needs ≈38 GB of expert weights on a 24 GiB card (§1) | `unmeasured` |
+| **M1-budget** — VRAM on the expert tier instead of KV/embedding | `kv_resident 0` (default; deployed run passes 32768) `src/program/generate.cpp:311`, `prefill_chunk 0` `:431`; 8301 slots = **173 experts/layer** of 15.74 GiB, Strata's `server log:390,395` | `cache_size 131072` `bench/windows/state.json:10`, `cache_quant "2,2"` `:11`, `split 376` `:7` — **measured regime: `-cs 262144 -cq 4,4 -mcs 381`** (`results/passes.csv`, t27/t29 `args`) ⇒ **131 of 512 experts/layer** | `absent` | three levers (cache_size, `sysmem_kv_cache`, split) are worth +23..27 experts/layer, i.e. 131 → 154..158 of 173; 80 % by residency needs ≈38 GB of expert weights on a 24 GiB card (§1) | `unmeasured` |
 | **M2-churn** — the adaptive tier's cadence and source | `adapt_every 4` `generate.cpp:474`, `adapt_swaps 96` `:497`, `adapt_decay 0.7` `:475`, `slot_pool global` `:382` + `/home/dev/UnbiasedStrata/include/strata/core/expert_cache.hpp:221`, `swap_source ram-copy` `:4590` | `promote_budget 6` `block_sparse_mlp_cpu.py:161`, `ratio 1.5` `:162`, `decay 0.98` `:163`, `spares 4` `:1088`, `sweep_interval 128` `:1208`, `sweep_max 64` `:141`, `sweep_source checkpoint` `:1293` | `diverged` | 15.1 swaps/round (measured) against 0.20/step at the t27 operating point: **75×**, and a checkpoint read per swap against a RAM copy (§2) | `t29-C1-pin-unset-20261103-221302` |
 | **M3-miss-split** — the miss is split CPU/DMA | `pcie_frac -1.0` = the model's own, **0.55 DMA** for native packs `generate.cpp:470` (read by hand: not an extracted key) | `stream_min_rows 32` `model/moe_cpu_host.py:141`; second gate `stream_t 8` `:139` (by hand) | `absent` | a 4-row window is 8× below the gate and 2× below the per-expert gate; the arm that tests it is `EXL3_MOE_STREAM_MIN_ROWS=2` + `EXL3_MOE_STREAM_T=2` (§3) | `unmeasured` |
-| **M4-spec-yield** — what one verify pass buys | MTP ≤3 drafts + prompt lookup, cost-model chosen, `docs/upstream/DETAILS.md:1032-1035`; **2.5–3.5 tokens/window** `logs/server-20261029-172352.err.log:425,444,453` | DFlash2 `num_draft_tokens 4`, `dynamic_draft` shortens only, `generator.py:1128-1146`; **2.2–2.4 of 4 rows** (note 1 §2) | `diverged` | tokens/window = 1 + Σ acceptance, truncated at 4: 1.59× at best, 1.04× at worst; no arm carries a draft (§4) | `unmeasured` |
+| **M4-spec-yield** — what one verify pass buys | MTP ≤3 drafts + prompt lookup, cost-model chosen, `docs/upstream/DETAILS.md:1032-1035`; **2.5–3.5 tokens/window** `server log:425,444,453` | DFlash2 `num_draft_tokens 4`, `dynamic_draft` shortens only, `generator.py:1128-1146`; **2.2–2.4 of 4 rows** (note 1 §2) | `diverged` | tokens/window = 1 + Σ acceptance, truncated at 4: 1.59× at best, 1.04× at worst; no arm carries a draft (§4) | `unmeasured` |
 | **M5-ple** — the n-gram table read on the decode path | row cache 1M rows (≈90 MiB), up to ~82 % of reads, 20–34 % recurrence `include/strata/ngram/ple_reader.hpp:13-16`; issue/collect split `:5-11`; un-hidden gather 2.1–2.6 ms/token `generate.cpp:393-395` | no row cache: `ext.ngram_gather_cpu` per gather `modules/row_table.py:282-312`; `PREFETCH_MIN_TOKENS 256` `:27` declined at `ngram_embedding.py:334`; `advise()` is `posix_fadvise`, a no-op on Windows `row_table.py:208-215` | `absent` | three defences absent; 16 × 90 B = 1440 B/token is the byte scale, Strata's own un-hidden 2.1–2.6 ms/token the ceiling (§5) | `unmeasured` |
 | **M7-deploy** — deployment policy, not an engine property | one request at a time (`batch 0` `generate.cpp:456`; no `--slots`), `--kv-resident 32768` of 262144 `/home/dev/UnbiasedStrata/start-logged.ps1:54` | `max_batch_size 2` (`tabbyAPI/config.yml:217`, outside this tree), `sysmem_kv_cache 0` `:441`, whole cache in VRAM: `cache_size 131072` `bench/windows/state.json:10`, measured `262144` | `diverged` | 2.82 GB of KV + indexer planes in VRAM against Strata's 0.23 GB resident (8× the cells, 2.59 GB of bytes); the one overlapping pair ran 49.8 T/s on the long stream and 8.1 on the short one against 57.2–61.3 single (§6) | `unmeasured` |
 
 Two regime values are recorded twice on purpose (M1, M7): this worktree's `state.json` and the
 deployment's disagree (376/131072/"2,2" against 381/262144/"4,4"), so both are stated and M1's
-"131 of 512" is derived from the **measured** 381 and labelled as such. §7 works the disagreement out.
+"131 of 512" is derived from the **measured** 381 and labelled as such. §9 works the disagreement out.
+
+The `measured` column is what `MATRIX` records and therefore what `--check` prints, unchanged — the
+five `unmeasured` cells are the checker's verdict, not an omission, and §7 cashes each one: the run
+ids, the number they produced, and whether nothing measured the row or something measured a different
+half of it.
 
 `--check` on this tree prints, one line per row:
 
@@ -130,8 +145,8 @@ The two campaign's numbers, as read:
 | source of the bytes | RAM ↔ VRAM exchange, "no file reads" (`generate.cpp:4590`); log: "0 blob reads from the file" | checkpoint re-read per swap (`stc.get_tensor`, `block_sparse_mlp_cpu.py:1293`) | same |
 | what it bought | 79–95 % coverage, 94.1 % in the sweep regime | none: coverage 28.5 % control against 27.7 % (and the column was frozen — T16 §7) | +40.6 points (72.3 vs 31.7), hook 2.318 ms/step |
 
-Sources: `perf-t27-B-pin8-f4-20261103-122212.log` (final counter 710; 28 tier windows = 27 × 128 + 72
-= 3528 steps), `/tmp/opencode/t29-pin-unset.md` §4-§5 (8669 promotions "at step 3584",
+Sources: `t27-B-pin8-f4-20261103-122212` (its last tier line: **710** promotions, 28 windows =
+27 × 128 + 72 = 3528 steps), `/tmp/opencode/t29-pin-unset.md` §4-§5 (8669 promotions "at step 3584",
 `t29-C1-pin-unset-20261103-221302`), `strata-vs-exllama-research.md` §2.2 (the 60.5-swap round).
 
 The unit that made the campaign's first churn estimate 75× too small is this: Strata's 96 is a
@@ -193,11 +208,15 @@ The numbers, and what they do not settle:
 
 Both notes agree on the physics and disagree on the size: note 1 derives 2.5–3.5 against 2.2–2.4 from
 five and four requests; note 2, reading a different session, gets 2.42–2.47 on both sides and calls it
-a wash. That disagreement is recorded here rather than resolved, because neither campaign ran an arm
-with a draft: `-Runner perf` registers no draft flags, so **the fork's spec-yield has never been
-measured by this harness** — the 2.2–2.4 is the served deployment's own log. A verdict of `diverged`
-therefore rests on the mechanism (a hard ceiling of 4 against a policy that chooses a window per
-round), and the timing claim it would support is unmeasured.
+a wash. That disagreement is recorded here rather than resolved, and one thing an earlier draft of this
+section got wrong is corrected in §7.3: **the harness has measured this row** — `results/arms.csv`
+holds DFlash2 acceptance at 2.40 of 4.00 drafted (`t7-dflash2-w4-20261030-071928`) and 2.94 of 6.00
+(`t7-dflash2-w6-20261030-072942`) — so the 2.2–2.4 is a harness column, not only the served
+deployment's log. What *no* arm of either campaign carries is a draft, because `-Runner perf` registers
+no draft flags and draft arguments belong to `-Runner spec_decode`; and `acc` is accepted drafts per
+round, not tokens per window (the closing section, item 9), which is the unit question a fresh arm
+would settle. A verdict of `diverged` therefore rests on the mechanism (a hard ceiling of 4 against a
+policy that chooses a window per round), and the ratio's size is unmeasured while its sign is not.
 
 ## 5. M5-ple — the read the fork does not cache
 
@@ -214,9 +233,15 @@ declines decode-sized inputs (`PREFETCH_MIN_TOKENS` 256 positions, `row_table.py
 byte scale; Strata's own un-hidden gather is 2.1–2.6 ms/token (`generate.cpp:393-395`), which is the
 ceiling on a port, not a promise.
 
+The 90 B/row and 26.8 GiB in that quoted justification are **Strata's** table — IQ4_NL, 90 B/row, the
+size its own reader states (`ple_reader.hpp:3`) — and not this fork's: the fork's table is ≈8.1 bpw
+(~162 B/row, 51.84 GB on disk, 49 439 MiB summed from the checkpoint's own shapes by
+`bench/size_check.py`). §7.3 records the correction; the conclusion does not move, because either
+figure is ~0.3 % of the expert weights a token already reads.
+
 Arithmetic: 2^20 rows × 90 B = 90 MiB per table buys up to 82 % of reads; the fork's per-token traffic
-is 16 rows × 90 B = 1440 B, i.e. ~1.4 KB of the 0.92 GB a token already reads in expert weights — the
-byte traffic is negligible and **the stall is the point**: Strata measured its own un-hidden gather at
+is 16 of its own ~162 B rows, ~2.6 KB, against the 0.92 GB a token already reads in expert weights —
+the byte traffic is negligible and **the stall is the point**: Strata measured its own un-hidden gather at
 2.1–2.6 ms/token against a 9–11 ms token. The row is `absent` rather than `diverged` because the fork
 has the streaming path and none of the three defences (row cache, issue/collect split, keep-alive), so
 the port is ~50 lines in `row_table.py` rather than a translation.
@@ -238,7 +263,7 @@ request at a time (`batch 0` default, `src/program/generate.cpp:456`, and
 `config.yml:441`) — 262144 cells at the measured regime and 131072 in this worktree's `state.json`. Per
 token per layer the two engines agree on the K/V: 576 B (2 heads × 256 dims at 4 bits + fp16 scales)
 = 6912 B/token over 12 layers, 1.81 GB at 262144 cells, which is exactly the log's "K/V in 1.69 GiB of
-pinned RAM" (`/mnt/c/Users/yoho/Downloads/UnbiasedStrata/logs/server-20261029-172352.err.log:378`). The
+pinned RAM" (`server log:378`). The
 fork adds 320 B/token/layer of fp16 indexer planes (896 B/token/layer) and keeps all of it in VRAM:
 2.82 GB. Strata keeps 32768 cells
 resident (0.23 GB) and the other 229376 cells, 1.59 GB, in pinned RAM. So the VRAM delta at one context
@@ -271,7 +296,120 @@ single-stream requests (cold, fully cached, warm) — so two sessions cost more 
 box, a deployment decision rather than an engine property, and the deployed `max_batch_size: 2` was
 never A/B'd by either campaign.
 
-## 7. The two regime files (R5, widened)
+## 7. The evidence, row by row
+
+The five `unmeasured` cells in the matrix are not the same kind of blank, and this section says which
+kind each one is. Every figure below was recomputed on 2026-11-04 from the deployed harness's own
+files — `results/passes.csv`, `results/pp.csv`, `results/tg.csv`, `results/arms.csv` and
+`logs/perf-<run id>.log` — not copied from a report or a note. Nothing was measured for it: the only
+command executed was `bench/size_check.py` (§8), which reads the checkpoint's tensor headers, and no
+GPU work and no pass was started.
+The t29 arms used here are the **second round only**: the first round ended `status=fail` in all four
+arms before a single tier line printed (t29 §2), so it is evidence of an instrument defect, not of a
+mechanism, and its run ids appear nowhere in this report.
+
+| row | `measured` (matrix) | what the runs say | what it settles | what is still open |
+|---|---|---|---|---|
+| **M1-budget** | `unmeasured` | the *pin* half: `t29-C1-pin-unset-20261103-221302` **72.347 %** pooled coverage against `t29-A1-pin-off-20261103-220854` **31.760 %** (+40.59 points; the repeats agree: C2 72.331, A2 31.735), with `arena 30720 MiB pinned in 30 of 34 chunk(s), driver limit, 42 of 48 layer(s) promotable (0..41)` | expert bytes in page-locked host RAM, with promote-on-miss filling the spare GPU slots, is worth +40.59 points of coverage at one context — the residency half of the row, measured | the row's own three levers moved in **no** arm: all 17 t27/t29 passes carry `-mcs 381`, and the 16 `perf` arms carry `-cs 262144` (the one `spec_decode` arm sizes its cache from `draft.spec_decode_cache_size`), so 131 of 512 experts/layer is the only residency point ever run (§8 prices the arm) |
+| **M2-churn** | `t29-C1-pin-unset-20261103-221302` | **8 669** promotions by step 3 584 = **2.42/step** (C2: 8 646, 0.27 % below); promote-on-miss hook **2.318 ms/step** mean over 28 windows (1.39 to 4.23) against 0.201 promotions/step and ~1.05 ms/step at the 8 GiB arm | the rate and its price are both measured in one session: 12× the t27 budget, 2.3 ms of a ~25.9 ms step | whether the traffic pays: TG at 130816 is **+1.13 %** against a 4.6 % repeat spread — unresolved, not absent |
+| **M3-miss-split** | `unmeasured` | nothing: no row of `passes.csv` (186 rows, every campaign) sets `EXL3_MOE_STREAM_MIN_ROWS` or `EXL3_MOE_STREAM_T` in its `env` | the arithmetic (a 4-row window against a 32-row gate, and a per-expert gate at 8) stands on the sources alone; nothing contradicts it and nothing supports it | the arm: one `-Env` string, `t31-M3-rows2` (§8). **`unmeasured` — needs an arm** |
+| **M4-spec-yield** | `unmeasured` | the campaigns carry no draft — every t27/t29 `perf` arm's `args` ends `-sd`, and `perf.py` registers no draft flag, while the campaign's only draft arm is the failed `t27-A-base` — **but the harness's `results/arms.csv` does hold acceptance**: `t7-dflash2-w4-20261030-071928` **2.40 accepted of 4.00 drafted** over 8 rounds, `t16-q4-ref2-20261102-172722` **2.35 of 4.00**, `t19-qdrafter-381-20261102-194803` **2.17 of 4.00**, and `t7-dflash2-w6-20261030-072942` **2.94 of 6.00** | the fork's window yield at 4 drafted rows is 2.2 to 2.4 accepted drafts per round — the row's own range, produced by this harness | the *unit*: `acc` is accepted draft tokens per verification round (`spec_decode.py:142-151`), so tokens per round is 1 + acc = 3.17 to 3.40, and §4's ratio against Strata's 2.5–3.5 depends on which unit Strata's log prints. A window-4 arm at the current regime settles it (§8) |
+| **M5-ple** | `unmeasured` | one of the three defences is measured and it is the one that fails: the RAM-resident table (`-ngr` / `EXL3_NGRAM_STREAM=0`) breached the RAM floor 27 s in with 637 MB free (tag `t12-ngram-ram`, T12 §2); the PLE gather knob that does exist, `EXL3_PLE_SUB_CHUNK`, was A/B'd in the same campaign — `t12-ple1024-20261030-105757` (default) against `t12-ple512-20261030-104213` and `t12-ple0-20261030-103851`, prefill only, inside a 2 % band | two of Strata's three defences are either absent from this engine or not a lever at decode: the RAM copy does not fit, and the sub-chunk is a prefill knob | the row cache itself: no arm, because no such object exists in this fork (`modules/row_table.py:282-312` goes straight to `ext.ngram_gather_cpu`). The price is code, not a flag (§8) |
+| **M7-deploy** | `unmeasured` | no arm varied batch or KV residency: every t27/t29 `args` carries `-ambs 2`, a regime flag `-Extra` may not restate, and `sysmem_kv_cache 0` is a tabbyAPI setting no pass reads. The only concurrency measurement on the box is Strata's own (`server log:378` ff.): 49.8 T/s on the 19 497-token stream against 8.1 on the 551-token one sharing the window, vs 50.5 / 61.3 / 57.2 single | that the divergence is real (2.82 GB against 0.23 GB of KV in VRAM) and that its *performance* claim is not this harness's to make | batch and residency on the fork: a served-config edit or a second instance, not an arm — so this row stays `unmeasured` by construction (§6, §8) |
+
+### 7.1 The four arms, recomputed
+
+`results/passes.csv` + `results/pp.csv` + `results/tg.csv` + the pass's own log, second round, one
+session, interleaved A1, C1, C2, A2:
+
+| | A1 pin off | C1 pin unset | C2 pin unset | A2 pin off |
+|---|---|---|---|---|
+| run id | `t29-A1-pin-off-20261103-220854` | `t29-C1-pin-unset-20261103-221302` | `t29-C2-pin-unset-20261103-221642` | `t29-A2-pin-off-20261103-222022` |
+| `status` / `breach` | ok / 0 | ok / 0 | ok / 0 | ok / 0 |
+| coverage windows | 28 | 28 | 28 | 28 |
+| **coverage, pooled** | **31.760 %** | **72.347 %** | **72.331 %** | **31.735 %** |
+| mean of the 28 windows | 30.989 % | 70.200 % | 70.186 % | 30.975 % |
+| promotable layers | pin off | 42 of 48 (0..41) | 42 of 48 (0..41) | pin off |
+| pin state | pinned arena off | 30 of 34 chunks, 30 720 MiB, driver limit | same | pinned arena off |
+| promotions / demotions | — | 8 669 / 8 669 | 8 646 / 8 646 | — |
+| promote-on-miss hook | — | 2.318 ms/step (1.39 to 4.23) | 2.304 ms/step (1.37 to 4.24) | — |
+| PP 4096, tok/s | 1 853.55 | 2 084.06 | 2 306.32 | 1 940.60 |
+| PP 131072, tok/s | 1 907.20 | 2 245.09 | 2 246.17 | 1 899.26 |
+| TG 130816, tok/s | 36.17 | 38.65 | 38.04 | 39.66 |
+
+The pooled figure is `1 − Σ CPU evaluations / Σ evaluations` over the pass's 28 `expert tier:` lines
+(A1: 2 206 714 of 3 233 760); the mean is the arithmetic mean of the 28 printed percentages.
+
+The two deltas the row set quotes, recomputed from the pairs rather than read: **PP 131072 +17.99 %**
+(C mean 2 245.63 against A mean 1 903.23; the repeats straddle their own mean by 0.02 % on the C side
+and 0.21 % on A), **PP 4096 +15.71 %** (2 195.19 against 1 897.07, the noisier band: C's repeats there
+straddle by 5.06 %, A's by 2.29 %), and **TG 130816 +1.13 %** (38.34 against 37.91). The decode number
+is smaller than the spread between A's own two repeats of identical code — 36.17 and 39.66, i.e.
+4.60 % either side of their mean — so it is a null, not a gain: +40.6 points of coverage bought ~18 %
+of prefill and no provable decode.
+
+### 7.2 The instrument's price: `unmeasured`
+
+The tier instrument produced every coverage figure above, and its own cost is **`instrument cost:
+unmeasured` (all arms carried it)**. The evidence for that is one query over `results/passes.csv`:
+`EXL3_MOE_TIER_STATS=1` appears in the `env` of all 5 `t27` rows and all 12 `t29` rows, and no row of
+the file — 186 rows, `armA` through `t29` — carries `EXL3_MOE_TIER_STATS=0`. There is no arm to
+difference against, so the price is not small-but-known, it is unknown; and the 2.318 ms/step above is
+the promote-on-miss hook's own counter, which is a different cost and must not be read as the
+instrument's. It is not estimated here: an estimate would be a number no arm supports, and the next-arm
+list (§10) carries the A/B that would measure it.
+
+### 7.3 Two corrections this table forced
+
+**§4's "never measured by this harness" is wrong, and its own range comes from the harness.**
+`results/arms.csv` holds DFlash2 acceptance rows from the T7 campaign: 2.40 accepted of 4.00 drafted
+(`t7-dflash2-w4-20261030-071928`), 2.94 of 6.00 (`t7-dflash2-w6-20261030-072942`), and the 4-row
+point repeats at 2.35 and 2.17 in later campaigns. So the fork's spec-yield *has* been measured by
+this harness; what no t27/t29 arm carried is a draft. The verdict does not move — the row still
+diverges on the mechanism, a hard ceiling of 4 against a policy that chooses a window per round — but
+the sentence that overstated the gap is corrected, and the row's 2.2–2.4 now has a citation.
+
+**§5's 90 B and 26.8 GiB are Strata's table, not this fork's.** Note 1 puts Strata's table at
+`IQ4_NL`, 90 B/row, 26.8–28.8 GB (`/home/dev/research/strata-vs-exllamav3-2026-11-02.md:65`), and the
+fork's at ≈8.1 bpw — 51.84 GB over 16 heads × 20 M rows × 160 dims, i.e. ~162 B/row, and
+`bench/size_check.py` sums the checkpoint's tensors to 49 439 MiB. So a decode token's 16 rows are
+~2.6 KB on the fork's side, not 1 440 B: the byte scale in §5 is Strata's row width compared against
+the fork's row *count*. The conclusion survives intact — 2.6 KB against the 0.92 GB of expert weights
+a token already reads is still ~0.3 % — but the figure belongs to the side it was measured on.
+
+## 8. What a port would cost
+
+For the four `absent` rows the port is one of three things, and the table names which: an environment
+delta, N lines in a named file, or impossible with the reason. `M2-churn` and `M7-deploy` are
+`diverged`, not `absent` — the fork has those mechanisms and has them differently (M2's is a rate to
+raise, not a port; M7's is deployment policy, two lines of served config, and it is not an arm at all).
+**No arm in this table has been run, and none may be without the operator's consent:** the box serves
+live traffic, every one of these passes stops the served model, and restoring it afterwards is T16 §8.
+
+| row | the port is | price | the arm, exactly | measured? |
+|---|---|---|---|---|
+| **M1-budget** | a regime delta: `-CacheSize 32768 -MaxLength 32768 -Split 354`. The split is not a separate decision — it is what the freed 2.47 GB buys (131 → 158 of 512 experts/layer), so a pass that shrinks the cache and keeps `-mcs 381` spends the VRAM on nothing. `sysmem_kv_cache` is **1 line** in the served config (`tabbyAPI/config.yml:441`, default `0`) and **no pass can measure it**: `perf.py` loads the model directly, so tabbyAPI is not in the loop | 3 harness flags + 1 served-config line | `-Tag t31-M1-cs32k -Runner perf -CacheSize 32768 -MaxLength 32768 -Split 354` | `unmeasured` |
+| **M3-miss-split** | an env delta, and it is two variables: `EXL3_MOE_STREAM_MIN_ROWS=2` **and** `EXL3_MOE_STREAM_T=2` — §3 shows the row gate alone is inert for a 4-row window because the per-expert gate is 8 | one `-Env` string; 0 flags, 0 lines of code | `-Tag t31-M3-rows2 -Runner perf -MaxLength 131072 -Env "EXL3_MOE_TIER_STATS=1,EXL3_MOE_STREAM_MIN_ROWS=2,EXL3_MOE_STREAM_T=2"` | `unmeasured` — needs an arm |
+| **M4-spec-yield** | a runner switch, not a flag: `-Runner spec_decode` is the only runner the harness emits draft args for (`-dm`/`-ndt`/`-dds` come from `state.active.draft`; `-MaxLength` is stripped for it), and the deployed state's `knob_arms_disable_swap: true` makes the harness set `EXL3_MOE_CPU_SWAP=0` by itself — the guard that killed the campaign's only draft arm (`t27-A-base`, `status=fail` 42 s in, no ARM line) | 1 word, plus `-Extra "-dstats <file>"` if per-position records are wanted | `-Tag t31-M4-w4 -Runner spec_decode` | yield already in `arms.csv` (2.17 to 2.40 of 4); the unit question is not, so the arm re-measures at the current regime |
+| **M5-ple** | code: a bounded row cache in front of `_gather_rows` (`exllamav3/modules/row_table.py:282-312`), keyed on the resolved uids and capped in rows — **≈50 lines in that file**, no new dependency and no kernel change. Neither knob that exists is the row cache: `EXL3_PLE_SUB_CHUNK` is a prefill gather knob (T12, ~2 % bands) and `-ngr`/`EXL3_NGRAM_STREAM=0` was measured unavailable (RAM floor breached in 27 s, T12 §2) | ≈50 lines of engine code | none until the code exists; then the arm is T12's repeat-heavy corpus at `-MaxLength 131072` | `unmeasured` |
+
+Three notes on the table:
+
+- Every arm above needs a **same-session reference**: the deployed regime's own env, one pass, in the
+  same session — a single arm compared against a cross-day absolute is not a control (AGENTS.md,
+  "Measurement rules"). For M3 the reference is one pass with the two `EXL3_MOE_STREAM_*` variables
+  absent; for M1, one at `-CacheSize 262144 -MaxLength 32768` so both arms share their bands.
+- `M1`'s arm is already known to **fit**: `bench/size_check.py --mcs 354 --cs 32768 --cq 4,4
+  --draft … --headroom-mb 512` reports `TOTAL 21634 MiB VRAM of 24564 -> 882 MiB free`, host arena
+  31 010 MiB, `verdict FITS`. The lever is self-financing — the cache drops 2911 → 559 MiB and the
+  trunk grows 17 551 → 19 916 MiB, i.e. the same bytes move from KV to experts — so the arm measures
+  coverage and throughput, not whether the box can hold it.
+- The M3 arm as written carries one variable more than the plan's spelling, which named
+  `EXL3_MOE_STREAM_MIN_ROWS=2` alone. §3 is the reason: with `stream_t 8` still in force no decode
+  expert can qualify, so the shorter form would spend a pass to change nothing. Run the line as
+  printed.
+
+## 9. The two regime files (R5, widened)
 
 `results/passes.csv`'s `t27-*` and `t29-*` rows and the t29 dry-run's `ARGS` line say what the measured
 arms actually ran:
@@ -291,16 +429,16 @@ the tree, and the review quotes both wherever the number matters:
 | split | 376 (`:7`) | 381 | `fork.split 376` + `derived.split_measured 381`; 131 = 512 − 381, labelled measured |
 | cache_size | 131072 (`:10`) | 262144 | `fork.cache_size 131072` + `derived.kv_vram_tokens_measured 262144` |
 | cache_quant | `"2,2"` (`:11`) | `4,4` | `fork.cache_mode "2,2"`; the measured `4,4` is in M7's prose |
-| draft | `mode mtp`, `num_draft_tokens 2`, `dynamic_draft false` (`:24-32`) | DFlash2, 4, dynamic true | M4's prose: no arm carried either |
+| draft | `mode mtp`, `num_draft_tokens 2`, `dynamic_draft false` (`:24-32`) | DFlash2, 4, dynamic true | M4's prose: no `perf` arm carried a draft, and the campaign's one `spec_decode` arm failed (`t27-A-base`) |
 
 `extract_exllama` reads this branch's file, so the machine-checked value is 376/131072/"2,2" — that is
 the only one a drift check can pin to a line in this tree. The measured column's numbers are the
 deployment's, quoted with their provenance, and no report should quote 131 without saying it is 512 −
 381.
 
-## How to re-run
+## 10. How to re-run, in order
 
-From this worktree, on the dev box (stdlib only, no GPU, no torch, no process started):
+**First, with no GPU and no process** — from this worktree, on the dev box (stdlib only, no torch):
 
 ```bash
 cd /home/dev/.local/share/opencode/worktree/3a6c9f/adaptive-expert-tier
@@ -334,14 +472,91 @@ python3 bench/strata_transfer_check.py --check --repo-root /tmp/opencode/forkdri
 # 3/6 rows PASS, exit 1
 ```
 
-The one arm this row set asks for, if the operator consents (it stops the served model — restore per
-T16 §8 and re-verify `/v1/models`):
+**Then the arms — none of them run for this report, and none without the operator's consent** (each
+stops the served model; restore per T16 §8 and re-verify `/v1/models`). In the order that makes each
+result usable by the next:
 
 ```bash
-# M3, the fork's half of the miss split: env deltas only, no regime flag
+# 1. the instrument's price — the one number §7.2 cannot separate, because every arm carried =1.
+#    Same session, same length: =1 then =0, and the difference IS the instrument's cost.
+#    Until this runs, the report says: instrument cost: unmeasured (all arms carried it).
+-Tag t31-inst-1 -Runner perf -MaxLength 131072 -Env "EXL3_MOE_TIER_STATS=1"
+-Tag t31-inst-0 -Runner perf -MaxLength 131072 -Env "EXL3_MOE_TIER_STATS=0"
+
+# 2. M3, the fork's half of the miss split: env deltas only, no regime flag, both gates (§3, §8)
 -Tag t31-M3-rows2 -Runner perf -MaxLength 131072 \
   -Env "EXL3_MOE_TIER_STATS=1,EXL3_MOE_STREAM_MIN_ROWS=2,EXL3_MOE_STREAM_T=2"
+#    its control in the same session: the same line with no EXL3_MOE_STREAM_* variables
+
+# 3. M1, the cache-size lever and the split that follows it (§8; size_check already says FITS)
+-Tag t31-M1-cs32k -Runner perf -CacheSize 32768 -MaxLength 32768 -Split 354
+#    its control in the same session: -CacheSize 262144 -MaxLength 32768, so both arms share bands
+
+# 4. M4, a runner switch only; the yield is already in arms.csv, the unit is what is missing (§7.3)
+-Tag t31-M4-w4 -Runner spec_decode                  # -Extra "-dstats <file>" for per-position records
 ```
+
+**And what is already settled**, so a reader does not spend a pass on it: M2's mechanism, its rate
+(2.42 promotions/step, 8 669 by step 3 584) and its price (2.318 ms/step hook) — second-round t29 only;
+M1's pinned-arena half (+40.59 points of coverage, 42 of 48 layers promotable); M3's two gates as
+arithmetic, and the `-Env` string that would test the fork's half; M4's acceptance range (2.17 to 2.40
+of 4 drafted) and the fact that the harness, not a research note, produced it; M5's `-ngr` verdict
+(measured unavailable under this box's RAM floor) and the ~50 lines in `row_table.py` that the row
+cache would cost; M7 as deployment policy rather than an engine property. What remains unmeasured is
+exactly this: **the tier instrument's own cost**, **M3's fork half**, **M1's cache-size lever and
+therefore the +23 to +27 experts/layer**, **M4's unit at the current regime**, **M5's row cache** (no
+code to measure yet), and **every M7 batch/residency number on the fork**.
+
+## The gates
+
+Both gates exist so this report's claims are checkable rather than asserted, and both were run on
+2026-11-04 — the checker in this worktree, the post gate from the deployment's worktree
+(`/home/dev/.local/share/opencode/worktree/3a6c9fa6df7b22161dba7be0a7f274f329396456/165-win-perf`).
+No GPU, no process.
+
+```
+$ python3 bench/strata_transfer_check.py --check            # this worktree
+PASS M1-budget: 20 comparison(s) - … ; absent, measured unmeasured
+PASS M2-churn: 19 comparison(s) - … ; diverged, measured t29-C1-pin-unset-20261103-221302
+PASS M3-miss-split: 3 comparison(s) - … ; absent, measured unmeasured
+PASS M4-spec-yield: 3 comparison(s) - no extracted constant on either side (see justification); … ; diverged, measured unmeasured
+PASS M5-ple: 2 comparison(s) - no extracted constant on either side (see justification); … ; absent, measured unmeasured
+PASS M7-deploy: 10 comparison(s) - … ; diverged, measured unmeasured
+6/6 rows PASS
+```
+
+(That block is abbreviated at the `…`; the same command's output in full, unelided, is quoted under
+"The matrix" above, and it is the same run.)
+
+```
+$ python3 bench/verify_task.py --post --report .../T31-strata-transfer.md
+  PASS  t12-ple0-20261030-103851: 48 CPU-split component(s), every one from the saved profile
+  PASS  t12-ple1024-20261030-105757: 48 CPU-split component(s), every one from the saved profile
+  PASS  t12-ple512-20261030-104213: 48 CPU-split component(s), every one from the saved profile
+  PASS  t16-q4-ref2-20261102-172722: 48 CPU-split component(s), every one from the saved profile
+  PASS  t16-q4-ref2-20261102-172722: arm rows present in arms.csv or spec_decode.csv
+  PASS  t19-qdrafter-381-20261102-194803: 48 CPU-split component(s), every one from the saved profile
+  PASS  t19-qdrafter-381-20261102-194803: arm rows present in arms.csv or spec_decode.csv
+  PASS  t27-B-pin8-f4-20261103-122212: 48 CPU-split component(s), every one from the saved profile
+  PASS  t29-A1-pin-off-20261103-220854: 48 CPU-split component(s), every one from the saved profile
+  PASS  t29-A2-pin-off-20261103-222022: 48 CPU-split component(s), every one from the saved profile
+  PASS  t29-C1-pin-unset-20261103-221302: 48 CPU-split component(s), every one from the saved profile
+  PASS  t29-C2-pin-unset-20261103-221642: 48 CPU-split component(s), every one from the saved profile
+  PASS  t7-dflash2-w4-20261030-071928: 48 CPU-split component(s), every one from the saved profile
+  PASS  t7-dflash2-w4-20261030-071928: arm rows present in arms.csv or spec_decode.csv
+  PASS  t7-dflash2-w6-20261030-072942: 48 CPU-split component(s), every one from the saved profile
+  PASS  t7-dflash2-w6-20261030-072942: arm rows present in arms.csv or spec_decode.csv
+verdict: all gates passed
+```
+
+Its `INFO` lines (one per prose `%` figure, each reported as "prose, not a ratio band - not checked")
+are omitted above; no `FAIL` line was printed, and the exit code is 0.
+
+The gate's own rules explain two things in the text above: it resolves a run id against
+`results/passes.csv` and refuses a cited id that is absent or not `status=ok`, which is why a
+`status=fail` arm is named by tag (`t27-A-base`, `t12-ngram-ram`) and never by run id; and it rejects a
+symmetric percentage band, which is why every spread here is written as one number ("straddle by
+4.60 %") rather than as a plus-minus.
 
 ## What this could not verify
 
@@ -367,3 +582,18 @@ T16 §8 and re-verify `/v1/models`):
 6. **Cross-day comparison** (Strata's 2026-10-29 log, the fork's 2026-11-03 arms) is used for
    mechanism and counts only, never as a timing control; every timing figure above is same-session or
    explicitly labelled as the served deployment's own log.
+7. **The tier instrument's price is unknown, not small.** `EXL3_MOE_TIER_STATS=1` was in every arm of
+   both campaigns and no row of `results/passes.csv` carries `EXL3_MOE_TIER_STATS=0`, so every
+   coverage number in this report was bought at an unmeasured cost. §7.2 records it as
+   `unmeasured` and §10 arm 1 is the same-session A/B that would price it; it is not estimated here.
+8. **The four t29 arms did not run on pristine HEAD.** They ran on the installed engine at the branch
+   HEAD plus the two one-line repairs t29 §3 documents (this torch's `torch.cuda.Event` form, and
+   `pinned_layers()`'s nesting level); at pristine HEAD every pinned pass dies inside the instrument
+   before its first tier line. The worktree itself was not modified — so those numbers measure the
+   mechanism, not a shipped tree, and the two lines are the first thing a re-run needs.
+9. **`acc` in `arms.csv` is accepted *drafts* per round**, not tokens per window
+   (`spec_decode.py:142-151`: `acc_len = dacc / rounds`, and every round emits one token that is not
+   an accepted draft). §4's `1 + Σ acceptance` and the row's "2.2–2.4 of 4 rows" are therefore the same
+   column read two ways; which way Strata's log prints its 2.5–3.5 is not settled by anything in
+   either tree, so the ratio's size is open while its sign (a ceiling of 4 against a chosen window) is
+   not.
