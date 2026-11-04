@@ -69,11 +69,25 @@ PROMPT_IDS = [1000, 42, 7, 4096, 555, 12, 9001, 300, 66, 1234, 77, 8, 20000, 913
 
 
 # --------------------------------------------------------------------------------------- arithmetic
-# These four helpers are the whole of the measurement's arithmetic, and they are pure so that
+# These helpers are the whole of the measurement's arithmetic, and they are pure so that
 # bench/test_router_lookahead_probe.py can hold them to account without torch or a GPU.
+#
+# Two conventions they all follow, because both were wrong once:
+#
+#   * "no data" is None, never 0.0. A zero row that contributes 0.0 to a mean reads as a measured
+#     disagreement; a dead row has no opinion, so it is excluded and counted (`undefined_rows`).
+#   * ids are counted as SETS. A step that routes two tokens into one expert costs one transfer of
+#     that expert's bytes, and a top-k cannot repeat an expert inside one token, so the unit of the
+#     byte claim is the distinct expert, not the (token, expert) assignment.
 
-def cosine(a, b) -> float:
-    """Cosine of two equal-length sequences of floats. A zero vector has no direction: 0.0."""
+def cosine(a, b) -> float | None:
+    """Cosine of two equal-length sequences of floats, or None when there is no direction to compare.
+
+    None covers the empty row and the zero vector: a zero row is a dead (or zeroed) activation, and
+    reporting 0.0 would put a fabricated "totally different" reading into the layer mean.
+    """
+    if len(a) != len(b):
+        raise ValueError(f"cosine of rows of different width: {len(a)} against {len(b)}")
     dot = na = nb = 0.0
     for x, y in zip(a, b):
         x = float(x)
@@ -82,22 +96,26 @@ def cosine(a, b) -> float:
         na += x * x
         nb += y * y
     if na <= 0.0 or nb <= 0.0:
-        return 0.0
+        return None
     return dot / math.sqrt(na * nb)
 
 
-def row_overlap(true_ids, pred_ids) -> float:
-    """Share of one row's true top-k that the prediction covers. Denominator = the true set, so a
-    wider prediction is not rewarded and a duplicate in either set is not double counted."""
+def row_overlap(true_ids, pred_ids) -> float | None:
+    """Share of one row's true top-k that the prediction covers, or None when the row picked nothing.
+
+    Sets: the denominator is the number of DISTINCT true picks, so a wider prediction is not rewarded,
+    an order change is free, a superset covers fully, and a repeat in either list is counted once.
+    """
     true_set = {int(i) for i in true_ids}
     pred_set = {int(i) for i in pred_ids}
     if not true_set:
-        return 0.0
+        return None
     return len(true_set & pred_set) / len(true_set)
 
 
-def topk_overlap(true_rows, pred_rows) -> list[float]:
-    """Per-row overlap fractions. A row-count mismatch is a caller bug and raises."""
+def topk_overlap(true_rows, pred_rows) -> list[float | None]:
+    """Per-row overlap fractions (None for a row with no picks). A row-count mismatch is a caller bug
+    and raises."""
     if len(true_rows) != len(pred_rows):
         raise ValueError(
             f"row-count mismatch: {len(true_rows)} true rows, {len(pred_rows)} predicted rows; "
@@ -106,23 +124,23 @@ def topk_overlap(true_rows, pred_rows) -> list[float]:
 
 
 def tail_coverage(true_rows, pred_rows, first) -> tuple[int, int]:
-    """(picks at or beyond `first`, of those covered by the prediction).
+    """(distinct picks at or beyond `first`, of those covered by the prediction).
 
     `first` is the module's `cpu_split_first`: with a per-layer expert split, router ids from `first`
     on are the CPU-resident tail, i.e. the ones a prefetch would have to fetch. `first = None` (no
     split) counts nothing, because on a fully GPU-resident layer a prefetch has no miss to cover.
+
+    Set semantics, as in `row_overlap`, and here the reason is the byte claim itself: within one
+    forward, every token that routes the same expert shares ONE transfer of that expert's bytes, so
+    the count is over distinct ids, not over (token, expert) assignments. Decode hands the probe one
+    token per step, where the two counts are identical; a wider row would otherwise inflate the
+    number a prefetch is credited with.
     """
     if first is None:
         return (0, 0)
-    picks = covered = 0
-    for true_ids, pred_ids in zip(true_rows, pred_rows):
-        pred_set = {int(i) for i in pred_ids}
-        for i in true_ids:
-            if int(i) >= int(first):
-                picks += 1
-                if int(i) in pred_set:
-                    covered += 1
-    return (picks, covered)
+    true_set = {int(i) for row in true_rows for i in row if int(i) >= int(first)}
+    pred_set = {int(i) for row in pred_rows for i in row}
+    return (len(true_set), len(true_set & pred_set))
 
 
 def router_support_reason(mlp) -> str | None:
@@ -161,7 +179,13 @@ def _wmean(pairs) -> float | None:
 
 @dataclass
 class LayerStats:
-    """One MoE layer's accumulated rows. Pure data: the probe fills it, `finished_row` renders it."""
+    """One MoE layer's accumulated rows. Pure data: the probe fills it, `finished_row` renders it.
+
+    Two counting bases, kept apart on purpose. `rows`/`overlap_sum`/`cos_sum` are per ROW (a row is
+    one token), and a row with no data contributes nothing (`*_rows` counts only the defined rows, so
+    the undefined ones show up in `undefined_rows`). `picks`/`covered` are per STEP over distinct
+    experts, which is the unit of a transfer: that is the byte claim, not a prediction-quality one.
+    """
 
     layer_idx: int
     name: str
@@ -173,15 +197,18 @@ class LayerStats:
     cpu_split_first: int | None = None
     steps: list = field(default_factory=list)
     rows: int = 0
-    picks: int = 0
     cos_sum: float = 0.0
+    cos_rows: int = 0
     cos_min: float | None = None
     zcos_sum: float = 0.0
     zcos_rows: int = 0
     overlap_sum: float = 0.0
+    overlap_rows: int = 0
     top1_hits: int = 0
     exact_rows: int = 0
-    tail_picks: int = 0
+    picks: int = 0                    # distinct experts the steps routed
+    covered: int = 0                  # of those, distinct experts the prediction named
+    tail_picks: int = 0               # distinct CPU-tail experts the steps routed
     tail_hits: int = 0
     failures: list = field(default_factory=list)   # step-level reasons, deduped by the caller
 
@@ -199,19 +226,39 @@ class LayerStats:
             "steps": len(self.steps),
             "rows": self.rows,
             "picks": self.picks,
+            "covered": self.covered,
+            "counts": {
+                "rows": self.rows,
+                "cos_sum": self.cos_sum,
+                "cos_rows": self.cos_rows,
+                "zcos_sum": self.zcos_sum,
+                "zcos_rows": self.zcos_rows,
+                "overlap_sum": self.overlap_sum,
+                "overlap_rows": self.overlap_rows,
+                "top1_hits": self.top1_hits,
+                "exact_rows": self.exact_rows,
+                "picks": self.picks,
+                "covered": self.covered,
+                "tail_picks": self.tail_picks,
+                "tail_hits": self.tail_hits,
+            },
         }
         if self.status != "measured":
             row["reason"] = self.reason
             return row
-        measured = self.rows > 0
         row.update({
-            "cosine_mean": (self.cos_sum / self.rows) if measured else None,
-            "cosine_min": self.cos_min if measured else None,
+            "cosine_mean": (self.cos_sum / self.cos_rows) if self.cos_rows else None,
+            "cosine_min": self.cos_min if self.cos_rows else None,
             "router_input_cosine_mean": (self.zcos_sum / self.zcos_rows) if self.zcos_rows else None,
-            "overlap_mean": (self.overlap_sum / self.rows) if measured else None,
-            "miss_rate": (1.0 - self.overlap_sum / self.rows) if measured else None,
-            "top1_agreement": (self.top1_hits / self.rows) if measured else None,
-            "exact_row_share": (self.exact_rows / self.rows) if measured else None,
+            "overlap_mean": (self.overlap_sum / self.overlap_rows) if self.overlap_rows else None,
+            "miss_rate": (1.0 - self.overlap_sum / self.overlap_rows) if self.overlap_rows else None,
+            "byte_share": (self.covered / self.picks) if self.picks else None,
+            "top1_agreement": (self.top1_hits / self.rows) if self.rows else None,
+            "exact_row_share": (self.exact_rows / self.overlap_rows) if self.overlap_rows else None,
+            "undefined_rows": {
+                "cosine": self.rows - self.cos_rows,
+                "overlap": self.rows - self.overlap_rows,
+            },
             "tail_picks": self.tail_picks,
             "tail_hits": self.tail_hits,
             "tail_overlap": (self.tail_hits / self.tail_picks) if self.tail_picks else None,
@@ -223,18 +270,27 @@ class LayerStats:
 
 
 def corpus_summary(rows) -> dict:
-    """The corpus line: the pick-weighted overlap (= the share of routed-expert bytes a lookahead
-    prefetch would cover, since every routed pick is one expert of identical size) plus the
-    CPU-tail-restricted version a split configuration actually pays for."""
+    """The corpus line, from the row counts only - every number is a ratio of sums, never an average
+    of per-layer averages, because the layers do not carry equal weight.
+
+    `overlap_mean` is the per-row (per-token) prediction quality. `byte_share_covered` is the transfer
+    claim: distinct (step, expert) pairs the prediction named, over the distinct pairs the steps
+    routed. On this checkpoint every routed expert of every layer is the same size, so that share is
+    also the share of routed bytes a lookahead prefetch would cover. `cpu_tail_overlap` is the same
+    ratio restricted to the CPU-resident picks a per-layer split actually pays for.
+    """
     measured = [r for r in rows if r.get("status") == "measured"]
     skipped = [r for r in rows if r.get("status") != "measured"]
-    with_rows = [r for r in measured if r.get("rows")]
-    picks = sum(r.get("picks", 0) for r in with_rows)
-    rows_n = sum(r.get("rows", 0) for r in with_rows)
+    with_rows = [r for r in measured if (r.get("counts") or {}).get("rows")]
 
-    overlap = _wmean((r.get("overlap_mean"), r.get("picks", 0)) for r in with_rows)
-    tail_picks = sum(r.get("tail_picks", 0) for r in with_rows)
-    tail_hits = sum(r.get("tail_hits", 0) for r in with_rows)
+    def c(key):
+        return sum((r.get("counts") or {}).get(key, 0) for r in with_rows)
+
+    rows_n, cos_rows, overlap_rows = c("rows"), c("cos_rows"), c("overlap_rows")
+    picks, covered = c("picks"), c("covered")
+    tail_picks, tail_hits = c("tail_picks"), c("tail_hits")
+    overlap = (c("overlap_sum") / overlap_rows) if overlap_rows else None
+    byte_share = (covered / picks) if picks else None
     return {
         "layers_discovered": len(rows),
         "layers_measured": len(measured),
@@ -244,22 +300,49 @@ def corpus_summary(rows) -> dict:
         "skipped_reasons": sorted({r["reason"] for r in skipped if r.get("reason")}),
         "rows": rows_n,
         "picks": picks,
-        "cosine_mean": _wmean((r.get("cosine_mean"), r.get("picks", 0)) for r in with_rows),
-        "cosine_min": (min(r["cosine_min"] for r in with_rows
-                           if r.get("cosine_min") is not None) if with_rows else None),
-        "router_input_cosine_mean": _wmean(
-            (r.get("router_input_cosine_mean"), r.get("picks", 0)) for r in with_rows),
+        "covered": covered,
+        # Rows that had no data (a zero vector, an empty pick list): excluded from the means above,
+        # counted here so a layer of dead rows cannot look like a measured disagreement.
+        "undefined_rows": {
+            "cosine": rows_n - cos_rows,
+            "overlap": rows_n - overlap_rows,
+        },
+        "cosine_mean": (c("cos_sum") / cos_rows) if cos_rows else None,
+        # A layer can be measured and still carry no cosine_min (every one of its rows was
+        # undefined), and min() over an empty sequence raises - which would crash the summary on
+        # exactly the input the verdict below exists to refuse.
+        "cosine_min": (min([r["cosine_min"] for r in with_rows
+                            if r.get("cosine_min") is not None] or [None])
+                       if with_rows else None),
+        "router_input_cosine_mean": (c("zcos_sum") / c("zcos_rows")) if c("zcos_rows") else None,
         "overlap_mean": overlap,
         "miss_rate": (1.0 - overlap) if overlap is not None else None,
-        # Every fetch of k experts that covers overlap*k useful picks costs 1/overlap times the
-        # bytes a perfect prediction would move
-        "prefetch_redundancy": (1.0 / overlap) if overlap else None,
-        "top1_agreement": _wmean((r.get("top1_agreement"), r.get("rows", 0)) for r in with_rows),
-        "exact_row_share": _wmean((r.get("exact_row_share"), r.get("rows", 0)) for r in with_rows),
+        "byte_share_covered": byte_share,
+        # Bytes fetched per byte of useful fetch: k predictions to cover byte_share*k of them
+        "prefetch_redundancy": (1.0 / byte_share) if byte_share else None,
+        "top1_agreement": (c("top1_hits") / rows_n) if rows_n else None,
+        "exact_row_share": (c("exact_rows") / overlap_rows) if overlap_rows else None,
         "cpu_tail_pick_share": (tail_picks / picks) if picks else None,
         "cpu_tail_picks": tail_picks,
         "cpu_tail_overlap": (tail_hits / tail_picks) if tail_picks else None,
     }
+
+
+def probe_verdict(instrumented: int, rows) -> tuple[int, str | None]:
+    """The exit code the probe must return, and the line that says which condition fired.
+
+    Both refusals are here rather than inline in `run`, so the offline test can hold them without the
+    engine and so the two messages cannot drift. A probe that measured nothing must not exit 0.
+    """
+    if instrumented == 0:
+        return 2, ("condition `instrumented == 0`: no block-sparse MoE layer could be instrumented, so "
+                   "nothing was measured. This is not a zero overlap - it is a broken probe.")
+    summary = corpus_summary(rows)
+    if summary["layers_with_rows"] == 0:
+        return 2, ("condition `layers_with_rows == 0`: the generation ran, every instrumented layer "
+                   "was entered, and not one step produced a comparison. Not a zero overlap - a "
+                   "broken probe.")
+    return 0, None
 
 
 def build_prompt_ids(length: int) -> list[int]:
@@ -464,6 +547,10 @@ class RouterLookaheadProbe:
 
         true_rows = st.sel.detach().cpu().tolist()
         pred_rows = pred_sel.long().tolist()
+        if not true_rows:
+            self._fail(st, "the router returned zero rows for this forward: there is nothing to "
+                           "compare against")
+            return
         try:
             overlaps = topk_overlap(true_rows, pred_rows)
         except ValueError as exc:
@@ -476,28 +563,45 @@ class RouterLookaheadProbe:
                                               st.router_in.float().cpu().tolist())])
         tail_picks, tail_hits = tail_coverage(true_rows, pred_rows, st.cpu_split_first)
         top1 = sum(1 for t, p in zip(true_rows, pred_rows) if t and p and int(t[0]) == int(p[0]))
-        exact = sum(1 for o in overlaps if o >= 1.0 - 1e-9)
+        # A row with no data (a zero vector, an empty pick list) has no opinion: it is left out of the
+        # means and shows up as an undefined row, rather than dragging a mean towards zero.
+        cos_valid = [c for c in cos if c is not None]
+        zcos_valid = [c for c in zcos if c is not None] if len(zcos) == len(cos) else []
+        ov_valid = [o for o in overlaps if o is not None]
+        exact = sum(1 for o in ov_valid if o >= 1.0 - 1e-9)
+        # Distinct-expert counts for the transfer claim (one transfer per step and expert)
+        true_union = {int(i) for row in true_rows for i in row}
+        pred_union = {int(i) for row in pred_rows for i in row}
 
         st.rows += len(true_rows)
-        st.picks += sum(len(r) for r in true_rows)
-        st.cos_sum += sum(cos)
-        st.cos_min = min(cos) if st.cos_min is None else min(st.cos_min, min(cos))
-        if len(zcos) == len(cos):
-            st.zcos_sum += sum(zcos)
-            st.zcos_rows += len(zcos)
-        st.overlap_sum += sum(overlaps)
+        st.cos_sum += sum(cos_valid)
+        st.cos_rows += len(cos_valid)
+        if cos_valid:
+            step_min = min(cos_valid)
+            st.cos_min = step_min if st.cos_min is None else min(st.cos_min, step_min)
+        st.zcos_sum += sum(zcos_valid)
+        st.zcos_rows += len(zcos_valid)
+        st.overlap_sum += sum(ov_valid)
+        st.overlap_rows += len(ov_valid)
         st.top1_hits += top1
         st.exact_rows += exact
+        st.picks += len(true_union)
+        st.covered += len(true_union & pred_union)
         st.tail_picks += tail_picks
         st.tail_hits += tail_hits
 
         entry = {
             "step": self.step,
             "rows": len(true_rows),
-            "cosine": sum(cos) / len(cos),
-            "router_input_cosine": (sum(zcos) / len(zcos)) if len(zcos) == len(cos) else None,
-            "overlap": sum(overlaps) / len(overlaps),
+            "cosine": (sum(cos_valid) / len(cos_valid)) if cos_valid else None,
+            "router_input_cosine": (sum(zcos_valid) / len(zcos_valid)) if zcos_valid else None,
+            "overlap": (sum(ov_valid) / len(ov_valid)) if ov_valid else None,
+            "byte_share": (len(true_union & pred_union) / len(true_union)) if true_union else None,
             "top1_agreement": top1 / len(true_rows),
+            "undefined_rows": {
+                "cosine": len(cos) - len(cos_valid),
+                "overlap": len(overlaps) - len(ov_valid),
+            },
             "tail_picks": tail_picks,
             "tail_covered": tail_hits,
         }

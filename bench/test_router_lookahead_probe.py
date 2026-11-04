@@ -28,6 +28,7 @@ from router_lookahead_probe import (  # noqa: E402
     LayerStats,
     corpus_summary,
     cosine,
+    probe_verdict,
     router_support_reason,
     tail_coverage,
     topk_overlap,
@@ -67,8 +68,10 @@ def test_cosine_of_identical_and_orthogonal_vectors():
     assert abs(cosine([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]) - 1.0) < 1e-12
     assert abs(cosine([1.0, 0.0], [0.0, 1.0])) < 1e-12
     assert abs(cosine([0.5, 0.25, -2.0], [-0.5, -0.25, 2.0]) + 1.0) < 1e-12
-    # A zero vector has no direction; the probe must not divide by zero on a dead row
-    assert cosine([0.0, 0.0], [1.0, 2.0]) == 0.0
+    # A zero vector has no direction: the probe reports 'no data', and the mean excludes it,
+    # because a 0.0 here would read as a measured disagreement
+    assert cosine([0.0, 0.0], [1.0, 2.0]) is None
+    assert cosine([], []) is None
 
 
 def test_a_layer_without_a_linear_router_is_reported_not_skipped_silently():
@@ -148,10 +151,29 @@ def test_the_engine_names_the_probe_hooks_still_exist():
         assert needle in text, f"the engine no longer contains {needle!r}: the probe's hook moved"
 
 
+def test_the_probe_refuses_to_report_a_clean_zero():
+    """Both ways of measuring nothing must exit 2 with a line saying which condition fired."""
+    code, line = probe_verdict(0, [])
+    assert code == 2 and "instrumented == 0" in line
+    code, line = probe_verdict(3, [])
+    assert code == 2 and "layers_with_rows == 0" in line
+    # one layer with one compared row is a measurement, however thin
+    rows = [{"layer": 0, "status": "measured",
+             "cosine_min": 0.9,
+             "counts": {"rows": 1, "cos_sum": 0.9, "cos_rows": 1, "overlap_sum": 0.5,
+                        "overlap_rows": 1, "picks": 2, "covered": 1}}]
+    code, line = probe_verdict(1, rows)
+    assert code == 0 and line is None
+    # a layer that was instrumented but measured nothing is still a refusal
+    code, line = probe_verdict(1, [{"layer": 0, "status": "measured", "counts": {"rows": 0}}])
+    assert code == 2 and "layers_with_rows == 0" in line
+
+
 TESTS = [
     test_overlap_counts_a_perfect_prediction,
     test_overlap_counts_a_disjoint_prediction,
     test_cosine_of_identical_and_orthogonal_vectors,
+    test_the_probe_refuses_to_report_a_clean_zero,
     test_a_layer_without_a_linear_router_is_reported_not_skipped_silently,
     test_tail_coverage_counts_only_the_offloaded_picks,
     test_the_engine_names_the_probe_hooks_still_exist,
