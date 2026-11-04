@@ -38,10 +38,10 @@ this branch unless the cell says otherwise.
 | mechanism | Strata (value, file:line) | fork (value, file:line) | verdict | justification (short; full text in the row's section) | measured |
 |---|---|---|---|---|---|
 | **M1-budget** — VRAM on the expert tier instead of KV/embedding | `kv_resident 0` (default; deployed run passes 32768) `src/program/generate.cpp:311`, `prefill_chunk 0` `:431`; 8301 slots = **173 experts/layer** of 15.74 GiB, Strata's `server log:390,395` | `cache_size 131072` `bench/windows/state.json:10`, `cache_quant "2,2"` `:11`, `split 376` `:7` — **measured regime: `-cs 262144 -cq 4,4 -mcs 381`** (`results/passes.csv`, t27/t29 `args`) ⇒ **131 of 512 experts/layer** | `absent` | three levers (cache_size, `sysmem_kv_cache`, split) are worth +23..27 experts/layer, i.e. 131 → 154..158 of 173; 80 % by residency needs ≈38 GB of expert weights on a 24 GiB card (§1) | `unmeasured` |
-| **M2-churn** — the adaptive tier's cadence and source | `adapt_every 4` `generate.cpp:474`, `adapt_swaps 96` `:497`, `adapt_decay 0.7` `:475`, `slot_pool global` `:382` + `/home/dev/UnbiasedStrata/include/strata/core/expert_cache.hpp:221`, `swap_source ram-copy` `:4590` | `promote_budget 6` `block_sparse_mlp_cpu.py:161`, `ratio 1.5` `:162`, `decay 0.98` `:163`, `spares 4` `:1088`, `sweep_interval 128` `:1208`, `sweep_max 64` `:141`, `sweep_source checkpoint` `:1293` | `diverged` | 15.1 swaps/round (measured) against 0.20/step at the t27 operating point: **75×**, and a checkpoint read per swap against a RAM copy (§2) | `t29-C1-pin-unset-20261103-221302` |
-| **M3-miss-split** — the miss is split CPU/DMA | `pcie_frac -1.0` = the model's own, **0.55 DMA** for native packs `generate.cpp:470` (read by hand: not an extracted key) | `stream_min_rows 32` `model/moe_cpu_host.py:141`; second gate `stream_t 8` `:139` (by hand) | `absent` | a 4-row window is 8× below the gate and 2× below the per-expert gate; the arm that tests it is `EXL3_MOE_STREAM_MIN_ROWS=2` + `EXL3_MOE_STREAM_T=2` (§3) | `unmeasured` |
-| **M4-spec-yield** — what one verify pass buys | MTP ≤3 drafts + prompt lookup, cost-model chosen, `docs/upstream/DETAILS.md:1032-1035`; **2.5–3.5 tokens/window** `server log:425,444,453` | DFlash2 `num_draft_tokens 4`, `dynamic_draft` shortens only, `generator.py:1128-1146`; **2.2–2.4 of 4 rows** (note 1 §2) | `diverged` | tokens/window = 1 + Σ acceptance, truncated at 4: 1.59× at best, 1.04× at worst; no arm carries a draft (§4) | `unmeasured` |
-| **M5-ple** — the n-gram table read on the decode path | row cache 1M rows (≈90 MiB), up to ~82 % of reads, 20–34 % recurrence `include/strata/ngram/ple_reader.hpp:13-16`; issue/collect split `:5-11`; un-hidden gather 2.1–2.6 ms/token `generate.cpp:393-395` | no row cache: `ext.ngram_gather_cpu` per gather `modules/row_table.py:282-312`; `PREFETCH_MIN_TOKENS 256` `:27` declined at `ngram_embedding.py:334`; `advise()` is `posix_fadvise`, a no-op on Windows `row_table.py:208-215` | `absent` | three defences absent; 16 × 90 B = 1440 B/token is the byte scale, Strata's own un-hidden 2.1–2.6 ms/token the ceiling (§5) | `unmeasured` |
+| **M2-churn** — the adaptive tier's cadence and source | `adapt_every 4` `generate.cpp:474`, `adapt_swaps 96` `:497`, `adapt_decay 0.7` `:475`, `slot_pool global` `:382` + `/home/dev/UnbiasedStrata/include/strata/core/expert_cache.hpp:221`, `swap_source ram-copy` `:4590` | `promote_budget 6` `block_sparse_mlp_cpu.py:161`, `ratio 1.5` `:162`, `decay 0.98` `:163`, `spares 4` `:1088`, `sweep_interval 128` `:1208`, `sweep_max 64` `:141`, `sweep_source checkpoint` `:1293` | `diverged` | 15.1 swaps/round (measured) against 0.20/step at the t27 operating point: **75×**, 31× per committed token — and the bytes come from RAM on both sides (the fork's promote path DMAs the pinned arena, `moe_cpu_host.py:1884-1918`; only the legacy sweep re-reads the checkpoint), so what diverges is the cadence and the pool, not the source (§2) | `t29-C1-pin-unset-20261103-221302` |
+| **M3-miss-split** — the miss is split CPU/DMA | `pcie_frac -1.0` = the model's own, nominal **0.55** for native packs before the startup probe scales it `generate.cpp:470`, `:2051-2063` (read by hand: not an extracted key) | `stream_min_rows 32` `model/moe_cpu_host.py:141`; second gate `stream_t 8` `:139` (by hand) | `absent` | a 5-row window (the pending token + the 4 drafts appended to it) is 6.4× below the gate and 1.6× below the per-expert gate; the arm that tests it is `EXL3_MOE_STREAM_MIN_ROWS=2` + `EXL3_MOE_STREAM_T=2` (§3) | `unmeasured` |
+| **M4-spec-yield** — what one verify pass buys | MTP ≤3 drafts + prompt lookup, cost-model chosen, `docs/upstream/DETAILS.md:1032-1035`; **2.5–3.5 tokens/window** `server log:425,444,453` | DFlash2 `num_draft_tokens 4`, `dynamic_draft` shortens only, `generator.py:1128-1146`; **2.2–2.4 tokens/window** from note 1 §2's live-log derivation, against **2.17–2.40 accepted drafts** = 3.17–3.40 tokens/round in `results/arms.csv` | `diverged` | a ceiling of 4 offered drafts in a 5-row window against a policy that picks a window per round; the fork is behind on note 1's reading and at parity or ahead on the harness's own column, so the size and the sign are unresolved (§4) | `unmeasured` |
+| **M5-ple** — the n-gram table read on the decode path | row cache 1M rows (≈90 MiB), up to ~82 % of reads **on a frozen corpus**, 20–34 % recurrence `include/strata/ngram/ple_reader.hpp:13-16`; issue/collect split `:5-11`; un-hidden gather 2.1–2.6 ms/token `generate.cpp:393-395` | no row cache: `ext.ngram_gather_cpu` per gather `modules/row_table.py:282-312`; `PREFETCH_MIN_TOKENS 256` `:27` declined at `ngram_embedding.py:334`; `advise()` is `posix_fadvise`, a no-op on Windows `row_table.py:208-215` | `absent` | three defences absent; 16 × 90 B = 1440 B/token is the byte scale, Strata's own un-hidden 2.1–2.6 ms/token the ceiling (§5) | `unmeasured` |
 | **M7-deploy** — deployment policy, not an engine property | one request at a time (`batch 0` `generate.cpp:456`; no `--slots`), `--kv-resident 32768` of 262144 `/home/dev/UnbiasedStrata/start-logged.ps1:54` | `max_batch_size 2` (`tabbyAPI/config.yml:217`, outside this tree), `sysmem_kv_cache 0` `:441`, whole cache in VRAM: `cache_size 131072` `bench/windows/state.json:10`, measured `262144` | `diverged` | 2.82 GB of KV + indexer planes in VRAM against Strata's 0.23 GB resident (8× the cells, 2.59 GB of bytes); the one overlapping pair ran 49.8 T/s on the long stream and 8.1 on the short one against 57.2–61.3 single (§6) | `unmeasured` |
 
 Two regime values are recorded twice on purpose (M1, M7): this worktree's `state.json` and the
@@ -57,9 +57,9 @@ half of it.
 
 ```
 PASS M1-budget: 20 comparison(s) - strata.kv_resident_tokens=0 (src/program/generate.cpp:311), strata.prefill_chunk=0 (src/program/generate.cpp:431), fork.cache_size=131072 (bench/windows/state.json:10) +2 more; derived experts_per_layer_repo=136, experts_per_layer_measured=131, strata_experts_per_layer=173, experts_short=42, trunk_gib=17.1, freed_gb_65536=2.11, slots_65536=1106, gain_65536=23, experts_after_65536=154, short_65536=19, freed_gb_32768=2.47, slots_32768=1291, gain_32768=27, experts_after_32768=158, short_32768=15; absent, measured unmeasured
-PASS M2-churn: 19 comparison(s) - strata.adapt_every=4 (src/program/generate.cpp:474), strata.adapt_swaps=96 (src/program/generate.cpp:497), strata.adapt_decay=0.7 (src/program/generate.cpp:475) +9 more; derived swaps_per_round_cap=24, swaps_per_round_measured=15.1, sweep_swaps_per_step=0.5, promotions_per_step_t27=0.201, churn_ratio=75, promotions_per_step_t29=2.42, budget_raise_ratio=12; diverged, measured t29-C1-pin-unset-20261103-221302
-PASS M3-miss-split: 3 comparison(s) - fork.stream_min_rows=32 (exllamav3/model/moe_cpu_host.py:141); derived rows_short=28, gate_factor=8.0; absent, measured unmeasured
-PASS M4-spec-yield: 3 comparison(s) - no extracted constant on either side (see justification); derived yield_ratio_low=1.04, yield_ratio_high=1.59, window_cap_minus_high=1.6; diverged, measured unmeasured
+PASS M2-churn: 19 comparison(s) - strata.adapt_every=4 (src/program/generate.cpp:474), strata.adapt_swaps=96 (src/program/generate.cpp:497), strata.adapt_decay=0.7 (src/program/generate.cpp:475) +9 more; derived swaps_per_round_cap=24, swaps_per_round_measured=15.1, sweep_swaps_per_step=0.5, promotions_per_step_t27=0.201, churn_ratio=75, promotions_per_step_t29=2.42, promotion_raise_ratio=12; diverged, measured t29-C1-pin-unset-20261103-221302
+PASS M3-miss-split: 3 comparison(s) - fork.stream_min_rows=32 (exllamav3/model/moe_cpu_host.py:141); derived rows_short=27, gate_factor=6.4; absent, measured unmeasured
+PASS M4-spec-yield: 3 comparison(s) - no extracted constant on either side (see justification); derived tokens_per_round_low=3.17, tokens_per_round_high=3.4, unused_draft_rows=1.6; diverged, measured unmeasured
 PASS M5-ple: 2 comparison(s) - no extracted constant on either side (see justification); derived bytes_per_token=1440, cache_mib=90; absent, measured unmeasured
 PASS M7-deploy: 10 comparison(s) - fork.cache_size=131072 (bench/windows/state.json:10), fork.cache_mode='2,2' (bench/windows/state.json:11), fork.split=376 (bench/windows/state.json:7); derived kv_ratio=8, batch_delta=2, fork_kv_gb=2.82, strata_kv_whole_gb=1.81, strata_kv_whole_gib=1.69, strata_kv_resident_gb=0.23, kv_vram_delta_gb=2.59; diverged, measured unmeasured
 6/6 rows PASS
@@ -139,23 +139,37 @@ t27 operating point promoted **710** times over the 3528-step perf ladder = **0.
 `PROMOTE_BUDGET 6/step`, ratio 1.5, decay 0.98), and its legacy sweep is 64 swaps per 128 steps =
 0.5/step with two checkpoint reads per swap (`sweep_source checkpoint`). 15.1/0.201 = **75×**, the
 review's 75×. Per committed token it is **31×** (Strata 15.1/2.45 = 6.2; a perf step is one token
-because `perf.py` registers no draft), and `t29-C1` shows what the budget does once the pool stops
-capping it: 8669 promotions / 3584 steps = **2.42/step**, **12×** the t27 rate (2.42/0.201 = 12.0,
-8669/710 = 12.2; the arm also raised the spare count 4 → 16), for +40.6 points of coverage
-(31.7 → 72.3 % pooled).
+because `perf.py` registers no draft). The source of the bytes is faithful, and it is the cadence and
+the pool that diverge: both arms run promote-on-miss, and `promote_expert`
+(`moe_cpu_host.py:1884-1918`) DMAs the expert out of the pinned arena, RAM to VRAM with no checkpoint
+read — only the legacy sweep re-reads the checkpoint per swap (`stc.get_tensor`,
+`block_sparse_mlp_cpu.py:1293`, `sweep_source checkpoint`). `t29-C1` shows the rate that same policy
+reaches once the pool stops capping it: 8669 promotions / 3584 steps = **2.42/step**, **12×** the t27
+realized rate (2.42/0.201 = 12.0, 8669/710 = 12.2; the spare count went 4 → 16 and `PROMOTE_BUDGET`
+stayed 6/step, which neither arm reached), for +40.6 points of coverage (31.7 → 72.3 % pooled).
 
-The two campaign's numbers, as read:
+The two campaigns' numbers, as read — and the third row is where the fork's divergence lives, not in
+the fourth:
 
 | quantity | Strata | fork, t27-B (pin 8 GiB, 4 spares) | fork, t29-C1 (pin unset, 16 spares) |
 |---|---|---|---|
-| cap | 96 per adaptation ÷ 4 rounds = **24/round** | 6/step, and 64 per 128 steps = 0.5/step (sweep) | 6/step |
-| measured churn | 60.5 per adaptation → **15.1/round** | 710 promotions / 3528 steps = **0.201/step** | 8669 / 3584 = **2.42/step** |
-| source of the bytes | RAM ↔ VRAM exchange, "no file reads" (`generate.cpp:4590`); log: "0 blob reads from the file" | checkpoint re-read per swap (`stc.get_tensor`, `block_sparse_mlp_cpu.py:1293`) | same |
+| cadence | 96 per adaptation ÷ 4 rounds = **24/round** | 6/step budget, **0.201/step realized** | 6/step budget, **2.42/step realized** — the budget did not move, the rate did |
+| pool | **one global pool**, 8000–8301 slots over the whole cache | **per-layer spare slots**, 4 of them, filled by promote-on-miss | same path, **16 spares** and no pin budget, so the pool stops capping the policy |
+| source of the bytes | RAM ↔ VRAM exchange, "no file reads" (`generate.cpp:4590`); log: "0 blob reads from the file" | **faithful**: `promote_expert` DMAs the expert from the page-locked arena (`moe_cpu_host.py:1884-1918`), RAM → VRAM, no checkpoint read | same path, same source (`moe_cpu_host.py:1884-1918`) |
+| the only checkpoint reader | — | the legacy **sweep** (`_split_swap_experts`), 64 swaps/128 steps = 0.5/step, `stc.get_tensor` per swap (`block_sparse_mlp_cpu.py:1293`); it is what the t29 **A** arms (pin off) ran, and no t27-B or t29-C arm uses it | — |
 | what it bought | 79–95 % coverage, 94.1 % in the sweep regime | none: coverage 28.5 % control against 27.7 % (and the column was frozen — T16 §7) | +40.6 points (72.3 vs 31.7), hook 2.318 ms/step |
 
+So the M2 finding is *not* "the fork re-reads the checkpoint for every promotion" — it does not, in
+either measured arm. It is that the fork's promotion rate (0.201/step with a 4-spare pool, 2.42/step
+with 16) is 75× below Strata's 15.1 adaptations per round — 31× per committed token, the shared unit —
+and that the pools have different shapes: Strata re-ranks one global 8000-slot pool, the fork shuffles
+each layer's own spares.
+
 Sources: `t27-B-pin8-f4-20261103-122212` (its last tier line: **710** promotions, 28 windows =
-27 × 128 + 72 = 3528 steps), `/tmp/opencode/t29-pin-unset.md` §4-§5 (8669 promotions "at step 3584",
-`t29-C1-pin-unset-20261103-221302`), `strata-vs-exllama-research.md` §2.2 (the 60.5-swap round).
+27 × 128 + 72 = 3528 steps; the pass's own `env` carries `EXL3_MOE_PINNED_ARENA=1`,
+`EXL3_MOE_CPU_PROMOTE=4`), `/tmp/opencode/t29-pin-unset.md` §4-§5 (8669 promotions "at step 3584",
+`t29-C1-pin-unset-20261103-221302`, whose `env` carries `EXL3_MOE_CPU_PROMOTE=16` and the same
+`PINNED_ARENA=1`), `strata-vs-exllama-research.md` §2.2 (the 60.5-swap round).
 
 The unit that made the campaign's first churn estimate 75× too small is this: Strata's 96 is a
 per-round budget over a single global pool; the fork's 64 is a total across 48 layers every 128 steps,
@@ -166,30 +180,35 @@ to 31×, and the honest number to quote is the pair, not either one alone.
 ## 3. M3-miss-split — the env delta, and the second gate
 
 **`MATRIX["M3-miss-split"]["justification"]`** (reflowed; typography and spacing normalised — `×`, `≈`, `≤`, `§`): the miss goes somewhere else. Strata's
-`pcie_frac` default is the model's own (`-1.0` at `generate.cpp:470`, read as 0.55 DMA for the native
-packs and scaled by a live PCIe probe), so ~55 % of a verify round's distinct missed experts are DMA'd
-and computed on the GPU. The fork's streamed path exists (`moe_cpu_host.py:1968-1998`) but is gated
-twice: `rows < stream_min_rows 32` returns before it (`:1981`), and an expert needs `stream_t 8`
-assigned tokens (`:139`, read by hand — not an extracted key) — so a 4-row window reaches neither and
-**100 % of decode misses go to the worker process**. The delta that would test the fork's half is env-only,
+`pcie_frac` default is the model's own (`-1.0` at `generate.cpp:470`), whose base for the native packs
+is 0.55 — the **nominal pre-probe** share, not the deployed one: the startup probe scales it by the
+measured H2D bandwidth below 20 GB/s and prints the result (`generate.cpp:2051-2063`), and no log on
+this box is cited for that line — so a share of a verify round's distinct missed experts, nominally
+0.55, is DMA'd and computed on the GPU. The fork's streamed path exists (`moe_cpu_host.py:1968-1998`)
+but is gated twice: `rows < stream_min_rows 32` returns before it (`:1981`), and an expert needs
+`stream_t 8` assigned tokens (`:139`, read by hand — not an extracted key) — so a 5-row window (1
+pending token + the 4 drafts appended to it, `job.py:391-394`) reaches neither and **100 % of decode
+misses go to the worker process**. The delta that would test the fork's half is env-only,
 `EXL3_MOE_STREAM_MIN_ROWS=2` plus `EXL3_MOE_STREAM_T=2`, with no regime flag; nothing on this box has
 run it.
 
 The arithmetic:
 
-- a verify window is at most `num_draft_tokens` + 1 = **4 rows** wide on the fork's deployed regime; the
-  gate is 32: **8× short**, 28 rows short (`derived.rows_short`).
+- a verify window is at most `num_draft_tokens` + 1 = **5 rows** wide on the fork's deployed regime:
+  `generator/job.py:391-394` concatenates the four drafts **to the pending token**, so the window is
+  the drafts *plus* the row that was already there. The gate is 32: **6.4× short**, 27 rows short
+  (`derived.rows_short`).
 - the second gate is per expert: an expert qualifies for staging at `stream_t = 8` assigned tokens
   (`moe_cpu_host.py:139`, applied at `:2009`), and an explicit `EXL3_MOE_STREAM_T` bypasses the
-  bandwidth calibration that would otherwise raise it (`:1726-1727`); 4 rows can route an expert at
-  most 4 times, so **no decode expert can ever qualify** even after the row gate is dropped.
+  bandwidth calibration that would otherwise raise it (`:1726-1727`); 5 rows can route an expert at
+  most 5 times, so **no decode expert can ever qualify** even after the row gate is dropped.
 - therefore the arm that tests the fork's half is **two variables by design**, not an untidy command:
   `EXL3_MOE_STREAM_MIN_ROWS=2` opens the path and `EXL3_MOE_STREAM_T=2` is what makes the second gate
-  reachable at a 4-row window. Dropping either one is a null arm — with `stream_t` still 8 no expert
+  reachable at a 5-row window. Dropping either one is a null arm — with `stream_t` still 8 no expert
   qualifies, and without the row gate the call never reaches the per-expert test — so the pair is the
   smallest delta that can move the mechanism at all. It remains an experiment, not a port: the fork's
   own calibration says 4 rows lost to 8 at prefill sizes (`:1078-1118`), which is a prefill
-  measurement and does not transfer to a 4-row window either way.
+  measurement and does not transfer to a 5-row decode window either way.
 
 The exact command, if the operator consents (it stops the served model; restore per T16 §8):
 
@@ -199,43 +218,58 @@ The exact command, if the operator consents (it stops the served model; restore 
 
 ## 4. M4-spec-yield — the window numbers, and the two notes that disagree
 
-**`MATRIX["M4-spec-yield"]["justification"]`** (reflowed; typography and spacing normalised — `×`, `≈`, `≤`, `§`): window arithmetic: tokens/window = 1 + the
-sum of per-position acceptance, so the deployed DFlash2 cap `num_draft_tokens 4` truncates the sum at 4
-and the fork measures **2.2–2.4 of 4 rows**, `dynamic_draft` only ever shortening
-(`generator.py:1128-1146`). Strata drafts ≤3 with the model's own MTP head plus a prompt-lookup drafter
-picked per round by a cost model (`docs/upstream/DETAILS.md:1032-1035`) and measures **2.5–3.5
-tokens/window**: 3.5/2.2 = **1.59×** at best, 2.5/2.4 = **1.04×** at worst. The second research note's
-own log pass (`strata-vs-exllama-research.md` §1) reads 2.42–2.47 on both sides, so the divergence
-stands on note 1's window arithmetic and is not reproduced by note 2's requests. No arm of either
-campaign carries a draft (`perf.py` registers none; draft arguments belong to `-Runner spec_decode`),
-so this row is `unmeasured`.
+**`MATRIX["M4-spec-yield"]["justification"]`** (reflowed; typography and spacing normalised — `×`, `≈`, `≤`, `§`): window arithmetic, in two units that are not
+yet reconciled: tokens/window is 1 + the sum of per-position acceptance, so the deployed DFlash2 cap
+`num_draft_tokens 4` truncates it (`dynamic_draft` only ever shortening, `generator.py:1128-1146`) and
+the window itself is **5 rows wide** — the pending token plus the 4 drafts appended to it,
+`job.py:391-394`.
+Strata drafts ≤3 with the model's own MTP head plus a prompt-lookup drafter picked per round by a cost
+model (`docs/upstream/DETAILS.md:1032-1035`) and its log reads **2.5–3.5 tokens/window**. The fork
+reads two ways and they do not agree, so no ratio is recorded: note 1 §2 derives **2.2–2.4
+tokens/window** from the served deployment's own log (2.17 / 2.41 / 2.33 / 2.56), while
+`results/arms.csv`'s `acc` column for the 4-draft arms reads **2.17–2.40 accepted drafts** per round
+(`t7-dflash2-w4` 2.40 of 4.00, `t16-q4-ref2` 2.35, `t19-qdrafter` 2.17), i.e. 1 + `acc` = **3.17–3.40
+tokens per round**. Against note 1's reading the fork is behind Strata's 2.5–3.5; against the
+harness's own column it is at parity or ahead, and nothing in either tree says which reading shares
+Strata's unit. No arm of either campaign carries a draft (`perf.py` registers none; draft arguments
+belong to `-Runner spec_decode`), so the row is `unmeasured`: `diverged` on the mechanism (a hard
+ceiling of 4 against a policy that chooses a window per round), its performance advantage
+**unresolved**.
 
-The numbers, and what they do not settle:
+The numbers, and what they do not settle. Note 1's live-log derivation and `arms.csv`'s `acc` column
+are kept in separate rows because they measure different things — a served deployment's log against
+the harness's arm rows — and converting one into the other is exactly the step that was wrong here
+before:
 
 | | Strata | fork, deployed DFlash2 |
 |---|---|---|
-| window | MTP ≤3 + prompt lookup up to 5, chosen per round by measured tokens/ms | block-diffusion drafter, `num_draft_tokens 4`, `dynamic_draft: true` (shortens only) |
-| tokens/window | 2.5–3.5 (log: 2.9 / 2.46 / 2.56 / 3.48 / 2.65 over five requests) | 2.2–2.4 of 4 rows (note 1 §2: 2.17 / 2.41 / 2.33 / 2.56) |
-| the window is | kept full by a policy that prices both drafters | truncated by its own ceiling: 1.6 rows of the 4 go unused on average |
+| window | MTP ≤3 + prompt lookup up to 5, chosen per round by measured tokens/ms | block-diffusion drafter, `num_draft_tokens 4`, `dynamic_draft: true` (shortens only), so 5 rows: 4 drafts + the pending token (`job.py:391-394`) |
+| tokens/window, **note 1's live-log derivation** | 2.5–3.5 (log: 2.9 / 2.46 / 2.56 / 3.48 / 2.65 over five requests) | 2.2–2.4 (note 1 §2: 2.17 / 2.41 / 2.33 / 2.56 — computed as 1 + accepted/windows from the deployment's log) |
+| **`results/arms.csv`'s `acc`**, accepted **drafts** per round | — (no harness arm; Strata is not run by this harness) | 2.17–2.40 accepted of 4.00 offered (`t7-dflash2-w4` 2.40, `t16-q4-ref2` 2.35, `t19-qdrafter` 2.17) |
+| tokens per round from that column | — | **3.17–3.40** = 1 + `acc`; every round also emits the token that was pending |
+| the window is | kept full by a policy that prices both drafters | truncated by its own ceiling: 1.6 of the 4 offered drafts go unused on average |
 
 Both notes agree on the physics and disagree on the size: note 1 derives 2.5–3.5 against 2.2–2.4 from
 five and four requests; note 2, reading a different session, gets 2.42–2.47 on both sides and calls it
 a wash. That disagreement is recorded here rather than resolved, and one thing an earlier draft of this
 section got wrong is corrected in §7.3: **the harness has measured this row** — `results/arms.csv`
 holds DFlash2 acceptance at 2.40 of 4.00 drafted (`t7-dflash2-w4-20261030-071928`) and 2.94 of 6.00
-(`t7-dflash2-w6-20261030-072942`) — so the 2.2–2.4 is a harness column, not only the served
+(`t7-dflash2-w6-20261030-072942`) — so the fork's acceptance is a harness column, not only the served
 deployment's log. What *no* arm of either campaign carries is a draft, because `-Runner perf` registers
-no draft flags and draft arguments belong to `-Runner spec_decode`; and `acc` is accepted drafts per
-round, not tokens per window (the closing section, item 9), which is the unit question a fresh arm
-would settle. A verdict of `diverged` therefore rests on the mechanism (a hard ceiling of 4 against a
-policy that chooses a window per round), and the ratio's size is unmeasured while its sign is not.
+no draft flags and draft arguments belong to `-Runner spec_decode`. And the column is **accepted
+drafts**, not tokens: reading 2.17–2.40 as tokens/window is the error this section carried until the
+review, because the round that accepts 2.40 drafts emits 3.40 tokens (the closing section, item 9).
+A verdict of `diverged` therefore rests on the mechanism (a hard ceiling of 4 against a policy that
+chooses a window per round) **only**; the ratio's size *and its sign* are unmeasured, and on the
+harness's own column the fork may already be at parity or ahead.
 
 ## 5. M5-ple — the read the fork does not cache
 
 **`MATRIX["M5-ple"]["justification"]`** (reflowed; typography and spacing normalised — `×`, `≈`, `≤`, `§`): absent, and cheap to bound: Strata hides the 16
 unbuffered row reads of a decode token (90 B/row, 26.8 GiB table never in RAM) behind the embedding and
-layer 0 with an issue/collect split, and serves repeats from a bounded 1M-row (90 MiB) cache that
-measures up to 82 % of reads with 20–34 % recurrence inside one prompt (`ple_reader.hpp:13-16`). The
+layer 0 with an issue/collect split, and keeps a bounded 1M-row (90 MiB) row cache that its own source
+says **would serve up to 82 % of reads on a frozen corpus**, with 20–34 % recurrence inside one prompt
+(`ple_reader.hpp:13-16`) — a measurement on that corpus, not on the served traffic. The
 fork has no such row cache: every gather goes to `ext.ngram_gather_cpu` over a
 `FILE_FLAG_NO_BUFFERING` handle (`row_table.py:282-312`, opened at `loader/safetensors.py:247-248`), so
 a repeated row is read from disk again. Its two cheaper substitutes both miss decode: `prefetch()`
@@ -251,7 +285,10 @@ size its own reader states (`ple_reader.hpp:3`) — and not this fork's: the for
 `bench/size_check.py`). §7.3 records the correction; the conclusion does not move, because either
 figure is ~0.3 % of the expert weights a token already reads.
 
-Arithmetic: 2^20 rows × 90 B = 90 MiB per table buys up to 82 % of reads; the fork's per-token traffic
+Arithmetic: 2^20 rows × 90 B = 90 MiB per table would serve up to 82 % of reads **on Strata's frozen
+corpus** — the qualifier is its own (`ple_reader.hpp:15-16`, "Measured on the frozen corpus
+(bench/results/2026-09-23-ngram-io)"), and it is a measurement of that corpus, not of the served
+traffic; the fork's per-token traffic
 is 16 of its own ~162 B rows, ~2.6 KB, against the 0.92 GB a token already reads in expert weights —
 the byte traffic is negligible and **the stall is the point**: Strata measured its own un-hidden gather at
 2.1–2.6 ms/token against a 9–11 ms token. The row is `absent` rather than `diverged` because the fork
@@ -323,9 +360,9 @@ mechanism, and its run ids appear nowhere in this report.
 | row | `measured` (matrix) | what the runs say | what it settles | what is still open |
 |---|---|---|---|---|
 | **M1-budget** | `unmeasured` | the *pin* half: `t29-C1-pin-unset-20261103-221302` **72.347 %** pooled coverage against `t29-A1-pin-off-20261103-220854` **31.760 %** (+40.59 points; the repeats agree: C2 72.331, A2 31.735), with `arena 30720 MiB pinned in 30 of 34 chunk(s), driver limit, 42 of 48 layer(s) promotable (0..41)` | expert bytes in page-locked host RAM, with promote-on-miss filling the spare GPU slots, is worth +40.59 points of coverage at one context — the residency half of the row, measured | the row's own three levers moved in **no** arm: all 17 t27/t29 passes carry `-mcs 381`, and the 16 `perf` arms carry `-cs 262144` (the one `spec_decode` arm sizes its cache from `draft.spec_decode_cache_size`), so 131 of 512 experts/layer is the only residency point ever run (§8 prices the arm) |
-| **M2-churn** | `t29-C1-pin-unset-20261103-221302` | **8 669** promotions by step 3 584 = **2.42/step** (C2: 8 646, 0.27 % below); promote-on-miss hook **2.318 ms/step** mean over 28 windows (1.39 to 4.23) against 0.201 promotions/step and ~1.05 ms/step at the 8 GiB arm | the rate and its price are both measured in one session: 12× the t27 budget, 2.3 ms of a ~25.9 ms step | whether the traffic pays: TG at 130816 is **+1.13 %** against a 4.6 % repeat spread — unresolved, not absent |
-| **M3-miss-split** | `unmeasured` | nothing: no row of `passes.csv` (186 rows, every campaign) sets `EXL3_MOE_STREAM_MIN_ROWS` or `EXL3_MOE_STREAM_T` in its `env` | the arithmetic (a 4-row window against a 32-row gate, and a per-expert gate at 8) stands on the sources alone; nothing contradicts it and nothing supports it | the arm: one `-Env` string, `t31-M3-rows2` (§8). **`unmeasured` — needs an arm** |
-| **M4-spec-yield** | `unmeasured` | the campaigns carry no draft — every t27/t29 `perf` arm's `args` ends `-sd`, and `perf.py` registers no draft flag, while the campaign's only draft arm is the failed `t27-A-base` — **but the harness's `results/arms.csv` does hold acceptance**: `t7-dflash2-w4-20261030-071928` **2.40 accepted of 4.00 drafted** over 8 rounds, `t7-dflash2-w6-20261030-072942` **2.94 of 6.00**, and two later 4-row draft repeats whose `-dm` is confirmed DFlash2 in `passes.csv` — `t16-q4-ref2-20261102-172722` **2.35 of 4.00** (`-dm …-DFlash2`) and `t19-qdrafter-381-20261102-194803` **2.17 of 4.00** (`-dm …-DFlash2-exl3`, the exl3-quantized drafter, which is why its tag is `qdrafter`) | the fork's window yield at 4 drafted rows is 2.2 to 2.4 accepted drafts per round — the row's own range, produced by this harness | the *unit*: `acc` is accepted draft tokens per verification round (`spec_decode.py:142-151`), so tokens per round is 1 + acc = 3.17 to 3.40, and §4's ratio against Strata's 2.5–3.5 depends on which unit Strata's log prints. A window-4 arm at the current regime settles it (§8) |
+| **M2-churn** | `t29-C1-pin-unset-20261103-221302` | **8 669** promotions by step 3 584 = **2.42/step** (C2: 8 646, 0.27 % below); promote-on-miss hook **2.318 ms/step** mean over 28 windows (1.39 to 4.23) against 0.201 promotions/step and ~1.05 ms/step at the 8 GiB arm. Both arms are promote-on-miss DMA out of the pinned arena (`moe_cpu_host.py:1884-1918`), so neither reads the checkpoint for a promotion | the rate and its price are both measured in one session: **12× the t27 realized promotion rate** (the 6/step `PROMOTE_BUDGET` did not move — neither arm reached it), 2.3 ms of a ~25.9 ms step, and the source of the bytes faithful | whether the traffic pays: TG at 130816 is **+1.13 %** against a 4.6 % repeat spread — unresolved, not absent |
+| **M3-miss-split** | `unmeasured` | nothing: no row of `passes.csv` (186 rows, every campaign) sets `EXL3_MOE_STREAM_MIN_ROWS` or `EXL3_MOE_STREAM_T` in its `env` | the arithmetic (a 5-row verify window against a 32-row gate, and a per-expert gate at 8) stands on the sources alone; nothing contradicts it and nothing supports it | the arm: one `-Env` string, `t31-M3-rows2` (§8). **`unmeasured` — needs an arm** |
+| **M4-spec-yield** | `unmeasured` | the campaigns carry no draft — every t27/t29 `perf` arm's `args` ends `-sd`, and `perf.py` registers no draft flag, while the campaign's only draft arm is the failed `t27-A-base` — **but the harness's `results/arms.csv` does hold acceptance**: `t7-dflash2-w4-20261030-071928` **2.40 accepted drafts of 4.00 drafted** over 8 rounds, `t7-dflash2-w6-20261030-072942` **2.94 of 6.00**, and two later 4-draft repeats whose `-dm` is confirmed DFlash2 in `passes.csv` — `t16-q4-ref2-20261102-172722` **2.35 of 4.00** (`-dm …-DFlash2`) and `t19-qdrafter-381-20261102-194803` **2.17 of 4.00** (`-dm …-DFlash2-exl3`, the exl3-quantized drafter, which is why its tag is `qdrafter`) | the fork's acceptance at 4 offered drafts is 2.17 to 2.40 **accepted drafts per round**, i.e. **3.17 to 3.40 tokens per round** (1 + `acc`) — a harness column, and a different measurement from note 1's log-derived 2.2–2.4 tokens/window | the comparison: `acc` is accepted *drafts* (`spec_decode.py:142-151`), so the two fork-side readings (note 1's log derivation and this column) measure different things and disagree by about a token. Which — if either — shares Strata's unit is open, and a window-4 arm at the current regime is what settles it (§8) |
 | **M5-ple** | `unmeasured` | one of the three defences is measured and it is the one that fails: the RAM-resident table (`-ngr` / `EXL3_NGRAM_STREAM=0`) breached the RAM floor 27 s in with 637 MB free (tag `t12-ngram-ram`, T12 §2); the PLE gather knob that does exist, `EXL3_PLE_SUB_CHUNK`, was A/B'd in the same campaign — `t12-ple1024-20261030-105757` (default) against `t12-ple512-20261030-104213` and `t12-ple0-20261030-103851`, prefill only, inside a 2 % band | two of Strata's three defences are either absent from this engine or not a lever at decode: the RAM copy does not fit, and the sub-chunk is a prefill knob | the row cache itself: no arm, because no such object exists in this fork (`modules/row_table.py:282-312` goes straight to `ext.ngram_gather_cpu`). The price is code, not a flag (§8) |
 | **M7-deploy** | `unmeasured` | no arm varied batch or KV residency: every t27/t29 `args` carries `-ambs 2`, a regime flag `-Extra` may not restate, and `sysmem_kv_cache 0` is a tabbyAPI setting no pass reads. The only concurrency measurement on the box is Strata's own (`server log:378` ff.): 49.8 T/s on the 19 497-token stream against 8.1 on the 551-token one sharing the window, vs 50.5 / 61.3 / 57.2 single | that the divergence is real (2.82 GB against 0.23 GB of KV in VRAM) and that its *performance* claim is not this harness's to make | batch and residency on the fork: a served-config edit or a second instance, not an arm — so this row stays `unmeasured` by construction (§6, §8) |
 
@@ -371,18 +408,22 @@ the promote-on-miss hook's own counter, which is a different cost and must not b
 instrument's. It is not estimated here: an estimate would be a number no arm supports, and the next-arm
 list (§10) carries the A/B that would measure it.
 
-### 7.3 Two corrections this table forced
+### 7.3 Three corrections this table forced
 
 **§4's "never measured by this harness" is wrong, and its own range comes from the harness.**
-`results/arms.csv` holds DFlash2 acceptance rows from the T7 campaign: 2.40 accepted of 4.00 drafted
-(`t7-dflash2-w4-20261030-071928`), 2.94 of 6.00 (`t7-dflash2-w6-20261030-072942`), and the 4-row
-point repeats at 2.35 (`t16-q4-ref2-20261102-172722`) and 2.17 (`t19-qdrafter-381-20261102-194803`,
-a draft repeat under the `qdrafter` tag) in later campaigns. Both `-dm` values are checked against
-`passes.csv` rather than assumed: `…\Qwen3.8-Flash-Next-DFlash2` for t16 and `…-DFlash2-exl3` for t19,
-the exl3-quantized drafter. So the fork's spec-yield *has* been measured by this harness; what no
-t27/t29 arm carried is a draft. The verdict does not move — the row still diverges on the mechanism, a
-hard ceiling of 4 against a policy that chooses a window per round — but the sentence that overstated
-the gap is corrected, and the row's 2.2–2.4 now has a citation.
+`results/arms.csv` holds DFlash2 acceptance rows from the T7 campaign: 2.40 accepted drafts of 4.00
+drafted (`t7-dflash2-w4-20261030-071928`), 2.94 of 6.00 (`t7-dflash2-w6-20261030-072942`), and the
+4-draft point repeats at 2.35 (`t16-q4-ref2-20261102-172722`) and 2.17
+(`t19-qdrafter-381-20261102-194803`, a draft repeat under the `qdrafter` tag) in later campaigns. Both
+`-dm` values are checked against `passes.csv` rather than assumed:
+`…\Qwen3.8-Flash-Next-DFlash2` for t16 and `…-DFlash2-exl3` for t19, the exl3-quantized drafter. So the
+fork's spec-yield *has* been measured by this harness; what no t27/t29 arm carried is a draft. The
+verdict does not move — the row still diverges on the mechanism, a hard ceiling of 4 against a policy
+that chooses a window per round — but the sentence that overstated the gap is corrected, and the
+harness's column now has a citation **and its unit**: these are accepted *drafts*, so the tokens the
+round emits are 1 + `acc` = 3.17–3.40, not 2.2–2.4. That is why §4 keeps this column apart from note
+1's log-derived 2.2–2.4 tokens/window instead of equating them, and why the row's advantage is
+recorded as unresolved rather than as a gap.
 
 **§5's 90 B and 26.8 GiB are Strata's table, not this fork's.** Note 1 puts Strata's table at
 `IQ4_NL`, 90 B/row, 26.8–28.8 GB (`/home/dev/research/strata-vs-exllamav3-2026-11-02.md:65`), and the
@@ -391,6 +432,16 @@ fork's at ≈8.1 bpw — 51.84 GB over 16 heads × 20 M rows × 160 dims, i.e. ~
 ~2.6 KB on the fork's side, not 1 440 B: the byte scale in §5 is Strata's row width compared against
 the fork's row *count*. The conclusion survives intact — 2.6 KB against the 0.92 GB of expert weights
 a token already reads is still ~0.3 % — but the figure belongs to the side it was measured on.
+
+**§4's fork-side range mixed two units, and the verify window is one row wider than this report first
+said.** `acc` in `results/arms.csv` is accepted *drafts* per round, so reading 2.17–2.40 as
+tokens/window understated the harness's yield by about a token (1 + `acc` = 3.17–3.40); note 1's
+live-log derivation is a different measurement, and §4 now keeps the two apart instead of equating
+them. And `generator/job.py:391-394` appends the four drafts **to the pending token**, so a verify
+window is 5 rows, not 4: M3's gate is 6.4× the window (27 rows short, `gate_factor 6.4`) and the
+per-expert gate at `stream_t 8` is 1.6× it. Both corrections came from the review, both changed a
+`derived` number in the matrix, and neither moves a verdict: M3 is still `absent` and M4 still
+`diverged` on the mechanism — M4's *performance* advantage is what is now recorded as unresolved.
 
 ## 8. What a port would cost
 
@@ -404,8 +455,8 @@ live traffic, every one of these passes stops the served model, and restoring it
 | row | the port is | price | the arm, exactly | measured? |
 |---|---|---|---|---|
 | **M1-budget** | a regime delta: `-CacheSize 32768 -MaxLength 32768 -Split 354`. The split is not a separate decision — it is what the freed 2.47 GB buys (131 → 158 of 512 experts/layer), so a pass that shrinks the cache and keeps `-mcs 381` spends the VRAM on nothing. `sysmem_kv_cache` is **1 line** in the served config (`tabbyAPI/config.yml:441`, default `0`) and **no pass can measure it**: `perf.py` loads the model directly, so tabbyAPI is not in the loop | 3 harness flags + 1 served-config line | `-Tag t31-M1-cs32k -Runner perf -CacheSize 32768 -MaxLength 32768 -Split 354` | `unmeasured` |
-| **M3-miss-split** | an env delta, and it is **two variables by design**: `EXL3_MOE_STREAM_MIN_ROWS=2` **and** `EXL3_MOE_STREAM_T=2`. §3 is the arithmetic: the row gate alone is inert for a 4-row window because the per-expert gate (`stream_t`, `moe_cpu_host.py:2009`) is 8, and an explicit `EXL3_MOE_STREAM_T` is what bypasses the bandwidth calibration that would otherwise hold it up (`:1726-1727`), so either variable alone spends a pass to change nothing | one `-Env` string; 0 flags, 0 lines of code; needs the operator's consent like every arm here — the pass stops the served model | `-Tag t31-M3-rows2 -Runner perf -MaxLength 131072 -Env "EXL3_MOE_TIER_STATS=1,EXL3_MOE_STREAM_MIN_ROWS=2,EXL3_MOE_STREAM_T=2"` | `unmeasured` — needs an arm |
-| **M4-spec-yield** | a runner switch, not a flag: `-Runner spec_decode` is the only runner the harness emits draft args for (`-dm`/`-ndt`/`-dds` come from `state.active.draft`; `-MaxLength` is stripped for it), and the deployed state's `knob_arms_disable_swap: true` makes the harness set `EXL3_MOE_CPU_SWAP=0` by itself — the guard that killed the campaign's only draft arm (`t27-A-base`, `status=fail` 42 s in, no ARM line) | 1 word, plus `-Extra "-dstats <file>"` if per-position records are wanted | `-Tag t31-M4-w4 -Runner spec_decode` | yield already in `arms.csv` (2.17 to 2.40 of 4); the unit question is not, so the arm re-measures at the current regime |
+| **M3-miss-split** | an env delta, and it is **two variables by design**: `EXL3_MOE_STREAM_MIN_ROWS=2` **and** `EXL3_MOE_STREAM_T=2`. §3 is the arithmetic: the row gate alone is inert for a 5-row window because the per-expert gate (`stream_t`, `moe_cpu_host.py:2009`) is 8, and an explicit `EXL3_MOE_STREAM_T` is what bypasses the bandwidth calibration that would otherwise hold it up (`:1726-1727`), so either variable alone spends a pass to change nothing | one `-Env` string; 0 flags, 0 lines of code; needs the operator's consent like every arm here — the pass stops the served model | `-Tag t31-M3-rows2 -Runner perf -MaxLength 131072 -Env "EXL3_MOE_TIER_STATS=1,EXL3_MOE_STREAM_MIN_ROWS=2,EXL3_MOE_STREAM_T=2"` | `unmeasured` — needs an arm |
+| **M4-spec-yield** | a runner switch, not a flag: `-Runner spec_decode` is the only runner the harness emits draft args for (`-dm`/`-ndt`/`-dds` come from `state.active.draft`; `-MaxLength` is stripped for it), and the deployed state's `knob_arms_disable_swap: true` makes the harness set `EXL3_MOE_CPU_SWAP=0` by itself — the guard that killed the campaign's only draft arm (`t27-A-base`, `status=fail` 42 s in, no ARM line) | 1 word, plus `-Extra "-dstats <file>"` if per-position records are wanted | `-Tag t31-M4-w4 -Runner spec_decode` | the acceptance column is in `arms.csv` already (2.17 to 2.40 accepted **drafts** of 4, i.e. 3.17–3.40 tokens per round); what is missing is the same measurement at the current regime, so the arm re-runs it |
 | **M5-ple** | code: a bounded row cache in front of `_gather_rows` (`exllamav3/modules/row_table.py:282-312`), keyed on the resolved uids and capped in rows — **≈50 lines in that file**, no new dependency and no kernel change. Neither knob that exists is the row cache: `EXL3_PLE_SUB_CHUNK` is a prefill gather knob (T12, ~2 % bands) and `-ngr`/`EXL3_NGRAM_STREAM=0` was measured unavailable (RAM floor breached in 27 s, T12 §2) | ≈50 lines of engine code | none until the code exists; then the arm is T12's repeat-heavy corpus at `-MaxLength 131072` | `unmeasured` |
 
 Three notes on the table:
@@ -511,19 +562,24 @@ result usable by the next:
 -Tag t31-M1-cs32k -Runner perf -CacheSize 32768 -MaxLength 32768 -Split 354
 #    its control in the same session: -CacheSize 262144 -MaxLength 32768, so both arms share bands
 
-# 4. M4, a runner switch only; the yield is already in arms.csv, the unit is what is missing (§7.3)
+# 4. M4, a runner switch only; the acceptance column is already in arms.csv (accepted DRAFTS, so
+#    1 + acc tokens/round), and what the arm adds is the same measurement at the current regime (§7.3)
 -Tag t31-M4-w4 -Runner spec_decode                  # -Extra "-dstats <file>" for per-position records
 ```
 
 **And what is already settled**, so a reader does not spend a pass on it: M2's mechanism, its rate
-(2.42 promotions/step, 8 669 by step 3 584) and its price (2.318 ms/step hook) — second-round t29 only;
+(2.42 promotions/step, 8 669 by step 3 584), its price (2.318 ms/step hook) and its source (the pinned
+arena, not the checkpoint) — second-round t29 only;
 M1's pinned-arena half (+40.59 points of coverage, 42 of 48 layers promotable); M3's two gates as
-arithmetic, and the `-Env` string that would test the fork's half; M4's acceptance range (2.17 to 2.40
-of 4 drafted) and the fact that the harness, not a research note, produced it; M5's `-ngr` verdict
+arithmetic, and the `-Env` string that would test the fork's half; M4's acceptance column (2.17 to 2.40
+accepted **drafts** of 4 offered, i.e. 3.17–3.40 tokens per round) and the fact that the harness, not a
+research note, produced it; M5's `-ngr` verdict
 (measured unavailable under this box's RAM floor) and the ~50 lines in `row_table.py` that the row
 cache would cost; M7 as deployment policy rather than an engine property. What remains unmeasured is
 exactly this: **the tier instrument's own cost**, **M3's fork half**, **M1's cache-size lever and
-therefore the +23 to +27 experts/layer**, **M4's unit at the current regime**, **M5's row cache** (no
+therefore the +23 to +27 experts/layer**, **M4's unit at the current regime** (note 1's log-derived
+2.2–2.4 tokens/window and the harness's 3.17–3.40 tokens/round are different measurements and only an
+arm on both sides settles which compares), **M5's row cache** (no
 code to measure yet), and **every M7 batch/residency number on the fork**.
 
 ## The gates
@@ -592,9 +648,13 @@ symmetric percentage band, which is why every spread here is written as one numb
 3. **The plan says "8/8 rows PASS"**; the brief pins six mechanisms and the plan's own self-review
    lists M1-M5 + M7, so the CLI prints `6/6`. M6 (the CPU pool's handshake) and M9 (quantization) are
    deliberately out of this matrix — both notes put them out of the gap.
-4. **`pcie_frac 0.55`, `stream_t 8`, `num_draft_tokens 4`, `max_batch_size 2`, `sysmem_kv_cache 0`
-   are quoted by hand**, not extracted: the first two because the extractor has no such key, the last
-   three because they live in `tabbyAPI/config.yml`, outside this tree. Each is cited inline.
+4. **`pcie_frac 0.55` is Strata's nominal pre-probe share, `stream_t 8`, `num_draft_tokens 4`,
+   `max_batch_size 2`, `sysmem_kv_cache 0` are quoted by hand**, not extracted: the first two because
+   the extractor has no such key, the last three because they live in `tabbyAPI/config.yml`, outside
+   this tree. Each is cited inline. The 0.55 is the base `generate.cpp:2051-2063` starts from for
+   native packs; the startup probe scales it to the deployed value and prints that value, and no log
+   on this box records the line — so the report quotes 0.55 as a nominal share, never as the share the
+   served model ran.
 5. **The 60.5-swaps adaptation** is note 2's measured round, not re-derived here (the log prints a
    cumulative exchange count, and the per-adaptation figure needs the round count from a log the
    notes do not carry). The matrix records it as an input, and the derivation it feeds (÷4) is checked.
@@ -612,7 +672,13 @@ symmetric percentage band, which is why every spread here is written as one numb
    mechanism, not a shipped tree, and the two lines are the first thing a re-run needs.
 9. **`acc` in `arms.csv` is accepted *drafts* per round**, not tokens per window
    (`spec_decode.py:142-151`: `acc_len = dacc / rounds`, and every round emits one token that is not
-   an accepted draft). §4's `1 + Σ acceptance` and the row's "2.2–2.4 of 4 rows" are therefore the same
-   column read two ways; which way Strata's log prints its 2.5–3.5 is not settled by anything in
-   either tree, so the ratio's size is open while its sign (a ceiling of 4 against a chosen window) is
-   not.
+   an accepted draft). So the harness's own column converts to **1 + `acc` = 3.17–3.40 tokens per
+   round**, and reading 2.17–2.40 as tokens/window — which this report did until the review — understated
+   the harness's yield by about a token. That column is *not* note 1's live-log derivation (2.2–2.4
+   tokens/window, computed as 1 + accepted/windows from the served deployment's own log): the two are
+   different measurements of different runs, they disagree, and neither is reconciled here. §4 keeps
+   them in separate rows for that reason. The mechanism claim survives — a ceiling of 4 offered drafts
+   against a policy that chooses a window per round — but with the fork at 3.17–3.40 tokens per round
+   on the harness's column, **neither the size nor the sign of the divergence is open-and-shut**: the
+   fork may be at parity with or ahead of Strata's 2.5–3.5 on that reading, and the arm that would
+   settle it is §8's `t31-M4-w4`.
