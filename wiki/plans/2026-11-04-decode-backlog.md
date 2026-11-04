@@ -16,9 +16,9 @@ every item is judged on the same agentic-weighted decode metric and the same box
 |---|---|---|---|---|
 | 1 | pre-attention router lookahead prefetch | pre- and post-attention residuals have >0.92 cosine, and the predicted top-10 **router picks** match the true ones often enough to prefetch | capture pre/post residual per layer and the top-10 overlap for 20 decode steps (~10 min, one pass) | **gated on a measurement**; prefetch is correctness-neutral, so a poor overlap costs only wasted bandwidth |
 | 2 | 3D V-Cache as a "Tier-1.5" | cold-expert streams flush the 96 MB V-Cache, so a hot pool could live there | count L3 hit rate with the current load pattern (perf counters or a microbenchmark of the gather) | **hardware verified, mechanism half-impossible**: `Win32_Processor` says AMD Ryzen 9 7950X3D, 16C/32T, L3 **131 072 KB** (96 + 32 MB across the two CCDs), so the premise about the silicon holds. But L3 is not software-addressable — "pin 45 experts in V-Cache" cannot be implemented; the achievable form is non-temporal loads for cold rows plus a hot pool bounded to ~86 MB |
-| 3 | cold-tail 2.0 bpw via `-or` | a 3.18 → 2.0 bpw re-quantization of the bottom ~300 experts/layer costs <0.03-weight perplexity but 37 % fewer bytes | quantize one layer's tail and measure both perplexity and gather time | **highest expected value, highest cost**; needs a quantizer run, an `-or` variant tree, and its own plan |
+| 3 | cold-tail 2.0 bpw via `-or` | a 3.18 → 2.0 bpw re-quantization of the bottom ~300 experts/layer costs <0.03-weight perplexity but 37 % fewer bytes | quantize one layer's tail and measure both perplexity and gather time | **highest expected value, highest cost**; needs a quantizer run, an `-or` variant tree, and its own plan. The payoff is now computed: `size_check.py --tail-bpw 2.0` puts the arena at **33 375 → 20 990 MiB** (linear in bits, per-expert scales do not shrink, so an upper bound) — the 32.6 → 21 GiB claim holds |
 | 4 | draft-row CPU-miss pruning | dropping tail picks on draft rows is a "standard capacity-aware policy" with <0.01 perplexity cost | it changes the served distribution **and** depends on placement, so two runs with different placement serve different models | **hold** — a product/correctness decision, not an optimization; needs an explicit decision that the served policy may depend on placement |
-| 5 | 512 MiB hot-trigram table + 4-bit PLE | top ~3M of 20M rows serve >88 % of lookups; today every decode row is an unbuffered NVMe read | extends the row cache already merged (`e43ba35d`): measure its hit rate with a real corpus first | **next after the measurement session** — cheapest real win, no math change |
+| 5 | 512 MiB hot-trigram table + 4-bit PLE | top ~3M of 20M rows serve >88 % of lookups; today every decode row is an unbuffered NVMe read | extends the row cache already merged (`e43ba35d`): measure its hit rate with a real corpus first | **mechanism merged, premise corrected**: the served table is **320 001 536 rows** across 16 heads (20000003…20000171 each), not 20M (`bench/ngram_pin_manifest.py` on the header). A 4096-row pin is 648 KiB, 1M rows 162 MB, so the 512 MiB table is ~3.1M rows — the *row budget* is affordable; the 88 % claim now needs its own corpus count, which `bench/ngram_hot_rows.py` produces |
 | 6 | tree verification for DFlash2 | a 6–7 token tree from one non-causal drafter pass, filtered by router overlap, yields +25–35 % accepted tokens for near-zero bytes | needs tree-attention masks and multi-candidate verification in the generator; nothing exists to measure yet | **own plan**; the engine has no tree path to extend |
 
 ## Order, and why
@@ -35,6 +35,15 @@ every item is judged on the same agentic-weighted decode metric and the same box
    "pin data in L3" framing, which is not implementable.
 6. **#6** — a separate plan with its own drafter work.
 7. **#4** — parked unless the served-distribution question is answered explicitly.
+
+## Progress (2026-11-04)
+
+- **#5, mechanism:** merged — `EXL3_NGRAM_ROW_CACHE_PIN` (+ `_PIN_MAX_BYTES`, named guards, never-evicted slots) on top of the row cache; `bench/ngram_hot_rows.py` counts a tokenized corpus; `bench/ngram_pin_manifest.py` derives the hash manifest from the checkpoint header. The pin file itself is one command away, after the campaign.
+- **#5, premise:** corrected (320M rows, not 20M) — see the row.
+- **#3, payoff:** computed — see the row.
+- **#1, instrument:** merged — `bench/router_lookahead_probe.py` measures, per layer, the cosine between the pre- and post-attention residual and the top-k overlap between the router's true picks and the picks a pre-attention probe would make; it has not been run on the model yet, and the item stays gated on that number.
+- **#2:** its achievable half (a hot pool inside a bounded row budget) is the #5 mechanism; the non-temporal-load half is a `exllamav3_ext` change and remains unstarted.
+- **#4, #6:** unchanged.
 
 ## What this backlog does not accept
 
