@@ -141,6 +141,9 @@ def main(argv: list[str]) -> int:
                     help="required free VRAM after everything is resident (default 1024)")
     ap.add_argument("--reserve-mb", type=int, default=2048,
                     help="the autosplit's own reserve, observed at ~2 GiB; counted against the card (0 to ignore)")
+    ap.add_argument("--ccs", type=float, default=0.0,
+                    help="host KV second tier in GB (the -ccs value). Its VRAM cost is NOT modelled, so a "
+                         "configuration that uses it is reported UNCERTIFIED instead of FITS (T37)")
     ap.add_argument("--min-cs", nargs=2, type=int, metavar=("PROMPT_TOKENS", "NEW_TOKENS"),
                     help="print the smallest -cs that can run prompt + generation")
     ap.add_argument("--json", action="store_true", help="machine-readable output only")
@@ -235,10 +238,20 @@ def main(argv: list[str]) -> int:
     out["ram_free_after_mib"] = round(mib(args.budget_ram_mb * 1024 ** 2 - ram), 0)
     out["fits"] = bool(out["vram_free_after_mib"] >= args.headroom_mb and out["ram_free_after_mib"] > 0)
     out["ngram_table_mib"] = round(mib(sum(host_streamed.values())), 1)
+    # A host KV second tier (-ccs) costs VRAM somewhere - in T37 an arm this script certified as
+    # FITS (2 041 MiB free) was killed by the watcher at 23 MiB free. Nothing here models that term,
+    # so a configuration that uses it is not certified rather than certified against arithmetic that
+    # does not include its cost.
+    out["ccs_gb"] = args.ccs or 0.0
+    out["certified"] = out["fits"] and not args.ccs
+    if args.ccs:
+        out["uncertified_reason"] = (
+            f"-ccs {args.ccs:g} GB: the host KV tier's VRAM cost is not modelled "
+            f"(T37 measured ~2 GB unaccounted at this regime)")
 
     if args.json:
         print(json.dumps(out, indent=1))
-        return 0 if out["fits"] else 1
+        return 0 if out["certified"] else 1
 
     print(f"model      {args.model}")
     print(f"config     -mcs {args.mcs}  -cs {args.cs}  -cq {args.cq}  slots {args.slots}"
@@ -257,6 +270,10 @@ def main(argv: list[str]) -> int:
     print(f"  reserve  {args.reserve_mb:9.0f} MiB held by the autosplit (counted against the card)")
     print(f"           {out['ram_mib']:9.0f} MiB host arena of {args.budget_ram_mb}"
           f"  -> {out['ram_free_after_mib']:.0f} MiB free")
+    if args.ccs:
+        print(f"  host KV  {args.ccs:9.1f} GB (-ccs)   cost NOT modelled, see T37")
+        print(f"verdict    UNCERTIFIED — {out['uncertified_reason']}")
+        return 1
     print(f"verdict    {'FITS' if out['fits'] else 'DOES NOT FIT'} "
           f"(needs >= {args.headroom_mb} MiB VRAM headroom)")
     return 0 if out["fits"] else 1
