@@ -633,7 +633,15 @@ models is reproducible as well.
 
 ### `EXL3_MOE_PINNED_ARENA` (default: `0`)
 
-Default for `Config.infer_params.moe_cpu_pinned_arena` (`-mcpa` / `--moe_cpu_pinned_arena` in
+> **Not deployed (2026-11-04).** It buys prefill (+16.2 % at 4096, +15.8 % at 131072 with a 24 GiB
+> budget, T33) and **no decode** in the served configuration: DFlash2 drafting forces
+> `EXL3_MOE_CPU_SWAP=0`, where the arena is read only by streamed prefill and by the promote/demote
+> paths, never by decode. The `t32`/`t33` decode figures first attributed to this knob came from the
+> dynamic-placement regime those arms ran (4 promoter spares by default plus the control's inline
+> 512-step sweep); the confirmation with the drafter moved the agentic-weighted decode metric by
+> −0.93 %, and the deployment was reverted.
+>
+> Default for `Config.infer_params.moe_cpu_pinned_arena` (`-mcpa` / `--moe_cpu_pinned_arena` in
 `model_init`). Back the CPU worker's expert-weight arena with shared chunks that the parent process also maps
 and page-locks (`cudaHostRegister`), and lay each expert's gate/up/down trellis tensors out as
 one contiguous block. Streamed prefill (`EXL3_MOE_STREAM_T`) then DMAs an expert's block

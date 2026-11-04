@@ -1,5 +1,12 @@
 # T33 — the pin is a step function: 8 GiB buys nothing, 24 GiB buys all of it
 
+> **Correction, 2026-11-04 (see T32's header and t34/t35). The decode column is withdrawn; the prefill
+> column stands.** This curve was measured in the same dynamic-placement, no-drafter regime as T32,
+> where the control pays an inline 512-step sweep and every pinned arm also carries 4 promoter spares
+> (the default). In the served configuration (DFlash2 w4, `EXL3_MOE_CPU_SWAP=0`) the arena is read only
+> by streamed prefill, so the cap decides **prefill** speed and nothing else — 8 GiB already buys
+> +3–4 %, 24 GiB +16 %, unbounded +20 %. The deployment was reverted on 2026-11-04.
+
 Cap curve of 2026-11-04, one session, server down, production regime (`split 381`, `cs 262144`,
 `cq 4,4`, DFlash2 window 4, `max_length` 131072), `-dr 3`, instrument off, no spares (promotions were
 killed in T32). Engine: the branch's two files, file-level in the venv.

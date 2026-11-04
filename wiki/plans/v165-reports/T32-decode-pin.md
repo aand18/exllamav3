@@ -1,5 +1,24 @@
 # T32 — the arena pin is a decode win; promote-on-miss is not
 
+> **Correction, 2026-11-04 (after t34 and t35). The decode claim below is withdrawn; prefill stands.**
+> The deltas are real within the regime measured here, but this report attributed them to the pin.
+> Three findings overturn that:
+> 1. **`EXL3_MOE_CPU_PROMOTE` defaults to 4 spares**, and spares exist only when the pin is on
+>    (`block_sparse_mlp_cpu.py:1087-1090`). Arm **B was pin + 4 spares**, not "pin alone", and C−B
+>    compared **16 against 4**, never 0 against 4.
+> 2. **The control pays an inline sweep.** With spares 0 and no generator, `_split_swap_tick` reaches
+>    `run_pending_swap_sweeps` every 512 steps (`:1217-1219`) and re-reads experts from disk *inside
+>    timed decode*; the spares arms return before it (`:1207`).
+> 3. **In the served configuration the arena is not on the decode path at all.** DFlash2 drafting
+>    forces `EXL3_MOE_CPU_SWAP=0`, and then `_split_dynamic` is False, spares are 0, and
+>    `moe_cpu_host.arena_views` is read only by streamed prefill and by `promote_expert`/`demote_expert`.
+>    `t34` confirmed it empirically: with the drafter the pin moved the agentic-weighted decode metric
+>    by **−0.93 %** (A/A noise).
+>
+> So the honest statement is: **prefill +21.9 % (streamed prefill does read the arena); decode 0 % in
+> the configuration production runs.** The +17–24 % decode figures here belong to a dynamic-placement,
+> no-drafter regime production does not use. The deployment was reverted on 2026-11-04.
+
 Campaign of 2026-11-04 on the production regime (`split 381`, `cs 262144`, `cq 4,4`, DFlash2 window 4,
 `max_length` 131072), one session, server stopped, `-dr 3`. Engine: branch `feat/adaptive-tier`
 installed file-level into the venv (two files, md5 `7ff6aded…`, `7b9b705a…`); the pristine pair

@@ -5,9 +5,12 @@
 > and separated the two halves of the mechanism. The result: the **byte source** row stands (M2's
 > transfer source is faithful, RAM → VRAM from the arena), but the **churn** half of M2 is measured
 > dead — promotions add +0.08 % mean decode over eleven contexts and cost 2.2 % of prefill — so the
-> feature is not deployed. M1's budget lever (free KV to buy expert slots) remains unmeasured and the
-> pinned arena achieved the same end from the other side: `T33-capped-pin.md` shows 24 GiB of pinned
-> arena is worth +17–24 % decode at the production context. M3/M4/M5/M7 are unchanged.
+> feature is not deployed. M1's budget lever (free KV to buy expert slots) remains unmeasured, and the
+> pinned arena does **not** achieve the same end from the other side: T32/T33's first reading of
+> +17–24 % decode came from the dynamic-placement regime those arms ran, and in the served
+> configuration (DFlash2 forces `EXL3_MOE_CPU_SWAP=0`) the arena is never read during decode — the
+> drafter confirmation moved the agentic-weighted metric by −0.93 %. The pin's only real gain is
+> prefill, and the deployment was reverted. M3/M4/M5/M7 are unchanged.
 
 Written 2026-11-03/04 on `feat/adaptive-tier` (base `165-win-perf`). **No GPU and no measurement pass
 was started for this report:** every performance number below was already measured, and what is new

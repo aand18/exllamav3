@@ -1,12 +1,16 @@
 # T16 — the adaptive expert tier: a pin budget, a promote rate, and the coverage number
 
-> **Update 2026-11-04 — the decode question is answered, and it splits the two halves of this feature.**
-> `T32-decode-pin.md` and `T33-capped-pin.md` measured both halves with three decode reps per cell
-> (the campaigns below ran one): the **pinned arena** is worth **+17–24 % decode** at the production
-> context and **+16 % prefill**, while **promote-on-miss is worth nothing** (+0.08 % mean decode,
-> −2.2 % prefill) and is not deployed. The "no proven decode gain" readings in §7 and the transfer
-> review's M2/M4 rows describe the unpinned, instrumented campaigns and are superseded by those two
-> reports. The coverage numbers in §7 remain valid as coverage; they are not a speed claim.
+> **Update 2026-11-04 — the decode question closed as a negative, and the prefill gain stands.**
+> `T32-decode-pin.md` and `T33-capped-pin.md` remeasured both halves with three decode reps per cell
+> (the campaigns below ran one) and their editors' first reading was "+17–24 % decode from the pinned
+> arena". **That attribution was wrong and both reports now carry the correction:** the gain came from
+> the dynamic-placement regime those arms ran (`EXL3_MOE_CPU_SWAP=1`, 4 promoter spares by default +
+> the control's inline 512-step sweep), and in the served configuration — DFlash2 w4, which forces
+> `EXL3_MOE_CPU_SWAP=0` — the pinned arena is never read during decode. The confirmation with the
+> drafter moved the agentic-weighted decode metric by **−0.93 %**, i.e. noise.
+> What survives: **prefill +16–22 %** at the pinned caps (streamed prefill does read the arena), and
+> even that is mostly prefix-cached in production. The deployment was reverted on 2026-11-04; no
+> decode claim in this file or in T31/T32/T33 should be read as achieved.
 
 Written 2026-11-02 on `feat/adaptive-tier` (base `165-win-perf`), and **run on 2026-11-03**: the four
 arms in §7 are measured, the suite ran on the Windows venv (§9), a review doubled back over both (§10),
