@@ -8,10 +8,14 @@ on the decode critical path. What these tests pin down:
 - the cache never holds more rows than its budget, however many distinct rows go through it,
 - a gather larger than the decode threshold (a prefill chunk) neither looks a row up nor evicts the
   cache,
+- a hit does not read the file at all (a row rewritten on disk after it was cached still comes back
+  as the cached bytes, which is the one semantics the cache changes),
 - with the knob unset the table allocates no cache at all and counts nothing.
 
 A tiny row table file is the whole fixture: no model, no device, no safetensors header.
 """
+
+import os
 
 import pytest
 import torch
@@ -102,3 +106,32 @@ def test_the_cache_is_off_by_default(table, monkeypatch):
     gather(table, [3])      # a repeated row would be a hit if any cache were running
     assert rt.row_cache_hits() == 0 and rt.row_cache_misses() == 0
     assert not hasattr(table, "_row_cache")
+
+
+def rewrite_row(table, row, data):
+    """Put `data` where that row lives in the table file, flushed to the volume: the gather reads an
+    unbuffered handle on Windows, which bypasses the file cache, so only fsync makes it visible."""
+    store = table.stores[0]
+    with open(store.filename, "r+b") as f:
+        f.seek(store.abs_offset + row * store.row_bytes)
+        f.write(data.numpy().tobytes())
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def test_a_hit_does_not_read_the_file(table, monkeypatch):
+    """The one semantics the cache changes, and the reason it is not an optimisation of the counters:
+    a row the table rewrites after it was cached is still served from the cache, while the same
+    sequence with the knob unset reads the file again and returns the new bytes. Against a gather
+    with no cache the first comparison is what fails."""
+    monkeypatch.setenv("EXL3_NGRAM_ROW_CACHE_ROWS", str(BUDGET))
+    original = gather(table, [7])
+    new = torch.randint(-32768, 32768, (1, table.row_words),
+                        generator = torch.Generator().manual_seed(1), dtype = table.row_dtype)
+    assert not torch.equal(new, original)
+    rewrite_row(table, 7, new)
+
+    assert torch.equal(gather(table, [7]), original)            # cache on: the file is not read
+    monkeypatch.delenv("EXL3_NGRAM_ROW_CACHE_ROWS")
+    assert torch.equal(gather(table, [7]), new)                 # cache off: the file is read
+    assert torch.equal(table.fetch(torch.tensor([7])), new)      # and it holds the new row

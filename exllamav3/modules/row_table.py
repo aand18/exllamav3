@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import threading
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 import torch
 from ..loader.safetensors import DiskTensorHandle
@@ -37,6 +38,7 @@ ROW_CACHE_GATHER_MAX_ROWS = 64     # row cache: gathers of up to this many rows 
 ROW_CACHE_BUDGET_MAX = 1 << 20      # upper clamp of EXL3_NGRAM_ROW_CACHE_ROWS
 
 _row_cache_counts = {"hits": 0, "misses": 0}
+_row_caches = weakref.WeakSet()     # live caches, for reset_row_cache()
 
 
 def row_cache_hits() -> int:
@@ -50,9 +52,12 @@ def row_cache_misses() -> int:
 
 
 def reset_row_cache():
-    """Zero the counters. They are process-wide, so a test or an A/B arm resets them to read a
-    single arm's numbers."""
+    """Zero the counters. The process-wide ones the accessors above report, so a test or an A/B arm
+    can read one arm's numbers, and each live cache's own pair, which is what its report() line
+    prints at close (a reset therefore starts a clean line rather than mixing two arms)."""
     _row_cache_counts["hits"] = _row_cache_counts["misses"] = 0
+    for cache in _row_caches:
+        cache.hits = cache.misses = 0
 
 
 def _row_cache_budget() -> int:
@@ -78,9 +83,13 @@ class _RowCache:
     hand last passed its slot gets one more lap instead of being evicted.
 
     The cached bytes belong to the cache: a hit is copied into the caller's staging buffer, never
-    handed out, so nothing downstream can write through to it. `lock` guards both the dict and the
-    slot ring because a queued prefetch can resolve to few enough unique rows to reach this path on
-    its worker thread (a chunk of repeated tokens hashes to a handful of rows).
+    handed out, so nothing downstream can write through to it. `lock` guards the dict and the slot
+    ring because a queued prefetch can resolve to few enough unique rows to reach this path on its
+    worker thread (a chunk of repeated tokens hashes to a handful of rows); it is never held across
+    a read of the table file.
+
+    `hits` / `misses` are this cache's own counts, which report() prints; reset_row_cache() zeroes
+    them along with the module-wide counters the accessors report.
     """
 
     def __init__(self, budget: int, row_words: int, row_dtype: torch.dtype):
@@ -98,6 +107,7 @@ class _RowCache:
         self.hits = 0
         self.misses = 0
         self.lock = threading.Lock()
+        _row_caches.add(self)
 
     def __len__(self):
         return len(self.index)
@@ -401,10 +411,16 @@ class RowTable:
     def _gather_cached(self, cache: _RowCache, store, uids: torch.Tensor, i0: int, i1: int,
                        base: int, out: torch.Tensor):
         """A decode-sized gather through the row cache: the rows it holds are copied into out, the
-        rest are read in runs by the ordinary gather and kept."""
+        rest are read in runs by the ordinary gather and kept.
+
+        The lock covers the lookups and the inserts, never the reads. A lock held across a miss
+        would put the decode thread behind the prefetch worker's NVMe read - the stall the cache
+        exists to remove - so the reads run unlocked and the insert re-checks the index: a
+        concurrent gather may have inserted the same row in the meantime, and put() accepts a row
+        it already holds."""
         rows = uids[i0 : i1].tolist()
         miss = [False] * len(rows)
-        hits = misses = 0
+        hits = 0
         with cache.lock:
             for j, row in enumerate(rows):
                 s = cache.slot(row)
@@ -413,20 +429,25 @@ class RowTable:
                 else:
                     out[i0 + j].copy_(cache.rows[s])
                     hits += 1
-            j = 0
-            while j < len(rows):
+        j = 0
+        while j < len(rows):
+            if not miss[j]:
+                j += 1
+                continue
+            j1 = j
+            while j1 < len(rows) and miss[j1]:
+                j1 += 1
+            ext.ngram_gather_cpu(store._ensure_open(), store.abs_offset, store.row_bytes,
+                                 uids[i0 + j : i0 + j1].contiguous(), base, out[i0 + j : i0 + j1])
+            j = j1
+        misses = 0
+        with cache.lock:
+            for j, row in enumerate(rows):
                 if not miss[j]:
-                    j += 1
                     continue
-                j1 = j
-                while j1 < len(rows) and miss[j1]:
-                    j1 += 1
-                ext.ngram_gather_cpu(store._ensure_open(), store.abs_offset, store.row_bytes,
-                                     uids[i0 + j : i0 + j1].contiguous(), base, out[i0 + j : i0 + j1])
-                for k in range(j, j1):
-                    cache.put(rows[k], out[i0 + k])
-                    misses += 1
-                j = j1
+                misses += 1
+                if cache.index.get(row) is None:
+                    cache.put(row, out[i0 + j])
             cache.hits += hits
             cache.misses += misses
         _row_cache_counts["hits"] += hits
