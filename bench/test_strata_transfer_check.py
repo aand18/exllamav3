@@ -4,17 +4,23 @@ Two sides, one module: `extract_strata` reads the sibling engine's C++, `extract
 fork's Python plus the regime file. The rest of the assertions (the real trees, the divergence
 branches, the source_lines bounds) live in `strata_transfer_check._selftest`, because the checker has
 to run on a box with no pytest: `python3 bench/strata_transfer_check.py --selftest`.
+
+The five matrix-contract tests read the real sibling tree, so they skip - naming the missing file and
+`STRATA_ROOT` - on a box that has only this fork; `--selftest` still exits 2 there unless
+`--allow-missing-tree` says the fixtures-only run is the intended one.
 """
 
 import pathlib
 import sys
+
+import pytest
 
 # `pytest bench/...` from the repo root puts bench/ on sys.path only in the default import mode;
 # this keeps a direct `python3 bench/test_strata_transfer_check.py` working too.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from strata_transfer_check import (  # noqa: E402
-    MATRIX, REPO, STRATA, _fake_root, check, extract_exllama, extract_strata,
+    GENERATE, MATRIX, REPO, STRATA, _fake_root, check, extract_exllama, extract_strata,
 )
 
 
@@ -69,7 +75,24 @@ def test_extract_exllama_reads_the_fork_defaults_from_source_text():
 
 # --- the matrix's contract: a wrong recorded constant fails, the real tree passes ---------------
 
+# The five tests below read the REAL sibling tree, not a fixture: they call `extract_strata(STRATA)`,
+# so the file the extractor opens has to be on this box. Where it is absent - the Windows copy of this
+# fork, which carries no Strata checkout - they skip and name what is missing, rather than failing on a
+# fixture no box can supply. The file is the same one the extractor and `_selftest` key on, so the guard
+# cannot drift from the thing it guards.
+STRATA_SOURCE = STRATA / GENERATE
+needs_strata_tree = pytest.mark.skipif(
+    not STRATA_SOURCE.is_file(),
+    reason = (
+        f"no Strata tree: {STRATA_SOURCE} is absent, and these read the real source rather than a "
+        f"fixture. Point the checker at another checkout with STRATA_ROOT=/path/to/UnbiasedStrata; "
+        f"for the fixture-only arms there is "
+        f"`python3 bench/strata_transfer_check.py --selftest --allow-missing-tree`."
+    ),
+)
 
+
+@needs_strata_tree
 def test_a_wrong_recorded_constant_fails():
     """The plan's first test: one wrong recorded constant must FAIL and name itself."""
     bad = [dict(MATRIX[0], strata=dict(MATRIX[0]["strata"], adapt_swaps=64))]
@@ -78,6 +101,7 @@ def test_a_wrong_recorded_constant_fails():
     assert fails and "adapt_swaps" in fails[0]
 
 
+@needs_strata_tree
 def test_the_real_tree_passes_every_row():
     """The plan's second test: the tree as it stands yields one line per row, none of them FAIL."""
     lines = check(extract_strata(STRATA), extract_exllama(REPO))
@@ -85,6 +109,7 @@ def test_the_real_tree_passes_every_row():
     assert len(lines) == len(MATRIX) == 6
 
 
+@needs_strata_tree
 def test_a_wrong_fork_constant_fails_and_names_it():
     row = next(r for r in MATRIX if r["id"] == "M2-churn")
     bad = [dict(row, fork=dict(row["fork"], sweep_source="ram-copy"))]
@@ -93,6 +118,7 @@ def test_a_wrong_fork_constant_fails_and_names_it():
     assert fails and "sweep_source" in fails[0]
 
 
+@needs_strata_tree
 def test_a_divergence_without_a_justification_fails():
     row = next(r for r in MATRIX if r["verdict"] != "faithful")
     bad = [dict(row, justification="   ")]
@@ -101,6 +127,7 @@ def test_a_divergence_without_a_justification_fails():
     assert fails and "justification" in fails[0]
 
 
+@needs_strata_tree
 def test_an_approximate_measured_fails():
     """`measured` is a run id or the literal `unmeasured`; "about 0.2 per step" is neither."""
     bad = [dict(MATRIX[0], measured="about 0.2 per step")]
