@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 import torch
 from ..loader.safetensors import DiskTensorHandle
@@ -21,12 +22,113 @@ thread (prefetch()). Each queued prefetch owns one staging set; lookup() takes t
 staged ids equal the ones it was given and stages inline otherwise, so a prefetch for the wrong
 ids can only cost time. A set's CUDA event marks the last lookup's uploads from it; the next
 writer waits on it before reusing the buffers.
+
+Decode-sized lookups can also keep the rows they read (_RowCache, EXL3_NGRAM_ROW_CACHE_ROWS): a
+prompt revisits part of its recent n-grams, and streaming mode reads every one of them from an
+unbuffered handle. Prefill-sized gathers take the uncached path.
 """
 
 PREFETCH_ENABLED = os.environ.get("EXL3_NGRAM_PREFETCH", "1") != "0"   # debug/A-B switch
 PREFETCH_MIN_TOKENS = 256   # positions (bsz * seq) below which prefetch() declines (decode-sized)
 MAX_PIN_SETS = 2            # staging sets: one with the last forward's uploads in flight, one being staged
 INLINE_MAX_ROWS = 16        # rows of a table that gets read-ahead hints, below which a gather reads in line
+
+ROW_CACHE_GATHER_MAX_ROWS = 64     # row cache: gathers of up to this many rows are decode-sized
+ROW_CACHE_BUDGET_MAX = 1 << 20      # upper clamp of EXL3_NGRAM_ROW_CACHE_ROWS
+
+_row_cache_counts = {"hits": 0, "misses": 0}
+
+
+def row_cache_hits() -> int:
+    """Rows a decode-sized gather found in the row cache, i.e. did not read from disk."""
+    return _row_cache_counts["hits"]
+
+
+def row_cache_misses() -> int:
+    """Rows a decode-sized gather had to read, and kept in the row cache."""
+    return _row_cache_counts["misses"]
+
+
+def reset_row_cache():
+    """Zero the counters. They are process-wide, so a test or an A/B arm resets them to read a
+    single arm's numbers."""
+    _row_cache_counts["hits"] = _row_cache_counts["misses"] = 0
+
+
+def _row_cache_budget() -> int:
+    """EXL3_NGRAM_ROW_CACHE_ROWS: how many rows decode-sized gathers keep, 0 = off. Read per gather
+    rather than at import so a test or an A/B script can flip it; a typo reads as off, never as an
+    unbounded cache."""
+    try:
+        rows = int(os.environ.get("EXL3_NGRAM_ROW_CACHE_ROWS", "0"))
+    except ValueError:
+        return 0
+    return min(max(rows, 0), ROW_CACHE_BUDGET_MAX)
+
+
+def _row_cache_stats() -> bool:
+    """EXL3_NGRAM_ROW_CACHE_STATS: print the cache's counts when its table closes."""
+    return os.environ.get("EXL3_NGRAM_ROW_CACHE_STATS", "0") not in ("", "0")
+
+
+class _RowCache:
+    """
+    Rows read by decode-sized gathers, kept as bytes in a pinned CPU tensor and keyed by the row's
+    global index. Slots are a ring over a clock (second-chance) hand: a row looked up since the
+    hand last passed its slot gets one more lap instead of being evicted.
+
+    The cached bytes belong to the cache: a hit is copied into the caller's staging buffer, never
+    handed out, so nothing downstream can write through to it. `lock` guards both the dict and the
+    slot ring because a queued prefetch can resolve to few enough unique rows to reach this path on
+    its worker thread (a chunk of repeated tokens hashes to a handful of rows).
+    """
+
+    def __init__(self, budget: int, row_words: int, row_dtype: torch.dtype):
+        self.budget = budget
+        self.row_words = row_words
+        self.row_dtype = row_dtype
+        with torch.inference_mode(False):
+            # A plain tensor: the gather runs under inference_mode (see _stage), and an inference
+            # tensor could not be written from a caller outside it (a test, a debug snippet)
+            self.rows = torch.empty((budget, row_words), dtype = row_dtype, pin_memory = True)
+        self.index = {}                 # global row -> slot in rows
+        self.slots = [None] * budget    # slot -> global row
+        self.ref = bytearray(budget)    # slot was looked up since the hand last passed it
+        self.hand = 0
+        self.hits = 0
+        self.misses = 0
+        self.lock = threading.Lock()
+
+    def __len__(self):
+        return len(self.index)
+
+    def slot(self, row: int) -> int | None:
+        s = self.index.get(row)
+        if s is not None:
+            self.ref[s] = 1
+        return s
+
+    def put(self, row: int, data: torch.Tensor):
+        s = self.index.get(row)
+        if s is None:
+            while True:
+                s = self.hand
+                self.hand = (self.hand + 1) % self.budget
+                old = self.slots[s]
+                if old is None:
+                    break
+                if self.ref[s]:
+                    self.ref[s] = 0     # referenced since the hand last passed: one more lap
+                    continue
+                del self.index[old]
+                break
+            self.slots[s] = row
+            self.index[row] = s
+        self.ref[s] = 1
+        self.rows[s].copy_(data)
+
+    def report(self) -> str:
+        return f"{self.hits} hits, {self.misses} misses, {len(self)}/{self.budget} rows held"
 
 
 class _PinSet:
@@ -162,6 +264,11 @@ class RowTable:
             self._locked = []
         self.stores = None
         self._pins = []
+        cache = getattr(self, "_row_cache", None)
+        if cache is not None:
+            if _row_cache_stats():
+                print(f"n-gram row cache {self.key}: {cache.report()}")
+            self._row_cache = None
 
     def export(self, stc) -> dict:
         """
@@ -279,10 +386,61 @@ class RowTable:
                 return e
         return None
 
+    def _gather_row_cache(self) -> _RowCache | None:
+        """The row cache, allocated on the first decode-sized gather; None while the knob is off."""
+        budget = _row_cache_budget()
+        if not budget:
+            return None
+        cache = getattr(self, "_row_cache", None)
+        if cache is None or cache.budget != budget or cache.row_words != self.row_words \
+                or cache.row_dtype != self.row_dtype:
+            cache = _RowCache(budget, self.row_words, self.row_dtype)    # a new table or a new budget
+            self._row_cache = cache
+        return cache
+
+    def _gather_cached(self, cache: _RowCache, store, uids: torch.Tensor, i0: int, i1: int,
+                       base: int, out: torch.Tensor):
+        """A decode-sized gather through the row cache: the rows it holds are copied into out, the
+        rest are read in runs by the ordinary gather and kept."""
+        rows = uids[i0 : i1].tolist()
+        miss = [False] * len(rows)
+        hits = misses = 0
+        with cache.lock:
+            for j, row in enumerate(rows):
+                s = cache.slot(row)
+                if s is None:
+                    miss[j] = True
+                else:
+                    out[i0 + j].copy_(cache.rows[s])
+                    hits += 1
+            j = 0
+            while j < len(rows):
+                if not miss[j]:
+                    j += 1
+                    continue
+                j1 = j
+                while j1 < len(rows) and miss[j1]:
+                    j1 += 1
+                ext.ngram_gather_cpu(store._ensure_open(), store.abs_offset, store.row_bytes,
+                                     uids[i0 + j : i0 + j1].contiguous(), base, out[i0 + j : i0 + j1])
+                for k in range(j, j1):
+                    cache.put(rows[k], out[i0 + k])
+                    misses += 1
+                j = j1
+            cache.hits += hits
+            cache.misses += misses
+        _row_cache_counts["hits"] += hits
+        _row_cache_counts["misses"] += misses
+
     def _gather_rows(self, uids: torch.Tensor, out: torch.Tensor):
         """Gather rows into the pinned staging buffer, routing shard segments (contiguous in
-        the list, which must be sorted for a table of several shards) to their tensor/handle."""
+        the list, which must be sorted for a table of several shards) to their tensor/handle.
+        A gather of up to ROW_CACHE_GATHER_MAX_ROWS rows of a streamed table goes through the row cache
+        when EXL3_NGRAM_ROW_CACHE_ROWS is set; a larger one takes the uncached path and leaves the
+        cache alone, so a prefill neither pays a lookup per row nor evicts what decode reuses."""
         stores = self.stores
+        cache = self._gather_row_cache() if self.on_disk and uids.shape[0] <= ROW_CACHE_GATHER_MAX_ROWS \
+            else None
         if len(stores) > 1:
             # One searchsorted for every shard boundary
             bounds = torch.arange(1, len(stores), dtype = torch.int64) * self.rows_per_shard
@@ -300,7 +458,9 @@ class RowTable:
                     lo, hi = torch.aminmax(seg)
                     assert base <= lo.item() and hi.item() < base + store.num_rows, \
                         f"Row index out of range for {self.key}"
-                    if self.hinted and i1 - i0 <= INLINE_MAX_ROWS:
+                    if cache is not None:
+                        self._gather_cached(cache, store, uids, i0, i1, base, out)
+                    elif self.hinted and i1 - i0 <= INLINE_MAX_ROWS:
                         # Rows announced ahead are in the page cache by now: one read each on
                         # this thread, which the gather's worker pool only slows down
                         for i in range(i0, i1):

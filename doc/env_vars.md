@@ -985,6 +985,24 @@ hard limit when that suffices; `ulimit -l unlimited`, `LimitMEMLOCK=infinity` fo
 services) or the interpreter needs `CAP_IPC_LOCK`; this is checked before the table loads. Also
 `--ngram_lock` / `-ngl` in `model_init`-based scripts.
 
+### `EXL3_NGRAM_ROW_CACHE_ROWS` (default: `0` = off, clamped to `1048576`)
+
+Rows of a streamed n-gram table that decode-sized gathers keep, per table: a gather of up to 64
+unique rows
+(one decode token is 16 at `ngram_size 3 x heads_per_ngram 8`; four drafted tokens are 64) is
+served from a pinned host copy of the row when it was read recently, instead of an unbuffered read
+of the table file. Prefill-sized gathers bypass the cache entirely, so a prompt neither pays a
+lookup per row nor evicts what decode reuses. The eviction is a clock (second-chance) hand over a
+ring of the budgeted slots, and the cost is `rows x row_bytes` of pinned RAM (1M rows of a 90-byte
+row is 90 MiB). Batched decode above four sequences resolves to more than 64 rows and takes the
+uncached path. Off by default: with it at `0` the gather is the code path it always was.
+
+### `EXL3_NGRAM_ROW_CACHE_STATS` (default: `0`)
+
+Set to `1` to print the row cache's hit and miss counts, and the rows it held against its budget,
+when the table closes (`EXL3_NGRAM_ROW_CACHE_ROWS` must be set as well, or there is no cache to
+report).
+
 ### `EXL3_EMBED_STREAM` (default: `0`)
 
 Default for `Config.infer_params.embed_stream_from_disk`: stream the token embedding table from
