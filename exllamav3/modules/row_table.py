@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import sys
 import threading
 import weakref
 from concurrent.futures import ThreadPoolExecutor
@@ -27,6 +28,10 @@ writer waits on it before reusing the buffers.
 Decode-sized lookups can also keep the rows they read (_RowCache, EXL3_NGRAM_ROW_CACHE_ROWS): a
 prompt revisits part of its recent n-grams, and streaming mode reads every one of them from an
 unbuffered handle. Prefill-sized gathers take the uncached path.
+
+A cache can also hold a pinned hot set (EXL3_NGRAM_ROW_CACHE_PIN): rows loaded at open that the
+clock never evicts, for rows the corpus shares so widely that a recency policy cannot be counted on
+to keep them.
 """
 
 PREFETCH_ENABLED = os.environ.get("EXL3_NGRAM_PREFETCH", "1") != "0"   # debug/A-B switch
@@ -38,7 +43,7 @@ ROW_CACHE_GATHER_MAX_ROWS = 64     # row cache: gathers of up to this many rows 
 ROW_CACHE_BUDGET_MAX = 1 << 20      # upper clamp of EXL3_NGRAM_ROW_CACHE_ROWS
 
 _row_cache_counts = {"hits": 0, "misses": 0}
-_row_caches = weakref.WeakSet()     # live caches, for reset_row_cache()
+_row_caches = weakref.WeakSet()     # live caches, for reset_row_cache() and row_cache_pinned()
 
 
 def row_cache_hits() -> int:
@@ -49,6 +54,13 @@ def row_cache_hits() -> int:
 def row_cache_misses() -> int:
     """Rows a decode-sized gather had to read, and kept in the row cache."""
     return _row_cache_counts["misses"]
+
+
+def row_cache_pinned() -> int:
+    """Rows the live caches hold as pins (EXL3_NGRAM_ROW_CACHE_PIN), summed over every table in this
+    process. A pin is configuration rather than activity, so reset_row_cache() does not touch it: the
+    count reports what the run was started with, and 0 means no table pinned anything."""
+    return sum(cache.pinned for cache in _row_caches)
 
 
 def reset_row_cache():
@@ -76,11 +88,61 @@ def _row_cache_stats() -> bool:
     return os.environ.get("EXL3_NGRAM_ROW_CACHE_STATS", "0") not in ("", "0")
 
 
+def _row_cache_pin_path() -> str | None:
+    """EXL3_NGRAM_ROW_CACHE_PIN: a file of decimal row ids, one per line, '#' comments and blank
+    lines skipped, that the row cache loads at open and never evicts. Read per table open rather
+    than at import, like the budget."""
+    return os.environ.get("EXL3_NGRAM_ROW_CACHE_PIN", "") or None
+
+
+def _row_cache_pin_max_bytes() -> int | None:
+    """EXL3_NGRAM_ROW_CACHE_PIN_MAX_BYTES: the cap the pinned set must fit, row_bytes x rows, so a
+    hot set can be sized to the CPU's cache instead of growing with whatever the corpus says is hot.
+    A value that does not parse raises rather than reading as absent: a guard that silently stops
+    guarding is worse than a refused start."""
+    raw = os.environ.get("EXL3_NGRAM_ROW_CACHE_PIN_MAX_BYTES", "")
+    if not raw:
+        return None
+    try:
+        limit = int(raw)
+    except ValueError:
+        raise ValueError(f"EXL3_NGRAM_ROW_CACHE_PIN_MAX_BYTES={raw!r} is not an integer") from None
+    if limit < 0:
+        raise ValueError(f"EXL3_NGRAM_ROW_CACHE_PIN_MAX_BYTES={limit} is negative")
+    return limit
+
+
+def _read_pin_rows(path: str) -> list[int]:
+    """The pin file as row ids, in file order. Duplicates collapse to their first occurrence: a pin
+    is a set of rows, and counting one twice would reject a pin set that does fit."""
+    rows, seen = [], set()
+    with open(path, "r", encoding = "utf-8") as f:
+        for n, line in enumerate(f, 1):
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            try:
+                row = int(line)
+            except ValueError:
+                raise ValueError(f"{path}:{n}: {line!r} is not a row id") from None
+            if row < 0:
+                raise ValueError(f"{path}:{n}: row id {row} is negative")
+            if row not in seen:
+                seen.add(row)
+                rows.append(row)
+    return rows
+
+
 class _RowCache:
     """
     Rows read by decode-sized gathers, kept as bytes in a pinned CPU tensor and keyed by the row's
     global index. Slots are a ring over a clock (second-chance) hand: a row looked up since the
     hand last passed its slot gets one more lap instead of being evicted.
+
+    A pinned row (see RowTable._load_pin) is placed in a slot of its own and marked in pinned_slots;
+    the hand steps over those slots without touching their second chance, so a pinned row survives
+    any number of laps and an unpinned row competes for the slots that are left. Pins are loaded
+    before the cache serves its first gather, so pin() never has to move a row a lookup is reading.
 
     The cached bytes belong to the cache: a hit is copied into the caller's staging buffer, never
     handed out, so nothing downstream can write through to it. `lock` guards the dict and the slot
@@ -103,6 +165,9 @@ class _RowCache:
         self.index = {}                 # global row -> slot in rows
         self.slots = [None] * budget    # slot -> global row
         self.ref = bytearray(budget)    # slot was looked up since the hand last passed it
+        self.pinned_slots = bytearray(budget)   # slot holds a pinned row: never evicted
+        self.pinned = 0                 # pinned rows, i.e. the set row_cache_pinned() reports
+        self._pin_next = 0              # first slot a pin may take (pins only grow from empty space)
         self.hand = 0
         self.hits = 0
         self.misses = 0
@@ -118,12 +183,36 @@ class _RowCache:
             self.ref[s] = 1
         return s
 
+    def pin(self, row: int, data: torch.Tensor):
+        """Hold a row for the table's lifetime. Called while the cache is being filled, before any
+        gather has served from it, so a pin takes a free slot above the pins already placed (an
+        existing slot when the row is already cached, which a corpus can produce)."""
+        s = self.index.get(row)
+        if s is None:
+            while self._pin_next < self.budget and self.slots[self._pin_next] is not None:
+                self._pin_next += 1
+            if self._pin_next >= self.budget:
+                raise ValueError(f"no free slot for pinned row {row} (budget {self.budget})")
+            s = self._pin_next
+            self._pin_next += 1
+            self.slots[s] = row
+            self.index[row] = s
+        if not self.pinned_slots[s]:
+            self.pinned_slots[s] = 1
+            self.pinned += 1
+        self.ref[s] = 1
+        self.rows[s].copy_(data)
+
     def put(self, row: int, data: torch.Tensor):
         s = self.index.get(row)
         if s is None:
+            if self.pinned >= self.budget:
+                return              # every slot is pinned: this cache serves the pin set alone
             while True:
                 s = self.hand
                 self.hand = (self.hand + 1) % self.budget
+                if self.pinned_slots[s]:
+                    continue        # a pinned row never even gets a second chance (see class doc)
                 old = self.slots[s]
                 if old is None:
                     break
@@ -138,7 +227,8 @@ class _RowCache:
         self.rows[s].copy_(data)
 
     def report(self) -> str:
-        return f"{self.hits} hits, {self.misses} misses, {len(self)}/{self.budget} rows held"
+        return f"{self.hits} hits, {self.misses} misses, {len(self)}/{self.budget} rows held, " \
+               f"pinned={self.pinned}"
 
 
 class _PinSet:
@@ -265,6 +355,7 @@ class RowTable:
             self._set_stores([slab])
         if lock:
             self._locked = lock_host_tensors(self.stores, f"Locking {self.key} in RAM")
+        self._pin_row_cache()
 
     def close(self):
         self.drain_prefetch()       # queued workers still read the table; first
@@ -405,8 +496,61 @@ class RowTable:
         if cache is None or cache.budget != budget or cache.row_words != self.row_words \
                 or cache.row_dtype != self.row_dtype:
             cache = _RowCache(budget, self.row_words, self.row_dtype)    # a new table or a new budget
+            self._load_pin(cache)       # a rebuilt cache gets the pin set back before it serves
             self._row_cache = cache
         return cache
+
+    def _row_bytes(self) -> int:
+        return self.row_words * torch.empty((), dtype = self.row_dtype).element_size()
+
+    def _pin_row_cache(self):
+        """EXL3_NGRAM_ROW_CACHE_PIN: allocate the cache at open and load the pinned rows into it.
+
+        Called from open(), after the stores exist, so a pin set that does not fit fails the load
+        instead of a decode step. A pin without a budget pins nothing, and says so: the knob pair is
+        two settings for one mechanism, and half of it silently missing is the failure mode the row
+        cache itself is meant to remove."""
+        path = _row_cache_pin_path()
+        if path is None:
+            return
+        if not _row_cache_budget():
+            print(f"n-gram row cache pin: EXL3_NGRAM_ROW_CACHE_PIN is set "
+                  f"({path}) but EXL3_NGRAM_ROW_CACHE_ROWS=0, so nothing is pinned",
+                  file = sys.stderr)
+            return
+        if not self.on_disk:
+            return      # a table in RAM already serves every row from memory: nothing to pin
+        self._gather_row_cache()
+
+    def _load_pin(self, cache: _RowCache):
+        """Read the pin file's rows into a fresh cache and mark them pinned. Two startup errors
+        rather than a quiet drop: a pin set the budget cannot hold, or one over the byte cap, is a
+        misconfiguration, and a run that silently serves the hot rows from disk again is exactly the
+        defect the pin was added for - it would show up only as a slower measurement."""
+        path = _row_cache_pin_path()
+        if path is None or not self.on_disk:
+            return
+        rows = _read_pin_rows(path)
+        row_bytes = self._row_bytes()
+        if len(rows) > cache.budget:
+            raise ValueError(
+                f"EXL3_NGRAM_ROW_CACHE_PIN: {path} pins {len(rows)} rows, more than "
+                f"EXL3_NGRAM_ROW_CACHE_ROWS={cache.budget}; raise the budget or shorten the pin set")
+        limit = _row_cache_pin_max_bytes()
+        if limit is not None and len(rows) * row_bytes > limit:
+            raise ValueError(
+                f"EXL3_NGRAM_ROW_CACHE_PIN_MAX_BYTES: {path} pins {len(rows)} rows of {row_bytes} B "
+                f"= {len(rows) * row_bytes} B, over the {limit} B limit")
+        for row in rows:
+            if not 0 <= row < self.num_rows:
+                raise ValueError(
+                    f"EXL3_NGRAM_ROW_CACHE_PIN: {path} pins row {row}, outside 0..{self.num_rows - 1}")
+        if not rows:
+            return
+        data = self.fetch(torch.tensor(rows, dtype = torch.int64))
+        with cache.lock:
+            for i, row in enumerate(rows):
+                cache.pin(row, data[i])
 
     def _gather_cached(self, cache: _RowCache, store, uids: torch.Tensor, i0: int, i1: int,
                        base: int, out: torch.Tensor):
