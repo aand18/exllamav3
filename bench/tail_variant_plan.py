@@ -50,6 +50,10 @@ def parse_expert(name: str):
     """('model.language_model.layers.N.mlp.experts.R.<proj>.<suffix>') -> (layer, expert, proj, suffix)."""
     if ".mlp.experts." not in name:
         return None
+    if name.startswith("mtp."):
+        # the MTP head carries its own experts under `mtp.layers.N`; folding them into layer N
+        # prices a trunk layer from the head's tensors (T40: 676.7 vs 788.3 MiB for layer 0)
+        return None
     head, rest = name.split(".mlp.experts.", 1)
     try:
         layer = int(head.split(".layers.")[1].split(".")[0])

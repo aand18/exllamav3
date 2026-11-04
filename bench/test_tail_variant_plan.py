@@ -63,7 +63,14 @@ def test_more_spares_than_the_gpu_slice_does_not_wrap_the_slice():
     assert plan["layers"][0]["tail_experts"] == 4
 
 
+def test_the_mtp_head_is_not_folded_into_a_trunk_layer():
+    """`mtp.layers.0.mlp.experts.*` is the head's own expert, not trunk layer 0's."""
+    assert parse_expert("mtp.layers.0.mlp.experts.3.down_proj.trellis") is None
+    assert parse_expert("model.language_model.layers.0.mlp.experts.3.down_proj.trellis") == (0, 3, "down_proj", "trellis")
+
+
 TESTS = [
+    test_the_mtp_head_is_not_folded_into_a_trunk_layer,
     test_more_spares_than_the_gpu_slice_does_not_wrap_the_slice,
     test_parse_expert_reads_layer_expert_projection_suffix,
     test_only_scales_are_exempt_from_the_rate,
