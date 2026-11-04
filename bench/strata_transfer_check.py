@@ -455,7 +455,10 @@ MATRIX: list[dict] = [
             "promotions_t29": 8669,                 # t29-C1, "/ 8669, at step 3584"
             "steps_t29": 3584,                      # 28 x 128
             "promotions_per_step_t29": 2.42,        # 8669 / 3584
-            "budget_raise_ratio": 12,               # 2.42 / 0.201 (8669 / 710 = 12.2)
+            # The RATE the policy achieved, not the budget it ran under: PROMOTE_BUDGET stayed
+            # 6/step in both arms and neither reached it (0.201 and 2.42 are both below 6), so the
+            # pool did the capping and the spare count (4 -> 16) is what changed.
+            "promotion_raise_ratio": 12,            # 2.42 / 0.201 (8669 / 710 = 12.2)
         },
         "verdict": "diverged",
         "justification": (
@@ -467,10 +470,16 @@ MATRIX: list[dict] = [
             "PROMOTE_BUDGET 6/step, ratio 1.5, decay 0.98), and its legacy sweep is 64 swaps per 128 "
             "steps = 0.5/step with two checkpoint reads per swap (sweep_source checkpoint). "
             "15.1/0.201 = 75x, the review's 75x. Per committed token it is 31x (Strata 15.1/2.45 = "
-            "6.2; a perf step is one token because perf.py registers no draft), and t29-C1 shows "
-            "what the budget does once the pool stops capping it: 8669 promotions / 3584 steps = "
-            "2.42/step, 12x the t27 rate (2.42/0.201 = 12.0, 8669/710 = 12.2; the arm also raised "
-            "the spare count 4 -> 16), for +40.6 points of coverage (31.7 -> 72.3 % pooled)."
+            "6.2; a perf step is one token because perf.py registers no draft). The source of the "
+            "bytes is faithful, and it is the cadence and the pool that diverge: both arms run "
+            "promote-on-miss, and promote_expert (moe_cpu_host.py:1884-1918) DMAs the expert out of "
+            "the pinned arena, RAM to VRAM with no checkpoint read - only the legacy sweep re-reads "
+            "the checkpoint per swap (stc.get_tensor, block_sparse_mlp_cpu.py:1293, "
+            "sweep_source checkpoint). t29-C1 shows the rate that same policy reaches once the pool "
+            "stops capping it: 8669 promotions / 3584 steps = 2.42/step, 12x the t27 realized rate "
+            "(2.42/0.201 = 12.0, 8669/710 = 12.2; the spare count went 4 -> 16 and PROMOTE_BUDGET "
+            "stayed 6/step, which neither arm reached), for +40.6 points of coverage (31.7 -> 72.3 % "
+            "pooled)."
         ),
         "measured": "t29-C1-pin-unset-20261103-221302",
     },
@@ -479,20 +488,26 @@ MATRIX: list[dict] = [
         "strata": {},
         "fork": {"stream_min_rows": 32},
         "derived": {
-            "window_rows": 4,        # the deployed draft cap, i.e. the widest a verify window gets
-            "rows_short": 28,        # 32 - 4
-            "gate_factor": 8.0,      # 32 / 4
+            # The verify window is the pending token PLUS the drafts: job.py:391-394 appends
+            # num_draft_tokens 4 drafts to the token that is already pending, so the widest window
+            # is 5 rows, not 4.
+            "window_rows": 5,
+            "rows_short": 27,        # 32 - 5
+            "gate_factor": 6.4,      # 32 / 5
         },
         "verdict": "absent",
         "justification": (
             "the miss goes somewhere else. Strata's pcie_frac default is the model's own (-1.0 at "
-            "generate.cpp:470, read as 0.55 DMA for the native packs and scaled by a live PCIe "
-            "probe), so ~55% of a verify round's distinct missed experts are DMA'd and computed on "
-            "the GPU. The fork's streamed path exists (moe_cpu_host.py:1968-1998) but is gated "
-            "twice: rows < stream_min_rows 32 returns before it (:1981), and an expert needs "
-            "stream_t 8 assigned tokens (:139, read by hand - not an extracted key) - so a 4-row "
-            "window reaches neither and 100% of decode misses go to the worker process. The delta "
-            "that would test the fork's half is env-only, EXL3_MOE_STREAM_MIN_ROWS=2 plus "
+            "generate.cpp:470), whose base for the native packs is 0.55 - the nominal pre-probe "
+            "share, not the deployed one: the startup probe scales it by the measured H2D bandwidth "
+            "below 20 GB/s and prints the result (generate.cpp:2051-2063), and no log on this box is "
+            "cited for that line - so a share of a verify round's distinct missed experts, nominally "
+            "0.55, is DMA'd and computed on the GPU. The fork's streamed path exists "
+            "(moe_cpu_host.py:1968-1998) but is gated twice: rows < stream_min_rows 32 returns "
+            "before it (:1981), and an expert needs stream_t 8 assigned tokens (:139, read by hand - "
+            "not an extracted key) - so a 5-row window (1 pending token + the 4 drafts appended to "
+            "it, job.py:391-394) reaches neither and 100% of decode misses go to the worker process. "
+            "The delta that would test the fork's half is env-only, EXL3_MOE_STREAM_MIN_ROWS=2 plus "
             "EXL3_MOE_STREAM_T=2, with no regime flag; nothing on this box has run it."
         ),
         "measured": "unmeasured",
@@ -503,26 +518,42 @@ MATRIX: list[dict] = [
         "fork": {},
         "derived": {
             "window_cap": 4,          # draft_num_tokens, the deployed DFlash2 regime
-            "tokens_low": 2.2,        # fork tokens/window, note 1 section 2
-            "tokens_high": 2.4,
+            # The two fork-side readings, kept apart because they are different measurements of
+            # different things.  Note 1 section 2 derives tokens/window = 1 + accepted/windows from
+            # the served deployment's own log (2.17 / 2.41 / 2.33 / 2.56 over four requests).
+            "note1_tokens_low": 2.2,
+            "note1_tokens_high": 2.4,
+            # results/arms.csv `acc` is accepted DRAFTS per round (spec_decode.py:142-151), so the
+            # round's token count is 1 + acc: every round also emits the token that was pending.
+            "accepted_drafts_low": 2.17,
+            "accepted_drafts_high": 2.40,
+            "tokens_per_round_low": 3.17,   # 1 + 2.17
+            "tokens_per_round_high": 3.40,  # 1 + 2.40
             "strata_low": 2.5,        # Strata tokens/window, note 1 section 2
             "strata_high": 3.5,
-            "yield_ratio_low": 1.04,  # 2.5 / 2.4
-            "yield_ratio_high": 1.59,  # 3.5 / 2.2
-            "window_cap_minus_high": 1.6,  # 4 - 2.4: how much of the window goes unused
+            # In draft units, not token units: 4 offered drafts less the 2.40 accepted.
+            "unused_draft_rows": 1.6,
         },
         "verdict": "diverged",
         "justification": (
-            "window arithmetic: tokens/window = 1 + the sum of per-position acceptance, so the "
-            "deployed DFlash2 cap num_draft_tokens 4 truncates the sum at 4 and the fork measures "
-            "2.2-2.4 of 4 rows, dynamic_draft only ever shortening (generator.py:1128-1146). Strata "
-            "drafts <= 3 with the model's own MTP head plus a prompt-lookup drafter picked per round "
-            "by a cost model (docs/upstream/DETAILS.md:1032-1035) and measures 2.5-3.5 "
-            "tokens/window: 3.5/2.2 = 1.59x at best, 2.5/2.4 = 1.04x at worst. The second research "
-            "note's own log pass (strata-vs-exllama-research.md section 1) reads 2.42-2.47 on both "
-            "sides, so the divergence stands on note 1's window arithmetic and is not reproduced by "
-            "note 2's requests. No arm of either campaign carries a draft (perf.py registers none; "
-            "draft arguments belong to -Runner spec_decode), so this row is unmeasured."
+            "window arithmetic, in two units that are not yet reconciled: tokens/window is 1 + the "
+            "sum of per-position acceptance, so the deployed DFlash2 cap num_draft_tokens 4 "
+            "truncates it (dynamic_draft only ever shortening, generator.py:1128-1146) and the window "
+            "itself is 5 rows wide - the pending token plus the 4 drafts appended to it, "
+            "job.py:391-394. "
+            "Strata drafts <= 3 with the model's own MTP head plus a prompt-lookup drafter picked "
+            "per round by a cost model (docs/upstream/DETAILS.md:1032-1035) and its log reads "
+            "2.5-3.5 tokens/window. The fork reads two ways and they do not agree, so no ratio is "
+            "recorded: note 1 section 2 derives 2.2-2.4 tokens/window from the served deployment's "
+            "own log (2.17 / 2.41 / 2.33 / 2.56), while results/arms.csv's `acc` column for the "
+            "4-draft arms reads 2.17-2.40 ACCEPTED DRAFTS per round (t7-dflash2-w4 2.40 of 4.00, "
+            "t16-q4-ref2 2.35, t19-qdrafter 2.17), i.e. 1 + acc = 3.17-3.40 tokens per round. "
+            "Against note 1's reading the fork is behind Strata's 2.5-3.5; against the harness's own "
+            "column it is at parity or ahead, and nothing in either tree says which reading shares "
+            "Strata's unit. No arm of either campaign carries a draft (perf.py registers none; draft "
+            "arguments belong to -Runner spec_decode), so the row is unmeasured: diverged on the "
+            "mechanism (a hard ceiling of 4 against a policy that chooses a window per round), its "
+            "performance advantage unresolved."
         ),
         "measured": "unmeasured",
     },
@@ -546,9 +577,10 @@ MATRIX: list[dict] = [
         "justification": (
             "absent, and cheap to bound: Strata hides the 16 unbuffered row reads of a decode token "
             "(90 B/row, 26.8 GiB table never in RAM) behind the embedding and layer 0 with an "
-            "issue/collect split, and serves repeats from a bounded 1M-row (90 MiB) cache that "
-            "measures up to 82% of reads with 20-34% recurrence inside one prompt "
-            "(ple_reader.hpp:13-16). The fork has no such row cache: every gather goes to "
+            "issue/collect split, and keeps a bounded 1M-row (90 MiB) row cache that its own source "
+            "says would serve up to 82% of reads on a frozen corpus, with 20-34% recurrence inside "
+            "one prompt (ple_reader.hpp:13-16) - a measurement on that corpus, not on the served "
+            "traffic. The fork has no such row cache: every gather goes to "
             "ext.ngram_gather_cpu over a FILE_FLAG_NO_BUFFERING handle (row_table.py:282-312, opened "
             "at loader/safetensors.py:247-248), so a repeated row is read from disk again. Its two "
             "cheaper substitutes both miss decode: prefetch() declines decode-sized inputs "
@@ -660,8 +692,9 @@ def _derived(row: dict) -> list[tuple[str, object]]:
             ("promotions_per_step_t27", round(d["promotions_t27"] / d["ladder_steps"], 3)),
             ("churn_ratio", round(measured / d["promotions_per_step_t27"])),
             ("promotions_per_step_t29", rate),
-            # The raise the review quotes: the t29 arm's rate over the t27 arm's, on the same ladder.
-            ("budget_raise_ratio", round(rate / d["promotions_per_step_t27"])),
+            # The raise the review quotes: the t29 arm's realized rate over the t27 arm's, on the
+            # same ladder. Not the budget - that stayed 6/step, and neither arm reached it.
+            ("promotion_raise_ratio", round(rate / d["promotions_per_step_t27"])),
         ]
     if rid == "M3-miss-split":
         gate = row["fork"]["stream_min_rows"]
@@ -670,10 +703,12 @@ def _derived(row: dict) -> list[tuple[str, object]]:
             ("gate_factor", gate / d["window_rows"]),
         ]
     if rid == "M4-spec-yield":
+        # `acc` is accepted DRAFTS per round, so the round's tokens are 1 + acc; the unused-row
+        # figure is in draft units, where 4 were offered and 2.40 accepted.
         return [
-            ("yield_ratio_low", round(d["strata_low"] / d["tokens_high"], 2)),
-            ("yield_ratio_high", round(d["strata_high"] / d["tokens_low"], 2)),
-            ("window_cap_minus_high", round(d["window_cap"] - d["tokens_high"], 2)),
+            ("tokens_per_round_low", round(1 + d["accepted_drafts_low"], 2)),
+            ("tokens_per_round_high", round(1 + d["accepted_drafts_high"], 2)),
+            ("unused_draft_rows", round(d["window_cap"] - d["accepted_drafts_high"], 2)),
         ]
     if rid == "M5-ple":
         return [
