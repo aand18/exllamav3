@@ -560,6 +560,9 @@ class RouterLookaheadProbe:
                 z_pre = st.mlp_norm.forward(z_pre, {}, out_dtype = torch.half)
             if st.router_pre_norm is not None:
                 z_pre = st.router_pre_norm.forward(z_pre, {}, out_dtype = torch.half)
+            # the router kernel takes half activations; the stream-mean fallback is fp32
+            if z_pre.dtype != torch.half:
+                z_pre = z_pre.half()
             st.probing = True
             try:
                 pred_sel, _pred_w = st.orig_routing(z_pre.shape[0], st.routing_cfg, z_pre, {})
