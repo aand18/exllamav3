@@ -456,8 +456,21 @@ class RouterLookaheadProbe:
 
         def forward(x, params, out_dtype = None):
             if probe.active:
-                pending = params.get("resid_pending")
-                pre = x if pending is None else x + pending
+                # Hyper-connection blocks take a (b, s, hc_mult, hidden) fp32 stream stack, and the
+                # sublayer sees the *collapsed* mean of it. `_mix_ref` is the pure fp32 reference of
+                # that mix (the parity tests' ground truth), so the pre-attention state the lookahead
+                # would have is the collapse of the streams it is handed - not the raw stack (4 rows
+                # per token, the mismatch the first real runs reported) and not the stack plus a
+                # 4-stream deferred residual.
+                pre = None
+                hc = getattr(block, "attn_hc", None)
+                if hc is not None and hasattr(hc, "_mix_ref"):
+                    try:
+                        pre = hc._mix_ref(x)[1]
+                    except Exception:                             # noqa: BLE001 - fall back to x
+                        pre = None
+                if pre is None:
+                    pre = x
                 st.pre = pre.detach().clone()
                 st.pre_step = probe.step
             return orig(x, params, out_dtype)
