@@ -470,7 +470,10 @@ class RouterLookaheadProbe:
                     except Exception:                             # noqa: BLE001 - fall back to x
                         pre = None
                 if pre is None:
-                    pre = x
+                    # `_mix_ref` needs the source weights a quantized checkpoint may not keep. The
+                    # fallback is the plain stream mean over hc_mult - a *weaker* predictor than the
+                    # gated mix, and the report says which one produced the number.
+                    pre = x.mean(dim = -2) if (x.dim() == 4 and x.shape[-2] > 1) else x
                 st.pre = pre.detach().clone()
                 st.pre_step = probe.step
             return orig(x, params, out_dtype)
