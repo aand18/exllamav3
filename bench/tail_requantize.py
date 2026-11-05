@@ -504,7 +504,14 @@ def quant_args_for(bpw: float, device, seed: int, codebook: str, debug_dir: str)
 
     `apply_out_scales: None` is the converter's `--out_scales auto` default (`convert_model.py:316`).
     """
-    args = {"seed": seed, "K": bpw, "devices": [str(device)], "apply_out_scales": None,
+    # `quantize_tiles_scratch(index, K, ...)` (`quantize.py:82`) takes an **integer** K, so the
+    # scratch sizing path cannot express a half-integer rate; refuse it by name instead of letting a
+    # float reach the extension as a TypeError
+    kf = float(bpw)
+    if abs(kf - round(kf)) > 1e-9:
+        raise Refusal(f"--bpw {bpw:g} is not an integer: the encoder's scratch path takes an integer K "
+                      f"(quantize.py:82); half-integer rates would need the convert path")
+    args = {"seed": seed, "K": int(round(kf)), "devices": [str(device)], "apply_out_scales": None,
             "debug_dir": debug_dir}
     if codebook == "mcg":
         args["mcg"] = True
@@ -536,7 +543,9 @@ def make_engine_requantizer(index: dict, bpw: float, device: str, seed: int, deb
         out = {}
         for proj, suffixes in index[prefix].items():
             names = {s: f"{prefix}.{proj}.{s}" for s in suffixes}
-            tensors = {s: tensor(names[s], suffixes[s], source[s])
+            # `source` is keyed by the tensor's suffix *relative to the expert prefix*
+            # ("gate_proj.trellis"), not by the bare suffix
+            tensors = {s: tensor(names[s], suffixes[s], source[f"{proj}.{s}"])
                        for s in ("trellis", "suh", "svh", "mcg", "mul1") if s in suffixes}
             trellis = tensors["trellis"]
             in_features, out_features = trellis.shape[0] * 16, trellis.shape[1] * 16
