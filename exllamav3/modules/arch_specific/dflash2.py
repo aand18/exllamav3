@@ -1,6 +1,7 @@
 """
 DFlash2-specific modules: grouped dynamic convolutions, the conv-wrapped
-transformer block, and the top-k candidate selector.
+transformer block, the top-k candidate selector, and the per-position candidate
+extractor a verification tree reads its extra branches from.
 
 Reference: the ``DFlash2DraftModel`` implementation in the ``dflash`` package.
 
@@ -11,6 +12,7 @@ fp32 before the residual add.
 
 from __future__ import annotations
 from typing_extensions import override
+import math
 import torch
 import torch.nn.functional as F
 
@@ -223,6 +225,104 @@ class DFlash2Block(Module):
         x = self.mlp_conv.finish(y, kernel, residual = x)
 
         return to2(x, out_dtype, torch.float)
+
+
+def extract_candidates(
+    logits: torch.Tensor,
+    k: int = 2,
+    vocab_size: int | None = None,
+    scale: float = 1.0,
+    softcap: float = 0.0,
+) -> list[list[tuple[int, float]]]:
+    """Every draft position's k most likely tokens, from one non-causal pass's logits.
+
+    A DFlash2 block is not causal: rows 1.. each predict their own position from the
+    same forward, so one pass already holds a distribution per draft position. The
+    chain path keeps rank 1 and discards the rest; a verification tree spends a few
+    extra mask rows on the continuations the drafter ranked close behind, and this is
+    where it reads them from - no second drafter pass.
+
+    `logits` is one sequence's rows, ``[positions, vocab]``, in the drafter's own token
+    space: the caller slices ``logits[b, 1:, :vocab_size]`` off a block, so there is no
+    batch axis here (a 3-D argument is refused rather than read as a wider vocabulary)
+    and no anchor row (row 0 predicts nothing). The head is wider than the vocabulary
+    and the padded columns hold whatever the kernel left there, so probabilities are
+    normalised over the first `vocab_size` columns only - passing `vocab_size` is what
+    makes them the drafter's probabilities rather than a share of the padding.
+
+    Preparation is `DFlash2Selector.walk_block`'s, in the same order: the vocabulary
+    slice, the output multiplier, then the softcap. All three are monotone, so they do
+    not move the ranking, but they are not optional here - a branch's weight is the
+    probability, and the probability is the softmax of the capped value.
+
+    Pure: no model state, no RNG, no globals beyond the stdlib. The arithmetic is done
+    in double on the host from the values as given, so a torch tensor and its
+    ``.tolist()`` return the same candidates. Ties resolve by lower token id, which
+    ``torch.topk`` does not promise and fp16 logits reach often enough to see. A
+    position with one finite logit returns it at probability 1.0 and fills the rest of
+    its list with zeros; a position with no finite logit at all - every value -inf, or a
+    NaN or +inf in the row - is a position with no distribution and raises.
+
+    :param logits:
+    ``[positions, vocab]`` logits, as a tensor or as nested sequences.
+
+    :param k:
+    Candidates per position, at least 1. Values above the vocabulary are capped at it.
+
+    :param vocab_size:
+    Valid columns of each row; None means the whole width.
+
+    :param scale:
+    The output multiplier ``walk_block`` applies before its top-k.
+
+    :param softcap:
+    The final logit softcap ``walk_block`` applies before its top-k; 0.0 for no cap.
+
+    :return:
+    One list per position, ``[(token_id, probability), ...]``, probability descending,
+    at most `k` and at most `vocab_size` entries.
+    """
+
+    if k < 1:
+        raise ValueError(f"k must be at least 1, got {k}")
+    dim = getattr(logits, "dim", None)
+    if dim is not None and dim() != 2:
+        raise ValueError(
+            f"logits must be [positions, vocab], got shape {tuple(logits.shape)}")
+
+    rows = logits.tolist() if hasattr(logits, "tolist") else logits
+    if not len(rows):
+        return []
+    first = rows[0]
+    if isinstance(first, (int, float)) or (len(first) and isinstance(first[0], (list, tuple))):
+        raise ValueError(
+            "logits must be [positions, vocab]: one sequence, no batch axis and no anchor row")
+
+    width = len(first)
+    vocab = width if vocab_size is None else int(vocab_size)
+    if not 0 < vocab <= width:
+        raise ValueError(f"vocab_size {vocab} is outside the row width {width}")
+
+    candidates = []
+    for position, row in enumerate(rows):
+        if len(row) != width:
+            raise ValueError(
+                f"position {position} has {len(row)} values, position 0 has {width}")
+        scores = [float(row[token]) * scale for token in range(vocab)]
+        if softcap > 0.0:
+            scores = [math.tanh(score / softcap) * softcap for score in scores]
+        top = max(scores)
+        # A -inf top is a row of nothing but -inf, and a +inf top has no normalisable sum. NaN compares
+        # as neither, so max() steps over it: it is caught on its own rather than surfacing as a
+        # NaN probability a tree would rank with
+        if math.isinf(top) or any(math.isnan(score) for score in scores):
+            raise ValueError(f"position {position} has no finite logit")
+        weights = [math.exp(score - top) for score in scores]
+        total = sum(weights)
+        # Deterministic: probability descending, then lower token id. Never dict or set order
+        ranked = sorted(range(vocab), key = lambda token: (-weights[token], token))[:k]
+        candidates.append([(token, weights[token] / total) for token in ranked])
+    return candidates
 
 
 class DFlash2Selector(Module):
