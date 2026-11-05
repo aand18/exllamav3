@@ -65,3 +65,37 @@ run_pass.ps1 -Tag t41-B1 -Root C:\Users\yoho\Downloads\_t4check -Runner spec_dec
   -Env "EXL3_MOE_CPU_SWAP=0,EXL3_DRAFT_COST_MODEL=1"
 python3 bench/spec_primary.py --csv <scratch>/results/spec_decode.csv --control t41-A --treat t41-B
 ```
+
+## Repeat with four runs per arm (t43) — the t41 gain did not reproduce
+
+The t41 result's own rule demanded a repeat; a second campaign ran the **reverse** order (`B A A B`, where
+t41 ran `A B B A`) and added the missing t40 control. All five passes `status=ok`
+(`t43-B3-…`, `t43-A3-…`, `t43-A4-…`, `t43-B4-…`, `t40-A3-cacheoff-…`).
+
+| arm | corpus draft tok/s, four runs | mean |
+|---|---|---|
+| t41 control (A) | 54.56, 55.26, 56.88, 56.54 | 55.81 |
+| t41 cost model (B) | 55.85, 56.23, 56.16, 56.26 | 56.13 |
+
+```
+primary  control 70.10  treat 70.47  ratio 1.0053 (+0.53 %)  floor 1.043 (spread 4.26 % / 1.20 %)
+  Agentic; code   +0.73 %   Agentic; curl  +0.89 %   Coding  -0.21 %
+verdict INCONCLUSIVE
+```
+
+**The +1.90 % of the first two-run pass shrank to +0.53 %**, and `Coding` — positive in the first pass —
+is now −0.21 %. The A arm's own spread grew to 4.26 %, so the first pass's floor of 1.020 was a narrow
+window on a noisy arm. Honest reading: **the draft-window model is not demonstrated; its effect is inside
+the noise of this harness.** It stays default-off and needs a different design of experiment (more decode
+reps per cell, not more passes) before it is worth another campaign.
+
+The same repeat gave t40 its second valid control, and the verdict is now a formal one:
+
+```
+primary  control 70.66  treat 69.60  ratio 0.9850 (-1.50 %)  floor 1.033 (spread 3.29 % / 2.32 %)
+  Agentic; code  -2.19 %   Agentic; curl  +1.16 %   Coding  -3.51 %   acc -0.100
+verdict WITHDRAW
+```
+
+**The PLE row cache costs 1.5 % on the workloads this box serves** and ~180 s per pass at open. That is
+the item's answer: not a win, and not a close call.

@@ -39,11 +39,15 @@ def load(path: str) -> list[dict]:
         return list(csv.DictReader(f))
 
 
+def _matches(tag: str, prefixes: str) -> bool:
+    return any(tag.startswith(p) for p in str(prefixes).split(",") if p)
+
+
 def pick(rows, tag_prefix: str, category: str, arm_kind: str = "draft") -> list[dict]:
-    """The rows of one arm (every run whose tag starts with `prefix`) in one category."""
+    """The rows of one arm (every run whose tag starts with any of the comma-separated prefixes)."""
     out = []
     for r in rows:
-        if not r.get("tag", "").startswith(tag_prefix):
+        if not _matches(r.get("tag", ""), tag_prefix):
             continue
         if r.get("category") != category:
             continue
@@ -93,7 +97,7 @@ def evaluate(rows, control: str, treat: str) -> tuple[int, dict]:
             problems.append(f"secondary category '{cat}' has no data on one arm")
     # corpus: every draft row of each arm, primary and secondary alike
     def allrows(prefix):
-        return [r for r in rows if r.get("tag", "").startswith(prefix)
+        return [r for r in rows if _matches(r.get("tag", ""), prefix)
                 and any(r.get("arm", "").startswith(k) for k in DRAFT_ARMS)]
     corpus_c, corpus_t = rate(allrows(control), "tok_s"), rate(allrows(treat), "tok_s")
 
@@ -106,7 +110,7 @@ def evaluate(rows, control: str, treat: str) -> tuple[int, dict]:
     p_ratio = ratio(p_c, p_t)
     # the same-arm spread: the widest per-run deviation from its arm's mean, over the primary set
     def primary_rows(prefix):
-        return [r for r in rows if r.get("tag", "").startswith(prefix)
+        return [r for r in rows if _matches(r.get("tag", ""), prefix)
                 and r.get("category") in PRIMARY_WEIGHTS
                 and any(r.get("arm", "").startswith(k) for k in DRAFT_ARMS)]
 
@@ -162,6 +166,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     rows = load(args.csv)
+    # a campaign can be split across tags (a repeat runs under a new one), so a side is a list of
+    # prefixes and the evaluation matches any of them
     code, out = evaluate(rows, args.control, args.treat)
     if args.json:
         with open(args.json, "w", encoding="utf-8") as f:
