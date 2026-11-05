@@ -50,9 +50,12 @@ position, the k most likely ids with their probabilities, in the drafter's own t
 
 **Files:** new `exllamav3/generator/draft_tree.py`; test `tests/generator/test_draft_tree.py`.
 
-**Interfaces:** `build_tree(chain, candidates, resident: set[int], max_nodes: int = 7) -> list[list[int]]`
-— every root-to-leaf path is a candidate continuation; a branch is kept only when every expert it would
-route to is in `resident`, and the total node count stays within `max_nodes`.
+**Interfaces:** `build_tree(chain, candidates, routes: dict[int, set[int]], resident: set[int], max_nodes: int = 7, max_substitutions: int = 1) -> list[list[int]]`
+— every root-to-leaf path is a candidate continuation; a branch substitutes up to `max_substitutions`
+positions and keeps the chain's tokens elsewhere (`chain[:d] + [alt] + chain[d + 1:]`), because the draft
+positions are independent; a branch is kept only when every expert it would route to is in `resident`, and
+the total node count stays within `max_nodes`. The `routes` map arrived in implementation: a token the
+caller does not report is unknown, and a branch through it is dropped.
 
 - [ ] **Step 1: failing tests** — a branch outside `resident` is dropped; the chain is always present; `max_nodes` is respected; a fully rejected tree returns the chain.
 - [ ] **Step 2: implement** the builder as a pure function (no model, no tensors) so it is testable without a GPU.
@@ -105,7 +108,14 @@ Implementation contradicted the plan in three places. Task 3 must be read with t
    target taps and the anchor), so `candidates[d+1]` does not depend on the token taken at `d`. Task 2's
    builder ends every branch at its divergence point and therefore **under-enumerates**: a diverged branch
    may legally continue with the following positions' candidates. Task 3 either extends the builder or
-   documents the smaller tree it verifies.
+   documents the smaller tree it verifies. **Resolved in Task 2b:** the builder substitutes now
+   (`chain[:d] + [alt] + chain[d+1:]`, at most `max_substitutions = 1` positions per path) and the
+   truncated form is dropped rather than kept beside it — every prefix a truncated branch can earn is also
+   earned by the full path that contains it. Two consequences for Task 3: every branch is now the chain's
+   own length, so under the module's per-path node accounting (`max_nodes` = sum of path lengths) a
+   `max_nodes` of 2n is the floor for any branch at all — a 4-token chain at the default 7 gets none; and
+   the tree's leaves all sit at the same depth, so "longest matching root-to-leaf prefix" is decided by
+   content, not by leaf depth.
 
 Two smaller notes: zero-probability candidates are returned rather than dropped (a `routes` entry would
 make a zero-score branch legal, so filter `p == 0` before verifying), and nothing in Task 1 touched the
