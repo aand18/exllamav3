@@ -45,3 +45,12 @@ another pass.
 
 One draw per arm, ladder capped, `-dr 1`. B's +5.5 % needs a repeat before it is quoted as a configuration,
 and the long-context case is unmeasured rather than good or bad.
+
+## Run ids
+
+| arm | run id | status |
+|---|---|---|
+| `t46-A-ref32k` | `t46-A-ref32k-20261105-225430` | ok |
+| `t46-B-kv2exp` | `t46-B-kv2exp-20261105-225745` | ok |
+| `t46-C-stream` | `t46-C-stream-20261105-230052` | ok |
+| `t47-kv2exp-ccs` | `t47-kv2exp-ccs-20261105-230746` | ok |
