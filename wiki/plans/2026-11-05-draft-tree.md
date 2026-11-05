@@ -86,3 +86,28 @@ The proposal's "+25–35 % accepted tokens" is an estimate. The router-overlap f
 extra branches cheap, and it is also what caps the gain: a branch that routes outside the resident set
 is dropped, so the win depends on how often the second candidate shares the first's experts — the same
 kind of number that turned backlog #1 from "60-75 % hidden" into a measured **49.7 %**.
+
+## Corrections from Tasks 1–2 (2026-11-05)
+
+Implementation contradicted the plan in three places. Task 3 must be read with these in force:
+
+1. **DFlash2's chain is not a per-position top-1.** `walk_block` takes the top-16 of the prepared row and
+   `_walk_torch` reranks greedily with predecessor-conditioned codebooks; `sample_from_state` consumes
+   that walk. Calling `extract_candidates(k = 1)` from the chain path would replace a trained rerank with
+   an argmax and change the drafted ids, so Task 1 **did not** wire it. The tested identity is narrower:
+   `k = 1` returns the top-1 of the same prepared row the walk's gate sees, and where the rerank term
+   vanishes the real walk reproduces it. **Task 3 must treat `chain` and `candidates` as two independent
+   signals** — `build_tree` already tolerates that — not as one nested in the other.
+2. **The extractor is a host path and is slow** (1.43 s per round measured in pure Python for 18 × 151 936).
+   Task 3 must feed the tree from a device-side `softmax(-1).topk(k)`, and that device path must be tested
+   against the host function on the Windows copy so the two cannot drift.
+3. **The draft positions are independent** (non-causal rows each predict their own position from the
+   target taps and the anchor), so `candidates[d+1]` does not depend on the token taken at `d`. Task 2's
+   builder ends every branch at its divergence point and therefore **under-enumerates**: a diverged branch
+   may legally continue with the following positions' candidates. Task 3 either extends the builder or
+   documents the smaller tree it verifies.
+
+Two smaller notes: zero-probability candidates are returned rather than dropped (a `routes` entry would
+make a zero-score branch legal, so filter `p == 0` before verifying), and nothing in Task 1 touched the
+checkpoint, so the runner-up's real probability is still unmeasured — a Windows run counting positions
+where `_walk` differs from the argmax would settle it without a GPU pass.
