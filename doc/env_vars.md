@@ -645,6 +645,55 @@ recurrent decode kernels (Qwen3.5, Qwen3.8, GLM-5.3) reduce their per-slice part
 products in a fixed order unconditionally (no switch, no cost), so greedy decode on those
 models is reproducible as well.
 
+### `EXL3_MOE_LOOKAHEAD` (default: `0`)
+
+Pre-attention router lookahead prefetch (`exllamav3/modules/moe_lookahead.py`; backlog item #1).
+At the start of each split MoE block's forward — before the attention/GDN sublayer — the layer's own
+router is re-run on the residual entering the block (`mlp_norm` -> `router_pre_norm` -> `routing_fn`
+with the layer's `RoutingCFG`; for a hyper-connection block the stream mean, which is the predictor
+`bench/router_lookahead_probe.py` measured), and the host-resident experts it predicts are pulled
+into cache by touching one 64-byte line per cache line of their trellis blocks, in the parent's
+mapping of the worker's arena. The true routing then finds them in L3 instead of DRAM.
+
+Correctness-neutral by construction: it reads memory. It does not write the arena, the placement map
+or the routing, so a wrong prediction costs bandwidth and nothing else. Four things it costs, each of
+which is why the default is off:
+
+* **a device-to-host copy of the ids per layer per step.** The prefetch is a CPU-side read, so the
+  predicted ids have to cross to the host — a synchronisation point in the middle of the forward.
+  Under a graph that captures at or above the block the layer turns itself off by name (a D2H copy
+  is not capturable, and issuing it outside a replay would sync every step).
+* **the touched bytes.** 49.7 % of the router's top-k is predictable from the pre-attention residual
+  and a top-k prediction is 2.01x redundant (`bench/router_lookahead_probe.py` on the 3.18 bpw
+  checkpoint), so half of what is touched is never routed. Measured on this box, one thread, cold
+  buffer: an expert block is 1.92-2.15 MB (30 000-33 600 cache lines), the eight default blocks cost
+  0.39-0.41 ms per layer, and the same bytes cost 0.32-0.36 ms as a miss at the worker's 47.4 GB/s —
+  **1.07-1.25x the transfer it replaces**, before the 92 % extra DRAM traffic the unused half adds.
+* **a pinned arena.** The parent can only touch the worker's bytes when the arena is mapped in this
+  process, i.e. `EXL3_MOE_PINNED_ARENA=1`. With it off — the served regime — every layer is skipped
+  with that reason counted, and nothing is touched.
+* **one router call, plus the norms it needs, per layer per step** — the only GPU work it adds.
+
+A layer whose router is not a function of the hidden state (a `tid2eid` hash router, a TP shard
+without the gate, a grouped DS3 router), that is not split, or that has no worker is refused by name
+in the counters rather than skipped silently. Prefill passes, prefill-size batches, TP warmup and
+autosplit measuring forwards issue nothing.
+
+### `EXL3_MOE_LOOKAHEAD_MAX` (default: `8`)
+
+The most expert blocks prefetched per layer per step. A wrong prediction must cost less than the miss
+it avoids, so the count is bounded rather than following top-k; ids are taken in the router's own
+order. `0` or a non-numeric value falls back to the default rather than turning the bound off or the
+mechanism on.
+
+### `EXL3_MOE_LOOKAHEAD_STATS` (default: `0`)
+
+Print the lookahead's counters at exit: layers attached and skipped (with reasons), predictions
+issued, expert blocks prefetched and their bytes, the layer-steps that issued nothing and why, and
+the **expert precision** — the share of prefetched blocks the true router then selected. The last one
+is the number that says whether the mechanism works, and it costs a second device-to-host copy per
+layer per step, which is why it is behind its own switch.
+
 ### `EXL3_MOE_PINNED_ARENA` (default: `0`)
 
 > **Not deployed (2026-11-04).** It buys prefill (+16.2 % at 4096, +15.8 % at 131072 with a 24 GiB

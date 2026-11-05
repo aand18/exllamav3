@@ -153,6 +153,16 @@ class TransformerBlock(Module):
 
         y_resid = None  # pending attn output whose residual add is folded into the MLP input norm
 
+        # EXL3_MOE_LOOKAHEAD (modules/moe_lookahead.py): predict this block's router picks from the
+        # residual entering the block and prefetch the predicted host-resident experts while the
+        # attention/GDN sublayer below runs. `lookahead` is None on every module unless the knob is
+        # on and the layer is a supported split layer, so this costs one attribute test otherwise.
+        # `x` as the block receives it -- before the deferred residual add below -- is the vector the
+        # probe captured and the 49.7 % overlap was measured on.
+        la = getattr(self.mlp, "lookahead", None)
+        if la is not None:
+            la.issue(x, params)
+
         # Previous block's MLP output whose residual add is folded into this block's input norm (forward_ls sets
         # resid_defer when the next module is a TransformerBlock on the same device)
         pending = params.pop("resid_pending", None)

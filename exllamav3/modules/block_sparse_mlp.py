@@ -488,6 +488,10 @@ class BlockSparseMLP(BlockSparseMLP_CPU, Module):
         self.fused_rows = TEMP_ROWS_FUSED
         self.batch_recon = None
         self._cpu_init_state()
+        # EXL3_MOE_LOOKAHEAD (modules/moe_lookahead.py): the pre-attention prefetch hook, installed
+        # by load() on a split layer when the knob is on. Always present and None otherwise, so the
+        # block's forward can test it without a getattr per call
+        self.lookahead = None
 
     @override
     def optimizer_targets(self):
@@ -879,6 +883,17 @@ class BlockSparseMLP(BlockSparseMLP_CPU, Module):
             self.cpu_post_load()
             self.load_local(**kwargs)
             self.load_routing(**kwargs)
+            self.lookahead_install()
+
+    def lookahead_install(self):
+        """EXL3_MOE_LOOKAHEAD: attach the pre-attention prefetch hook to this layer (no-op when the
+        knob is off). Refusals are counted by name in the module's stats, never dropped silently."""
+        from .moe_lookahead import install, lookahead_cfg
+        cfg = lookahead_cfg()
+        if not cfg.enabled:
+            self.lookahead = None
+            return
+        self.lookahead = install(self, cfg = cfg)
 
 
     def _batch_recon_layer(self, y):
@@ -1040,6 +1055,7 @@ class BlockSparseMLP(BlockSparseMLP_CPU, Module):
         self.per_expert_scale = None
         self.bcast_sel_bsz1 = None
         self.bcast_weights_bsz1 = None
+        self.lookahead = None
         super().unload()
 
 
@@ -1128,6 +1144,12 @@ class BlockSparseMLP(BlockSparseMLP_CPU, Module):
             params["backend"].broadcast(routing_weights, src_device = self.routing_device)
             if check:
                 _routing_check_compare(self.key, local_sel, local_w, selected_experts, routing_weights)
+
+        # EXL3_MOE_LOOKAHEAD with EXL3_MOE_LOOKAHEAD_STATS: how many of this step's prefetched
+        # experts the true (final) selection actually routed. No-op unless the stats knob is on, and
+        # the layer's hook is None when the mechanism is off
+        if self.lookahead is not None:
+            self.lookahead.note_true(selected_experts)
 
         # CPU expert offload (block_sparse_mlp_cpu.py): split layers hand the tail experts'
         # share to the worker now so it computes concurrently with the GPU expert paths below
