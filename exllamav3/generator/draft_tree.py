@@ -32,20 +32,22 @@ one.
 Ranking is by cumulative probability: the product of the per-position probabilities `candidates` reports
 for the tokens on the path. A position the caller does not report - a `candidates` list shorter than the
 chain, or a chain token missing from its own ranked list - contributes nothing rather than a guessed
-value. Branches are taken in that order, and the budget's skip rule still applies even though every
-substitution path now costs the same: a branch that does not fit is passed over rather than closing the
-tree. The chain stays first whatever its own probability and whatever the filter says about it: it is
-what the engine does today, and a tree whose branches are all rejected is a round that still verifies
-the chain.
+value. Branches are taken in that order, each charged the mask rows it adds: a branch that does not fit
+is passed over rather than closing the tree. The chain stays first whatever its own probability and
+whatever the filter says about it: it is what the engine does today, and a tree whose branches are all
+rejected is a round that still verifies the chain.
 
-Node accounting: `max_nodes` bounds the sum of the returned paths' lengths, so a branch is charged for
-the chain prefix it shares. That is the conservative reading of a tree mask that would share those
-prefix nodes, and it keeps the contract checkable without modelling the mask. Substitution paths make
-that reading expensive: every branch is now exactly as long as the chain, so a budget of `max_nodes`
-holds at most `(max_nodes - len(chain)) // len(chain)` branches, and a chain longer than half the budget
-holds none. The budget covers the chain as well; when the chain alone reaches it, the result is the
-chain alone, and when the chain alone exceeds it the chain is still returned - a tree is never empty and
-never shorter than today's block.
+Node accounting: `max_nodes` bounds rows of the verification mask, which is what the caller hands on to
+the mask, and rows are not the sum of the returned paths' lengths. Every path shares the mask's trunk,
+so the chain's `len(chain)` rows are charged once however many branches come back, and each substitution
+taken adds the one row where its path leaves that trunk. A budget of `max_nodes` therefore holds
+`max_nodes - len(chain)` substitutions, not `(max_nodes - len(chain)) // len(chain)`: the deployed window
+of a 4-token chain at the default `max_nodes = 7` holds three, where the per-path reading held none and
+returned the chain alone. A path that substitutes more than one position is charged one row per
+substituted position; rows two such paths would share are still charged twice, so the count can only
+over-state the mask, never under-state it. The budget covers the trunk as well; when the chain alone
+reaches it the result is the chain alone, and when the chain alone exceeds it the chain is still
+returned - a tree is never empty and never shorter than today's block.
 """
 
 
@@ -75,6 +77,11 @@ def _served_token(token: int, routes: dict[int, set[int]], resident: set[int]) -
     if experts is None:
         return False
     return resident.issuperset(experts)
+
+
+def _rows_added(path: list[int], chain: list[int]) -> int:
+    """Mask rows `path` adds beyond the shared trunk: one per position it substitutes."""
+    return sum(1 for kept, original in zip(path, chain) if kept != original)
 
 
 def _substitutions(chain: list[int],
@@ -146,7 +153,8 @@ def build_tree(chain: list[int],
     The experts the round can serve without a swap.
 
     :param max_nodes:
-    Upper bound on the total number of nodes in the returned paths, chain included.
+    Upper bound on the rows the verification mask occupies: the shared trunk once, plus one row per
+    substitution taken across the returned paths. The caller passes this to the mask as its row count.
 
     :param max_substitutions:
     How many positions one path may replace with an alternative. 0 returns the chain alone; the default
@@ -160,10 +168,11 @@ def build_tree(chain: list[int],
     if not chain:
         return []
 
-    # A substitution path is as long as the chain, so the chain's length is what every branch costs: a
-    # budget that cannot hold a second full path holds no branch at all.
+    # The budget is mask rows: the trunk is shared, so the chain is charged once and each substitution
+    # taken costs the one row where its path leaves the trunk. A budget with no room for a row holds
+    # the chain alone - never nothing, and never less than today's block.
     budget = max_nodes - len(chain)
-    if max_substitutions < 1 or budget < len(chain):
+    if max_substitutions < 1 or budget < 1:
         return [chain]
 
     branches = []
@@ -182,9 +191,10 @@ def build_tree(chain: list[int],
     tree = []
     remaining = budget
     for _, path in branches:
-        if len(path) > remaining:
+        cost = _rows_added(path, chain)
+        if cost > remaining:
             continue
         tree.append(path)
-        remaining -= len(path)
+        remaining -= cost
 
     return [chain] + tree

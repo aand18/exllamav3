@@ -16,6 +16,11 @@ branch that diverged at `d` may continue with the following positions' candidate
 that shape, the cap on how many positions one path may substitute, and that a substituted path is still
 filtered on every token it carries - including the ones it kept from the chain.
 
+`max_nodes` is the mask's row count, not a sum of path lengths: every path shares the trunk, so the chain
+is charged `len(chain)` rows once and each substitution taken adds the row where its path leaves that
+trunk. The window this ships for - a 4-token chain at the default 7 - therefore holds three branches, and
+one of the tests below pins exactly that.
+
 pytest is absent on the Linux box this file is developed on, so it also runs directly:
 `python3 tests/generator/test_draft_tree.py`.
 """
@@ -59,6 +64,16 @@ CANDIDATES = [
     [(102, 0.70), (202, 0.20), (301, 0.10)],
     [(103, 0.55), (204, 0.45)],
 ]
+
+
+def _substitutions(path, chain):
+    """How many positions `path` replaces relative to `chain`."""
+    return sum(1 for kept, original in zip(path, chain) if kept != original)
+
+
+def _rows(tree, chain):
+    """Mask rows a tree occupies: the shared trunk once, plus one row per substituted position."""
+    return len(chain) + sum(_substitutions(path, chain) for path in tree)
 
 
 def test_the_chain_is_always_present_and_first():
@@ -107,21 +122,27 @@ def test_a_branch_with_a_token_of_unknown_routes_is_dropped():
 
 def test_max_nodes_is_respected():
     """
-    The returned paths' lengths sum to at most `max_nodes`, charged for the shared prefix as well. The
-    branches are taken in probability order and any that no longer fits is skipped rather than closing
-    the tree. The chain is never dropped to make the budget work: when it alone exceeds `max_nodes` it is
-    returned alone.
+    `max_nodes` bounds the rows of the verification mask, not the sum of the returned paths' lengths: every
+    path shares the trunk, so the chain is charged once and each substitution costs the one row where its
+    path leaves the trunk. Branches are taken in probability order and any that no longer fits is skipped
+    rather than closing the tree. The chain is never dropped to make the budget work: when it alone
+    reaches `max_nodes` it is returned alone, and a budget below its length still returns it.
     """
     for max_nodes in (3, 4, 5, 7, 20):
         tree = build_tree(CHAIN, CANDIDATES, ROUTES, RESIDENT, max_nodes = max_nodes)
-        assert sum(len(path) for path in tree) <= max(max_nodes, len(CHAIN)), max_nodes
+        assert _rows(tree, CHAIN) <= max(max_nodes, len(CHAIN)), max_nodes
         assert tree[0] == CHAIN
 
-    # 7 nodes, chain of 3: the 0.252 branch (3 nodes) fits and nothing else does, since every
-    # substitution path costs the chain's full length.
+    # 7 rows: the chain's 3 plus one row each for three substitutions. Six rows are used and no fourth
+    # branch exists - the enumeration ends before the budget does.
     tree = build_tree(CHAIN, CANDIDATES, ROUTES, RESIDENT, max_nodes = 7)
-    assert tree == [[101, 102, 103], [101, 102, 204]]
+    assert tree == [[101, 102, 103], [101, 102, 204], [101, 202, 103], [201, 102, 103]]
+    assert _rows(tree, CHAIN) == 6
 
+    # One row of headroom past the trunk buys the best-ranked branch and nothing else.
+    assert build_tree(CHAIN, CANDIDATES, ROUTES, RESIDENT, max_nodes = 4) == [CHAIN, [101, 102, 204]]
+
+    # No headroom: the chain alone.
     assert build_tree(CHAIN, CANDIDATES, ROUTES, RESIDENT, max_nodes = 3) == [CHAIN]
     assert build_tree(CHAIN, CANDIDATES, ROUTES, RESIDENT, max_nodes = 1) == [CHAIN]
 
@@ -197,11 +218,6 @@ def test_a_substitution_keeps_the_rest_of_the_chain():
     assert all(len(path) == len(CHAIN) for path in tree)
 
 
-def _substitutions(path, chain):
-    """How many positions `path` replaces relative to `chain`."""
-    return sum(1 for kept, original in zip(path, chain) if kept != original)
-
-
 def test_substitutions_are_capped():
     """
     `max_substitutions` is what keeps the enumeration small: at 1 no path may replace two positions, at
@@ -218,8 +234,7 @@ def test_substitutions_are_capped():
     assert max(_substitutions(path, CHAIN) for path in two) == 2
     assert all(_substitutions(path, CHAIN) <= 2 for path in two)
 
-    # 0 is the degenerate case: the chain alone, which is also what the default budget leaves when it
-    # cannot hold a second full-length path.
+    # 0 is the degenerate case: the chain alone, whatever the budget would have bought.
     assert build_tree(CHAIN, CANDIDATES, ROUTES, RESIDENT, max_nodes = 40,
                       max_substitutions = 0) == [CHAIN]
 
@@ -242,35 +257,77 @@ def test_a_substituted_path_is_filtered_on_every_token():
     assert [401, 402, 412] in tree_all
 
 
-def test_max_nodes_still_bounds_the_total():
+def test_the_budget_counts_mask_rows_not_path_lengths():
     """
-    The budget is still the sum of the returned paths' lengths, chain included. Substitution paths are
-    all the chain's length, so the bound reads as a branch count - and at 21 nodes a chain of 3 plus six
-    full-length branches (three one-substitution and three two-substitution) fills it exactly.
+    The budget is the mask's row count under every substitution cap: the trunk once, one row per
+    substituted position. A two-substitution path costs its two rows, so raising the cap moves which
+    branches fit without moving the bound - and a branch that does not fit is skipped, not fatal, so a
+    cheap branch ranked below an expensive one still gets in.
     """
     for max_nodes in (1, 3, 4, 5, 6, 7, 9, 20):
         for max_substitutions in (0, 1, 2):
             tree = build_tree(CHAIN, CANDIDATES, ROUTES, RESIDENT,
                               max_nodes = max_nodes, max_substitutions = max_substitutions)
-            total = sum(len(path) for path in tree)
-            assert total <= max(max_nodes, len(CHAIN)), (max_nodes, max_substitutions, total)
+            assert _rows(tree, CHAIN) <= max(max_nodes, len(CHAIN)), (max_nodes, max_substitutions)
             assert tree[0] == CHAIN
 
-    assert build_tree(CHAIN, CANDIDATES, ROUTES, RESIDENT, max_nodes = 7) == [CHAIN, [101, 102, 204]]
-    assert build_tree(CHAIN, CANDIDATES, ROUTES, RESIDENT, max_nodes = 9) == [
-        CHAIN, [101, 102, 204], [101, 202, 103],
-    ]
+    # At one substitution per path every branch is one row: 7 rows hold the trunk and three branches.
+    one = build_tree(CHAIN, CANDIDATES, ROUTES, RESIDENT, max_nodes = 7, max_substitutions = 1)
+    assert one == [CHAIN, [101, 102, 204], [101, 202, 103], [201, 102, 103]]
 
+    # At two, [101, 202, 204] ranks third and costs two rows: 3 + 1 + 1 + 2 = 7 fills the budget exactly.
+    two = build_tree(CHAIN, CANDIDATES, ROUTES, RESIDENT, max_nodes = 7, max_substitutions = 2)
+    assert two == [CHAIN, [101, 102, 204], [101, 202, 103], [101, 202, 204]]
+    assert _rows(two, CHAIN) == 7
+
+    # One more row and the single-row branch ranked below it fits as well - the skip rule at work.
+    wider = build_tree(CHAIN, CANDIDATES, ROUTES, RESIDENT, max_nodes = 8, max_substitutions = 2)
+    assert wider[4] == [201, 102, 103]
+    assert _rows(wider, CHAIN) == 8
+
+    # The whole enumeration is seven paths: three one-row, three two-row, and the trunk. It needs 12
+    # rows, so a budget past that stops being the binding constraint.
     full = build_tree(CHAIN, CANDIDATES, ROUTES, RESIDENT, max_nodes = 21, max_substitutions = 2)
-    assert sum(len(path) for path in full) == 21
     assert len(full) == 7
-    assert [101, 202, 204] in full
-    # 21 nodes holds all six branches (18) under the chain's 3; at 20 the budget is 17 and only five
-    # fit, so the lowest-ranked one goes.
-    assert [101, 202, 204] in build_tree(CHAIN, CANDIDATES, ROUTES, RESIDENT, max_nodes = 20,
-                                         max_substitutions = 2)
-    assert [201, 202, 103] not in build_tree(CHAIN, CANDIDATES, ROUTES, RESIDENT, max_nodes = 20,
-                                             max_substitutions = 2)
+    assert _rows(full, CHAIN) == 12
+
+
+# The deployed window: tabbyAPI drafts four tokens and the mask's default is seven rows. Under the
+# per-path budget this returned the chain alone, which is the tree the plan exists to build.
+WINDOW_CHAIN = [101, 102, 103, 104]
+WINDOW_ROUTES = {**ROUTES, 104: {3}, 205: {0}}
+WINDOW_CANDIDATES = [
+    [(101, 0.80), (201, 0.12)],
+    [(102, 0.70), (202, 0.20)],
+    [(103, 0.60), (204, 0.30)],
+    [(104, 0.55), (205, 0.40)],
+]
+
+
+def test_the_deployed_window_builds_three_branches():
+    """
+    The case that motivated the change: a 4-token chain at the default `max_nodes = 7`. The trunk takes
+    four rows and each substitution one more, so three substitutions fit - here the ones at positions 3,
+    2 and 1 in probability order. The fourth is [201, 102, 103, 104] (0.80 * 0.12 * 0.60 * 0.55 =
+    0.0317) and it is the budget that drops it, not the filter: every token on it is resident.
+
+    Under the old per-path accounting the budget was 7 - 4 = 3 < len(chain) = 4, so no branch was
+    admissible at all and the tree was the chain alone: four rows in use, three idle.
+    """
+    tree = build_tree(WINDOW_CHAIN, WINDOW_CANDIDATES, WINDOW_ROUTES, RESIDENT, max_nodes = 7)
+    assert tree == [
+        [101, 102, 103, 104],
+        [101, 102, 103, 205],   # 0.8 * 0.7 * 0.6 * 0.40 = 0.1344
+        [101, 102, 204, 104],   # 0.8 * 0.7 * 0.3 * 0.55 = 0.0924
+        [101, 202, 103, 104],   # 0.8 * 0.2 * 0.6 * 0.55 = 0.0528
+    ]
+    assert len(tree) - 1 == 3
+    assert _rows(tree, WINDOW_CHAIN) == 7
+
+    # The dropped branch is resident on every token, so the budget is the only reason it is absent.
+    assert all(RESIDENT.issuperset(WINDOW_ROUTES[token]) for token in [201, 102, 103, 104])
+    assert build_tree(WINDOW_CHAIN, WINDOW_CANDIDATES, WINDOW_ROUTES, RESIDENT, max_nodes = 8)[-1] == \
+        [201, 102, 103, 104]
 
 
 def _main() -> int:
