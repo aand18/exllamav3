@@ -121,3 +121,29 @@ Two smaller notes: zero-probability candidates are returned rather than dropped 
 make a zero-score branch legal, so filter `p == 0` before verifying), and nothing in Task 1 touched the
 checkpoint, so the runner-up's real probability is still unmeasured — a Windows run counting positions
 where `_walk` differs from the argmax would settle it without a GPU pass.
+
+## Task 3 STOPPED: the engine has no tree, and the served target cannot install one (2026-11-05)
+
+Task 3 was implemented as far as the engine allows and stopped at its stop-and-report condition. Nothing
+was written behind `EXL3_DRAFT_TREE`; the flag is unread. Three capabilities are missing, and the third
+binds the served box:
+
+1. **No per-query mask.** `AttnArgs` (`modules/attention_fn/common.py:4-33`) can express causal, symmetric
+   windows and varlen splits — all *uniform per call or per layer*. A tree needs node `j` to attend to the
+   past plus **its own ancestors only**, which is an N×N bool matrix; `attn_dispatch` (`dispatch.py:81-192`)
+   has no mask parameter and all ten backends would have to implement or decline it.
+2. **Accept is a contiguous row prefix.** Draft rows are staged as one run per job (`job.py:391-408`),
+   acceptance keeps the first `i+1` slots (`generator.py:2202-2209`), and `update_kv_from_target(
+   lengths=accepted_lengths)` consumes a **count**. A shared-trunk tree's accepted path is scattered —
+   slots `{0..d-1} ∪ {n+j} ∪ {d+1..n-1}` — which no `lengths=` API can express.
+3. **Fatal on `qwen4_exp`: GDN cannot rewind to a non-prefix path.** `GDNState.rewind`
+   (`modules/gated_delta_net.py:177-197`) rebuilds state by replaying "the **first** `prefix` staged tokens
+   of batch row `spec_row`" (`replay_job`, `:434-458`). With `recurrent_states` in the caps the target is
+   recurrent, so even with a mask the accepted branch could not be installed without an indexed-replay
+   kernel or one extra target forward per round.
+
+**Verdict for the item:** tree verification is not a drafting tweak on this engine, it is three engine
+capabilities — a per-query mask through the attention stack, an indexed accept/rollback, and an indexed
+GDN replay. The plan stays as the specification of that work; the arm is not runnable before it. Worth
+recording that the two cheap ingredients already exist: per-row RoPE positions (`position_ids`) and
+per-node K/V slots.
