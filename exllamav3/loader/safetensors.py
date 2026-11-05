@@ -1114,9 +1114,28 @@ class VariantSafetensorsCollection(SafetensorsCollection):
         return re.compile(big, flags)
 
 
+    @property
+    def tensor_file_map(self):
+        """The merged map of every collection this one fronts, variants first.
+
+        Inherited methods (`list_tensors`, `has_tensor`, the trie walks) read this attribute on the
+        collection itself, and this class does not call the base `__init__` (it owns no files), so
+        without it any `-or` load dies on `AttributeError` - which is exactly what the first tail
+        variant mount did (`t45-tailmount`, 2026-11-05).
+        """
+        cached = getattr(self, "_tfm_cache", None)
+        if cached is not None:
+            return cached
+        merged = dict(self.main.tensor_file_map)
+        for _, _, stc in reversed(self.stcs):      # self.stcs is variant-first
+            merged.update(stc.tensor_file_map)
+        self._tfm_cache = merged
+        return merged
+
     def add_stc(self, filters, stc):
         rx = self.compile_star_globs(filters)
         self.stcs = [(filters, rx, stc)] + self.stcs
+        self._tfm_cache = None
 
 
     def find_stc(self, key):
