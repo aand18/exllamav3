@@ -36,6 +36,26 @@ every item is judged on the same agentic-weighted decode metric and the same box
 6. **#6** — a separate plan with its own drafter work.
 7. **#4** — parked unless the served-distribution question is answered explicitly.
 
+## #3 is CANCELLED at expert granularity — the engine requires one K per layer (2026-11-05)
+
+The mount test that had to precede the batch was run (`t45-tailmount`, `t45b-tailmount`):
+
+1. **First it exposed a loader bug**: `VariantSafetensorsCollection` had no `tensor_file_map`, so **any**
+   `-or` load died with `AttributeError` before reaching the model. Fixed (`352c9dd8`, branch only).
+2. **Then it hit the wall**: `exllamav3/modules/multilinear.py:26`
+   `assert all(l.inner.K == self.K for l in linears)` — the fused GEMV batches a layer's experts through
+   one kernel with one tile geometry, so **all experts of a layer must share one bit-rate**. A 2 bpw
+   expert beside 3.5 bpw ones cannot load.
+
+Consequences, recorded so nobody repeats the 8–10 h encode:
+- the expert-granular tail (this plan's original shape) needs per-expert K in the fused kernel — kernel
+  work, and without it the batch's output cannot be loaded at all;
+- the granularity the engine *does* permit is **per layer**: whole cold layers at 2 bpw, hot layers left
+  at 3.18 (the assert is per module, and the host arena is already sized per layer via
+  `spec["expert_bytes"]`);
+- an **already-quantized whole model** at 1.66 bpw exists on the box and is the uniform alternative, with
+  the quality trade the deployed 3.18 was chosen over.
+
 ## Progress (2026-11-04)
 
 - **#5, mechanism:** merged — `EXL3_NGRAM_ROW_CACHE_PIN` (+ `_PIN_MAX_BYTES`, named guards, never-evicted slots) on top of the row cache; `bench/ngram_hot_rows.py` counts a tokenized corpus; `bench/ngram_pin_manifest.py` derives the hash manifest from the checkpoint header. The pin file itself is one command away, after the campaign.
