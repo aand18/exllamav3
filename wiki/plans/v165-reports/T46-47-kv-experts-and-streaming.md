@@ -54,3 +54,29 @@ and the long-context case is unmeasured rather than good or bad.
 | `t46-B-kv2exp` | `t46-B-kv2exp-20261105-225745` | ok |
 | `t46-C-stream` | `t46-C-stream-20261105-230052` | ok |
 | `t47-kv2exp-ccs` | `t47-kv2exp-ccs-20261105-230746` | ok |
+
+## At a 128 k cache the expert lever does work — and needs +21, not +13 (t49)
+
+Three arms, same session, cache 131 072, ladder to 131 072, one draw each:
+
+| band | **A** split 381 | **B** split 368 (+13) | **C** split 360 (+21) |
+|---|---|---|---|
+| PP 4096 | 1 717.92 | 1 680.26 | **1 848.24 (+7.6 %)** |
+| PP 32 768 | 1 752.00 | 1 756.37 | **1 832.97 (+4.6 %)** |
+| PP 65 536 | 1 756.10 | 1 769.13 | **1 830.97 (+4.3 %)** |
+| PP 131 072 | 1 739.92 | 1 752.76 (+0.7 %) | **1 804.36 (+3.7 %)** |
+| TG 32 768 | 37.66 | **41.49 (+10.2 %)** | **41.56 (+10.4 %)** |
+| TG 65 536 | 39.15 | 40.12 (+2.5 %) | 37.42 (−4.4 %) |
+| TG 130 816 | 39.31 | 39.41 (+0.3 %) | **41.03 (+4.4 %)** |
+
+- **The lever is real at 128 k**: +21 experts/layer is **+4.4 % decode at 130 816**, +10 % at 32 768 and
+  **+3.7 % prefill at 131 072**, with 2 029 MB of VRAM still free.
+- **+13 experts is not enough** (B is flat at the long band), so the effect has a threshold rather than a
+  slope — consistent with the coverage curve, which is flat until enough of the hot set is resident.
+- Single draws, and A's own 32 k decode band looks low against its neighbours, so the +10 % at 32 768 is
+  the least trustworthy cell; the 130 816 comparison is the one to repeat.
+- Fits: `size_check` puts A at 3 398 MB free, B at 2 259, C at 1 558 (measured floor 2 029 MB).
+
+**What it costs:** a 128 k cache caps the servable context at 128 k. With 262 k mandatory this is therefore
+not deployable — but it is the number for the 128 k case: **+4.4 % decode and +3.7 % prefill for 21 more
+resident experts per layer.**
