@@ -115,3 +115,16 @@ The reason this ships is the prefill number, **+21.9 % at 131 072** (T32), not d
 removes repeats, and every new context still has to be ingested, so a 22 % faster prefill is a 22 % faster
 first touch on every prompt the cache has not already seen. The 24 GiB is a page-lock budget, not an
 allocation — the arena exists either way.
+
+### Served verification, 2026-11-06
+
+One cold request through the API — a unique 22 448-token prompt, so the prefix cache cannot answer it:
+
+```
+prompt_tokens=22448  elapsed_s=7.86  prefill_tok_s=2856
+```
+
+2 856 tok/s end to end, HTTP overhead included (which only lowers the figure), against ~1 787–1 845 tok/s
+for the same ladder without the pin in the harness, and 1 726 tok/s in the earlier served proof at 165 k.
+So the gain is present on the served path, not only in `perf.py`. It is one request, not an arm: the
+controlled number remains T32's **+21.9 % at 131 072**.
