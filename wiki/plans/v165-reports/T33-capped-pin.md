@@ -128,3 +128,24 @@ prompt_tokens=22448  elapsed_s=7.86  prefill_tok_s=2856
 for the same ladder without the pin in the harness, and 1 726 tok/s in the earlier served proof at 165 k.
 So the gain is present on the served path, not only in `perf.py`. It is one request, not an arm: the
 controlled number remains T32's **+21.9 % at 131 072**.
+
+### The full ladder at the mandatory context, 2026-11-06 (t48)
+
+Both passes at `-MaxLength 262144`, same session, one each (`-dr 1`), production cache 262 144:
+
+| prompt length | no pin | pin 24 GiB | gain |
+|---|---|---|---|
+| 4 096 | 1 720.50 | 2 149.83 | **+25.0 %** |
+| 8 192 | 1 668.54 | 2 061.33 | +23.6 % |
+| 16 384 | 1 692.41 | 2 091.28 | +23.6 % |
+| 32 768 | 1 710.96 | 2 124.55 | +24.2 % |
+| 65 536 | 1 759.41 | 2 184.14 | +24.1 % |
+| 131 072 | 1 753.42 | 2 175.72 | +24.1 % |
+| **262 144** | **1 749.50** | **2 150.08** | **+22.9 %** |
+
+Absolute prefill declines with length as it should (1 720 → 1 750 tok/s without the pin; the ladder is flat
+between 16 k and 262 k on this box), and **the pin's ratio is flat at +23…25 % across the whole range,
+including the full 262 144-token context this box must serve**. Decode is unchanged (39.35 → 38.82 at
+261 888, inside the spread), which is the expected sign: the arena is not on the decode path.
+
+Runs: `t48-A-nopin-262k-20261106-191928`, `t48-B-pin-262k-20261106-192505`.
