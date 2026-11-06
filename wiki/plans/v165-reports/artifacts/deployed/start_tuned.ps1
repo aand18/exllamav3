@@ -19,12 +19,15 @@ $env:EXL3_MOE_THREAD_PRIO = "1"
 $env:EXL3_HOST_MEM_RESERVE_MB = "0"
 $env:EXL3_MOE_ARENA_HUGEPAGE = "0"
 
-# Pin 24 GiB of the host expert arena (T32/T33, 2026-11-04): decode +24 % at 4096, +17 % at 130816,
-# prefill +16 %, against +3-4 % decode for an 8 GiB cap and no decode gain at all below it.
-# 24 GiB leaves ~12 GB of host RAM free; unbounded (30.7 GiB) measured the same at long context for
-# 6.7 GB less headroom. Rollback: comment these two lines out.
+# Pinned expert arena (T32/T33, 2026-11-05): prefill +21.9 % at 131072 and +23.6 % at 4096 - a
+# general prefill speedup, since a prefix cache only removes repeats and every new context still has
+# to be ingested. Decode is unchanged (the arena is not on the decode path under static placement).
+# 24 GiB is a page-LOCK budget, not an allocation: the ~33 GiB arena exists either way.
+# Promote-on-miss is explicitly OFF: with the pin on, its default of 4 spare slots/layer would
+# switch it on, and it measured -4.28 % on Coding (T39).
 $env:EXL3_MOE_PINNED_ARENA = "1"
 $env:EXL3_MOE_PINNED_ARENA_GIB = "24"
+$env:EXL3_MOE_CPU_PROMOTE = "0"
 
 $logDir = "C:\Users\yoho\Downloads\tabbyAPI\logs"
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Force $logDir | Out-Null }

@@ -101,3 +101,17 @@ must pass `-Unset` rather than relying on the default.
 One box, one workload, n = 2 per config, batch-1 decode without the drafter (`perf.py` loads no
 DFlash2). The production drafter verifies 5 rows per step, which changes the miss profile; a
 `spec_decode` confirmation is the natural follow-up, not a precondition for this cap.
+
+## Deployed 2026-11-06
+
+The 24 GiB cap is live on port 5000 (`EXL3_MOE_PINNED_ARENA=1`, `EXL3_MOE_PINNED_ARENA_GIB=24`,
+`EXL3_MOE_CPU_PROMOTE=0` in `start_tuned.ps1`, backup beside it). Verified at load: `CPU MoE pinned arena:
+pin budget 24 GiB spent at chunk 24 (24 GiB registered)`; split mode stays `dynamic` (the promoter is off
+by the explicit `PROMOTE=0`, since with the pin on its default of 4 spares would switch it back on and it
+measured −4.28 % on Coding in T39); VRAM 21 802 MiB (unchanged); free RAM 8.32 GB; `/v1/models` 200 and a
+completion 200.
+
+The reason this ships is the prefill number, **+21.9 % at 131 072** (T32), not decode: a prefix cache only
+removes repeats, and every new context still has to be ingested, so a 22 % faster prefill is a 22 % faster
+first touch on every prompt the cache has not already seen. The 24 GiB is a page-lock budget, not an
+allocation — the arena exists either way.
