@@ -43,10 +43,10 @@ restored afterwards.
 
 | # | task | seat | needs box | deliverable | acceptance |
 |---|---|---|---|---|---|
-| **T1a** | Coverage in the served regime (`EXL3_MOE_TIER_STATS=1`, `-cs 262144`, Q4, DFlash2, pin on) | Flash | **yes — needs consent** | one pass + a coverage figure with its basis | pooled coverage reported with n and regime; gate pasted |
+| **T1a** | Coverage **and sweep activity** in the served regime (`EXL3_MOE_TIER_STATS=1` + `EXL3_MOE_CPU_SWAP_DEBUG=1`, `-cs 262144`, Q4, DFlash2, pin on) | Flash | **yes — needs consent** | one pass + coverage and swaps-per-sweep | pooled coverage with n and regime; the swap count per sweep; gate pasted. If swaps/pass ≈ 0 the sweep is inert and T3 changes shape |
 | **T1b** | Swap cost measured, not derived: time `_split_promote_step` per swap with the instrument on, at the served config | Flash | yes (same session as T1a if possible) | µs/swap, histogram | replaces the derived 386 µs with a measured number |
 | **T2** | Design note: per-layer vector format (env vs config), allocation rule, exchange protocol, failure modes, exact seams | DeepSeek V4.1 Flash | no | `wiki/plans/2026-11-08-pool-shape-design.md` | every seam cited `file:line`; arithmetic proving Σ slots constant; a stated rollback |
-| **T3** | Implement per-layer split + exchange-not-spare behind env vars, default off | DeepSeek / GLM Flash | no | code + tests | existing `tests/moe_cpu` green; new test proves (i) Σ slots constant, (ii) a promotion never reduces static residents, (iii) `reset_placement` still restores |
+| **T3** | Implement per-layer split + cadence/floor retune behind env vars, default off. **The exchange protocol already ships** (`_split_swap_experts`), so this is three deltas, not a new mechanism: the vector, a floor/cadence that spends the budget, and the optional arena-copy swap | DeepSeek / GLM Flash | no | code + tests | existing `tests/moe_cpu` green; new test proves (i) Σ slots constant, (ii) a promotion never reduces static residents, (iii) `reset_placement` still restores |
 | **T4** | Review T2/T3 | Muse Spark 1.3 | no | review notes | findings triaged; no unresolved must-fix |
 | **T5** | Arm: ABBA at `-cs 262144`, reference vs adaptive, `-dr 3`, coverage on both sides | Flash | yes | CSV rows + report `T51-pool-shape.md` | pre-registered prediction met or the mechanism is withdrawn; gate pasted |
 | **T6** | Deploy or withdraw; restore box either way | me | yes | state doc + deployed config | port 5000, production config, `/v1/models` 200 |
