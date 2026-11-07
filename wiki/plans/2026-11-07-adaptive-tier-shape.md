@@ -1,7 +1,17 @@
 # Plan — closing the adaptive half of the expert tier
 
-Status: draft, tasks not yet started. Written 2026-11-07 after `T50-why-the-transfer-failed.md`.
-Supersedes nothing; it is the execution plan for what T50 identified.
+Status: **T1a and T2 are done; T3 and T5 are cancelled** (see below). Written 2026-11-07 after
+`T50-why-the-transfer-failed.md`.
+
+## Result that closed the plan (2026-11-07)
+
+`T51-adaptive-placement-at-262k.md`: with the sweep on, coverage in the served regime climbs **22.3 % →
+57.5 %** inside one pass (512 swaps), and decode does **not** follow — median single-stream 34.48 vs 36.37
+for the static arm (−5.2 %), **37.40 vs 38.62 at 261 888 (−3.2 %)**. So the coverage mechanism works and
+coverage is not the critical path at 262 144. **T3 (per-layer pool) and T5 (pool arm) are cancelled**: they
+would raise a quantity that no longer moves the metric. What the result points at is GPU-side per-row work,
+which has no instrument — that becomes T7.
+
 
 ## What this plan is for
 
