@@ -136,7 +136,7 @@ def _read():
             _dropped += 1
             continue
         ms = ev0.elapsed_time(ev1)
-        s = _acc[phase].setdefault(layer, [0.0, 0])
+        s = _acc.setdefault(phase, {}).setdefault(layer, [0.0, 0])
         s[0] += ms
         s[1] += 1
         _rows.append((rnd, layer, phase, ms))
@@ -157,14 +157,15 @@ def _report():
     def layer_means(phase):
         return [s / n for s, n in _acc[phase].values() if n]
 
-    m_med, m_p90 = _quantiles(layer_means("mixer"))
-    o_med, o_p90 = _quantiles(layer_means("moe"))
+    parts = []
+    for phase in sorted(_acc):
+        med, p90 = _quantiles(layer_means(phase))
+        parts.append(f"{phase} {med:.3f}/{p90:.3f}")
     w_med, w_p90 = _quantiles(_walls)
     f_med, _ = _quantiles(_floors)
-    print(f" -- round prof: mixer med/p90 {m_med:.3f}/{m_p90:.3f} ms, "
-          f"moe med/p90 {o_med:.3f}/{o_p90:.3f} ms, "
-          f"round wall med/p90 {w_med:.3f}/{w_p90:.3f} ms, "
-          f"floor {f_med:.3f} ms, dropped {_dropped}, n={_sampled}", flush = True)
+    print(" -- round prof: " + " | ".join(parts) +
+          f" ms | round wall {w_med:.3f}/{w_p90:.3f} ms, floor {f_med:.3f} ms, "
+          f"dropped {_dropped}, n={_sampled}", flush = True)
 
 
 def write_csv(path = None, rows = None):

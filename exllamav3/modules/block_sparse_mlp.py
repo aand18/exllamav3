@@ -18,6 +18,11 @@ from .block_sparse_mlp_cpu import BlockSparseMLP_CPU
 from .moe_batch_recon import PAD_MAX, worst_case_bytes
 from ..model.model_tp_alloc import TPAllocation
 from ..util import profile_opt
+from ..util import round_prof
+
+# EXL3_ROUND_PROF (util/round_prof.py), read once: with the knob off the three brackets inside the
+# split MoE are constant lookups and record nothing
+_RPROF = round_prof.PROF
 from ..util.tensor import g_tensor_cache, buffered_interleaved_arange
 from .block_sparse_mlp_routing import (
     RoutingCFG, ROUTING_ACT_SIGMOID, ROUTING_ACT_SQRTSP,
@@ -1157,7 +1162,11 @@ class BlockSparseMLP(BlockSparseMLP_CPU, Module):
         cpu_partial = None
         cpu_pending = None
         if self.cpu_split_first is not None and not params.get("autosplit_measure"):
+            if _RPROF:
+                round_prof.phase_begin(self.key, "sub")
             cpu_partial, cpu_pending = self.cpu_split_submit(y, bsz, selected_experts, routing_weights)
+            if _RPROF:
+                round_prof.phase_end(self.key, "sub")
 
         if self.cpu_offload:
             final_hidden_states, cpu_pending = self.cpu_offload_issue(
@@ -1446,7 +1455,11 @@ class BlockSparseMLP(BlockSparseMLP_CPU, Module):
         # quantized paths apply), so this is the last tier
         else:
             assert bszn_eligible
+            if _RPROF:
+                round_prof.phase_begin(self.key, "ker")
             self.bc.run_bszN(y, selected_experts, routing_weights)
+            if _RPROF:
+                round_prof.phase_end(self.key, "ker")
             final_hidden_states = self.experts_cfg.out_bszn[:bsz].view(eshape)
             bc_sh_exp = self.bc_sh_exp
 
@@ -1460,7 +1473,11 @@ class BlockSparseMLP(BlockSparseMLP_CPU, Module):
 
         # CPU tail partial folds in before the post norms (nonlinear: they must see the
         # complete routed sum)
+        if _RPROF:
+            round_prof.phase_begin(self.key, "cmb")
         final_hidden_states = self.cpu_split_combine(final_hidden_states, cpu_partial, cpu_pending, eshape)
+        if _RPROF:
+            round_prof.phase_end(self.key, "cmb")
 
         # Latent MoE: project the routed sum back to the residual width (linear, so under TP
         # each rank's partial sum projects on its own ahead of the reduction)
