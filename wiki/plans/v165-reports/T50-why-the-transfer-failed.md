@@ -63,7 +63,7 @@ Fork, in five respects:
 | 2 | **6 promotions/step**, ratio 1.5, decay **0.98** (`:161-163`) | 96 swaps / 4 rounds, decay 0.7 | 16× smaller batch; with decay 0.98 a promoted expert's credit halves in ~34 steps |
 | 3 | swap = **checkpoint read + in-place copy** (`_split_swap_experts`) | RAM↔VRAM exchange, no file reads | the code's own comment prices a transfer at **73 µs** against **41 µs** of avoided host work — two reuses to break even — and the measured hook costs **2.318 ms per step for 6 promotions ≈ 386 µs/swap** (`T31-strata-transfer.md:379`), ~9× the work it avoids |
 | 4 | **inline in decode**: 2.318 ms of a 25.9 ms step = **~9 % of the token** | off the critical path, exposed cost ≈ 0 | the adaptation pays for itself only if the speed-up exceeds its own overhead |
-| 5 | **`EXL3_MOE_CPU_PROMOTE=0` in the launcher** → `spares = 0` → `_split_promote_step` returns immediately (`:1482-1485`) | always on | the shipped box has **no adaptive placement at all** |
+| 5 | **`EXL3_MOE_CPU_PROMOTE=0` in the launcher** turns off *admission* (`spares = 0` → `_split_promote_step` returns, `:1482-1485`) — **but the sweep is live**: `EXL3_MOE_CPU_SWAP` is unset, so `_split_dynamic` is true (`:1354`), and the load line says `(worker, dynamic)`. 64 swaps per 128 steps (`:141`, `:1486`), exchange-in-place | always on | the box **does** adapt; §3's defect is the promote path, not adaptation as a whole. See the correction below |
 
 Item 1 is the design defect that explains the negative result: a promoter whose slots come out of the tier it
 is meant to improve is a negative-sum trade at every budget. Item 3 explains why the cadence cannot rescue it.
@@ -128,3 +128,22 @@ lever that is compatible with the mandatory context.
 Methods: two independent read-only analyses (`/tmp/opencode/strata-decode-path-analysis.md`,
 `/tmp/opencode/fork-strata-gap-ledger.md`), each checked against the box's load line, the profile file on disk
 and the source it cites. The one claim that did not survive checking — identity placement — is corrected in §2.
+
+## Correction, 2026-11-08
+
+§3 item 5 originally said the shipped box has "no adaptive placement at all". That is true of the **promote
+path** only. `EXL3_MOE_CPU_SWAP` is unset in the launcher (only `PROMOTE=0` is set), so `_split_dynamic` is
+true (`block_sparse_mlp_cpu.py:1354`) and the **sweep** runs: 64 swaps per 128 steps (`:141`, `:1486`),
+exchange-in-place into the coldest resident's slot (`_split_swap_experts`, `:1543-1613`). The box's own load
+line confirms it — `CPU split experts (worker, dynamic)` (`:1452`).
+
+The diagnosis is unchanged in direction but sharper in what to test next: the exchange protocol this report
+asked for **already ships**, and coverage still sits at 31.76 %. So the open question is not "build an
+exchange" but **"does the sweep ever actually swap, and if it does, does 64 swaps/128 steps move coverage?"**
+Two candidate reasons it might be inert: the absolute floor `8 × hist.sum()/num_experts` (`:1516-1522`) may
+never clear in a short accumulation window, and the generator's idle hook may not fire often enough under
+tabbyAPI traffic (`generator.py:1199-1203`). Both are measurable with `EXL3_MOE_CPU_SWAP_DEBUG=1`, which
+prints the swap count per sweep and is not set today.
+
+`wiki/plans/2026-11-08-pool-shape-design.md` §0 is the source of this correction; the design was reviewed
+against the launcher and the load line before being accepted.
