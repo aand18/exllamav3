@@ -6,6 +6,11 @@ from ..model.config import Config
 from . import Module, RMSNorm, LayerNorm, Attention, GatedDeltaNet, GatedMLP, MLP, BlockSparseMLP, Linear
 from .hyperconnections import HyperConnection, hc_flush
 from ..util import profile_opt
+from ..util import round_prof
+
+# EXL3_ROUND_PROF (util/round_prof.py), read once here: with the knob off this module-level flag is
+# False and the brackets below are two constant lookups per layer that allocate nothing
+_RPROF = round_prof.PROF
 
 class TransformerBlock(Module):
 
@@ -185,7 +190,11 @@ class TransformerBlock(Module):
                 y = self.attn_norm.forward(x, params, out_dtype = torch.half)
             else:
                 y = x.half()
+            if _RPROF:
+                round_prof.phase_begin(self.layer_idx, "mixer")
             y = self.attn.forward(y, params)
+            if _RPROF:
+                round_prof.phase_end(self.layer_idx, "mixer")
             if params.get("prefill") and not export_state:
                 return x
             if self.attn_resid_scalar is not None:
@@ -213,7 +222,11 @@ class TransformerBlock(Module):
                     y = self.mlp_norm.forward(x, params, out_dtype = torch.half)
                 else:
                     y = x.half()
+            if _RPROF:
+                round_prof.phase_begin(self.layer_idx, "moe")
             y = self.mlp.forward(y, params)
+            if _RPROF:
+                round_prof.phase_end(self.layer_idx, "moe")
             if self.mlp_resid_scalar is not None:
                 y *= self.mlp_resid_scalar
             if self.mlp_hc:

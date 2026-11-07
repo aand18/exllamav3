@@ -26,10 +26,15 @@ from ..util.device_copy import to_device
 import threading
 from ..tokenizer import MMEmbedding
 from ..util import profile_opt
+from ..util import round_prof
 
 # Test hook: True forces the per-position serial speculative-window readback instead of the batched
 # (launch-all-samplers, one pinned stage, one synchronize) path
 _NO_BATCH_READBACK = False
+
+# EXL3_ROUND_PROF (util/round_prof.py), read once here: with the knob off the round wall is not timed
+# and no event is recorded anywhere; the phase brackets in modules/transformer.py stay unarmed
+_RPROF = round_prof.PROF
 
 
 # --- Draft window cost model (EXL3_DRAFT_COST_MODEL) ---------------------------------------------
@@ -917,6 +922,9 @@ class Generator:
             }
         """
 
+        if _RPROF:
+            round_prof.round_begin()
+
         assert self.cache.initialized, \
             "Cache tensors were never allocated. Construct the Cache BEFORE calling model.load()"
         owner_serial = getattr(self.cache, "owner_serial", None)
@@ -1014,6 +1022,8 @@ class Generator:
             self.write_behind()
 
         # Finished iteration
+        if _RPROF:
+            round_prof.round_end()
         return results
 
 
