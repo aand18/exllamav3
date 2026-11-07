@@ -60,6 +60,7 @@ restored afterwards.
 | **T4** | Review T2/T3 | Muse Spark 1.3 | no | review notes | findings triaged; no unresolved must-fix |
 | **T5** | Arm: ABBA at `-cs 262144`, reference vs adaptive, `-dr 3`, coverage on both sides | Flash | yes | CSV rows + report `T51-pool-shape.md` | pre-registered prediction met or the mechanism is withdrawn; gate pasted |
 | **T6** | Deploy or withdraw; restore box either way | me | yes | state doc + deployed config | port 5000, production config, `/v1/models` 200 |
+| **T7** | Per-stage profile of one decode round: dense, mixer, router, GPU experts, **CPU-expert wait**, combine, drafter | DeepSeek Flash (design) | yes (one pass) | design + one profile | phases sum to the measured round within 10 %; names the largest phase at 131 k and 262 k |
 
 T1a and T2 are independent and can run concurrently; T3 depends on T2; T5 depends on T3 and on T1a's baseline.
 
