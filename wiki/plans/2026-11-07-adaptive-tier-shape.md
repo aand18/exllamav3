@@ -122,3 +122,13 @@ catalogue and ignoring the response's `total` and `next`; model discovery must p
 - Cache shrinking in any form (262 k mandatory).
 - Growing the tier (allocator refuses; measured worth +4.4 % for +21 experts).
 - Porting Strata's profile format, its MTP drafter, or its PCIe miss share (all measured or closed in T31/T50).
+
+## Operator decision, 2026-11-07: no lower bitrate
+
+The per-layer 2 bpw tail is **not to be pursued as a performance lever**. Strata reaches its speed with a
+*larger* blob per expert (IQ3_S, ~2.046 MB) than ours (3.18 bpw, ~1.95 MB), so lower bpw is not how Strata wins
+and copying it would change the model's quality basis while diverging from the reference. This supersedes the
+"postponed on quality" status: the lever is **dropped**, not parked.
+
+Consequence for the plan: the CPU tail (12 ms of the 52 ms round) can only be **hidden**, not cheapened —
+and the arithmetic below says it was never the main gap anyway.
