@@ -40,7 +40,7 @@ CPU compute            0.58 ms
 exposed collect wait   0.25 ms   <- the stream is blocked here
 ------------------------------------------
 CPU-related            0.83 ms of 1.08 ms   (77 %)
-GPU-only window        0.82 ms              (1.08 - 0.25)
+GPU-only window        0.82 ms              (layer budget minus the wait)
 ```
 
 The CPU finishes **~0.25 ms after the GPU needs it, every layer**: 48 × 0.25 = **12 ms of a 52 ms round
