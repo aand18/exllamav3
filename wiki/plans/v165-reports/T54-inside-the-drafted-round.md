@@ -65,6 +65,23 @@ coverage — which changes *which* experts, not how many rows each serves — ca
   not available at batch 1), kernel shape for tiny row counts, and hiding the 0.26 ms CPU wait inside the
   block. The first of those is a kernel question, not a placement question.
 
+## Amendment, same day: the bandwidth figure used the wrong numerator
+
+The paragraph above multiplies **all** distinct routed experts (~30–40) by the blob size to get 60–78 MB. The
+GPU does not read all of them — it reads only the GPU-resident ones. At 31.76 % evaluation coverage, of ~50
+picks roughly 16 land on the card and the number of *distinct* GPU-resident experts among them is ~13, i.e.
+**~25 MB, not 60–78 MB**. Against 0.67 ms that is ~37 GB/s, and the block's time cannot be explained by expert
+bytes at all: 25 MB at the bus rate would be ~30 µs of the 670.
+
+So the direction of the conclusion holds and in fact strengthens — the MoE block is **latency/occupancy-bound,
+not bandwidth-bound**, because there is not enough traffic in it to be bandwidth-bound — but the specific
+"90–116 GB/s effective" figure is withdrawn. The block's 0.67 ms contains the router, the latent projections,
+the shared expert and the combine as well as the expert GEMVs, and this instrument cannot apportion them.
+
+**The next measurement is therefore inside the MoE**, not inside the mixer: three brackets in place of the one
+(`cpu_split_submit`, the GPU kernel, `cpu_split_combine`), which separates the 0.26 ms wait from the kernel and
+the kernel from the router/latent/shared work.
+
 ## Caveats
 
 - `-Runner spec_decode` forces `EXL3_MOE_CPU_SWAP=0`, so this profile is the **static** placement — the
