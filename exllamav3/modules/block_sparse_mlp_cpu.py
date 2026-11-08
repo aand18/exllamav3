@@ -2,6 +2,11 @@ from __future__ import annotations
 import os
 import torch
 from ..ext import exllamav3_ext as ext
+from ..util import round_prof
+
+# EXL3_ROUND_PROF (util/round_prof.py), read once: with the knob off the R1 copy branch below is
+# a constant lookup, so an instrumented arm and production differ only in the profiling env.
+_RPROF = round_prof.PROF
 
 # Kernel-fused issue/collect for decode-size split jobs (EXL3_MOE_SPLIT_FUSED=0 restores the
 # cudaMemcpyAsync path for A/B testing)
@@ -1084,6 +1089,23 @@ class BlockSparseMLP_CPU:
         big prefill batches take the single-phase streamed path, which overlaps internally.
         Expert ids ship in the worker's local range with -1 sentinels for GPU-resident
         picks."""
+        # R1 (T58): count distinct CPU experts for sampled ROUND_PROF rounds, decode-size
+        # batches only (the prefill path is not the handoff being attributed). The selection
+        # copy is async into a module-owned pinned buffer and counted once at round end, so
+        # no host sync lands inside any sub/ker/cmb bracket; the copy is enqueued before
+        # submit_issue_fused, i.e. on raw router ids, under the same sel >= first rule as
+        # _split_translate. Sampled-round tok/s is therefore slightly off a control -- only
+        # the distinct counts and slot-arm deltas are used.
+        if (_RPROF and round_prof.is_sampling() and bsz < self.cpu_host.stream_min_rows
+                and self.cpu_split_first is not None
+                and not torch.cuda.is_current_stream_capturing()):
+            buf = getattr(self, "_distinct_buf", None)
+            if buf is None or buf.shape[1] != selected_experts.shape[1]:
+                buf = self._distinct_buf = torch.empty(
+                    (64, selected_experts.shape[1]), dtype = torch.int64, pin_memory = True)
+            buf[:bsz].copy_(selected_experts, non_blocking = True)
+            round_prof.enqueue_distinct(self.key, buf, self.cpu_split_first, bsz,
+                                        selected_experts.shape[1], round_prof.current_round())
         if self._split_map is not None:
             self._split_submit_rows = bsz
             self._split_swap_tick()

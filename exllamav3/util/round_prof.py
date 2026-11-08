@@ -11,6 +11,9 @@ it by construction.
     EXL3_ROUND_PROF_WARMUP=64      skip the first rounds: graph capture and its eager precursor
     EXL3_ROUND_PROF_EVERY=64       one report line per this many sampled rounds
     EXL3_ROUND_PROF_CSV=path       write round,layer,phase,ms at exit, one file per pass
+    EXL3_DISTINCT_CSV=path         write round,layer,distinct,rows,topk at exit (R1: distinct CPU
+                                   experts per layer per sampled round; see enqueue_distinct).
+                                   Defaults to "<EXL3_ROUND_PROF_CSV>.distinct" when that is set.
 
 The flag is read once, at import. A caller imports PROF into its own module-level `_RPROF`, so with
 the knob off the branch is a constant lookup and nothing else: no event object is built, and no
@@ -45,6 +48,10 @@ WARMUP = _env_int("EXL3_ROUND_PROF_WARMUP", 64)
 EVERY = max(1, _env_int("EXL3_ROUND_PROF_EVERY", 64))
 # Accept the spelling in the design note as well: a silently ignored path would cost a whole pass
 CSV_PATH = os.environ.get("EXL3_ROUND_PROF_CSV") or os.environ.get("EXLL3_ROUND_PROF_CSV") or None
+# R1 distinct-expert counts share the phase CSV's path by default (suffix .distinct), so one env
+# var enables both files in a measurement arm.
+DISTINCT_CSV_PATH = os.environ.get("EXL3_DISTINCT_CSV") or \
+    (CSV_PATH + ".distinct" if CSV_PATH else None)
 
 _pool = {}                          # (layer, phase) -> [enter event, exit event], built once per key
 _null = []                          # two back-to-back events: the floor a bracket costs
@@ -58,6 +65,8 @@ _walls = []                         # round wall ms, one per sampled round
 _floors = []                        # null-pair ms, one per sampled round
 _rows = []                          # CSV rows: (round, layer, phase, ms)
 _dropped = 0                         # brackets whose exit event had not completed at read time
+_distinct = []                       # rows: (round, layer, distinct cpu experts, rows, topk)
+_pending = []                        # this sampled round's async sel copies, counted once at round end
 
 
 def _new_pair():
@@ -97,6 +106,7 @@ def round_end():
     _on = False
     _walls.append((time.perf_counter() - _t0) * 1000.0)
     _read()
+    _finalize_distinct()
     _sampled += 1
     if (_sampled % EVERY) == 0:
         _report()
@@ -182,5 +192,68 @@ def write_csv(path = None, rows = None):
     return len(rows)
 
 
+# ---------------------------------------------------------------------------
+# R1: distinct CPU experts per layer per sampled round (no kernel change).
+#
+# block_sparse_mlp_cpu.cpu_split_submit enqueues an async D2H copy of the raw router
+# selections into a module-owned pinned buffer while a sampled round is open, and hands
+# round_prof the buffer + this layer's cpu_split_first. The counts are taken at round end
+# with one host sync total -- outside every phase bracket, so sub/ker/cmb stay clean.
+# The copy is enqueued before submit_issue_fused runs, hence on raw router ids;
+# the threshold rule is exactly _split_translate's: sel >= first_cpu is CPU-resident.
+# ---------------------------------------------------------------------------
+def is_sampling():
+    """True while a sampled round is open (matches the event brackets' gate)"""
+    return _on
+
+
+def current_round():
+    """The round index the sampled-round machinery is counting"""
+    return _rounds
+
+
+def enqueue_distinct(layer, buf_cpu, first_cpu, rows, topk, rnd):
+    """Queue one layer's async selection copy for counting at this round's end"""
+    _pending.append((rnd, layer, buf_cpu, first_cpu, rows, topk))
+
+
+def count_distinct_cpu(buf_cpu, first_cpu, rows, topk):
+    """Distinct sel >= first_cpu among the first `rows` rows of a CPU copy (pure, nogpu-testable)"""
+    if first_cpu is None:
+        return 0
+    vals = buf_cpu[:rows, :topk].reshape(-1)
+    return len({int(v) for v in vals.tolist() if v >= first_cpu})
+
+
+def _finalize_distinct():
+    global _pending, _distinct
+    if not _pending:
+        return
+    try:
+        torch.cuda.synchronize()
+    except Exception:
+        pass
+    for rnd, layer, buf_cpu, first_cpu, rows, topk in _pending:
+        _distinct.append((rnd, layer, count_distinct_cpu(buf_cpu, first_cpu, rows, topk),
+                          rows, topk))
+    _pending = []
+
+
+def write_distinct(path = None, rows = None):
+    """Emit the R1 counts: round,layer,distinct,rows,topk"""
+    path = path or DISTINCT_CSV_PATH
+    rows = _distinct if rows is None else rows
+    if not path or not rows:
+        return 0
+    with open(path, "w", encoding = "utf-8", newline = "") as f:
+        f.write("round,layer,distinct,rows,topk\n")
+        for rnd, layer, n, rows_, topk in rows:
+            f.write(f"{rnd},{layer},{n},{rows_},{topk}\n")
+    print(f" -- round prof distinct: {len(rows)} rows -> {path}", flush = True)
+    return len(rows)
+
+
 if PROF and CSV_PATH:
     atexit.register(write_csv)
+if PROF and DISTINCT_CSV_PATH:
+    atexit.register(write_distinct)
