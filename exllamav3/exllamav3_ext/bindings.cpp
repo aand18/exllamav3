@@ -138,6 +138,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("moe_split_map", &moe_split_map, "moe_split_map");
     m.def("moe_split_issue", &moe_split_issue, "moe_split_issue");
     m.def("moe_split_collect_add", &moe_split_collect_add, "moe_split_collect_add");
+    m.def("moe_split_collect_add_expert", &moe_split_collect_add_expert, "moe_split_collect_add_expert");
     m.def("dsv4_compress", &dsv4_compress, "dsv4_compress");
     m.def("dsv4_pool_quant_scatter", &dsv4_pool_quant_scatter, "dsv4_pool_quant_scatter");
     m.def("dsv4_ring_append", &dsv4_ring_append, "dsv4_ring_append");
@@ -206,6 +207,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
     m.def("exl3_moe_cpu_make_layer", &exl3_moe_cpu_make_layer, "exl3_moe_cpu_make_layer");
     m.def("exl3_moe_cpu_free_layer", &exl3_moe_cpu_free_layer, "exl3_moe_cpu_free_layer");
     m.def("exl3_moe_cpu_forward", &exl3_moe_cpu_forward, "exl3_moe_cpu_forward",
+          py::call_guard<py::gil_scoped_release>());
+    m.def("exl3_moe_cpu_forward_expert", &exl3_moe_cpu_forward_expert, "exl3_moe_cpu_forward_expert",
           py::call_guard<py::gil_scoped_release>());
     m.def("exl3_moe_cpu_has_avx2", &exl3_moe_cpu_has_avx2, "exl3_moe_cpu_has_avx2");
     m.def("exl3_moe_flag_write", &exl3_moe_flag_write, "exl3_moe_flag_write");

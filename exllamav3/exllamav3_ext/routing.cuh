@@ -90,6 +90,21 @@ void moe_split_collect_add
     const int64_t ho
 );
 
+// Per-expert collect (EXL3_MOE_PARTIAL_COMPLETION): fold one expert job's compact slice into the
+// routed sum, straight from the pinned slot. The job's expert id is read from the descriptor word
+// at h_expert_ptr (the GPU announced it), its slice offset and row count from
+// h_segtab_ptr (2 * E_cpu int32, worker-written); n_cap is the slot's slice-row capacity
+void moe_split_collect_add_expert
+(
+    at::Tensor final_out,
+    int64_t h_out_ptr,
+    int64_t h_rowidx_ptr,
+    int64_t h_segtab_ptr,
+    int64_t h_expert_ptr,
+    const int64_t ho,
+    const int64_t n_cap
+);
+
 void routing_sel_norm
 (
     const at::Tensor& hidden,

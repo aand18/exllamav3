@@ -242,6 +242,97 @@ inline void flag_wait_on(cudaStream_t stream, uintptr_t flag, int64_t value, uin
 
 } // namespace
 
+// ---- per-expert announce (EXL3_MOE_PARTIAL_COMPLETION) --------------------------------------
+//
+// Fills the per-expert fields of the descriptors the parent reserved for one layer: experts[0] of
+// position i is the i-th distinct CPU-routed expert in ASCENDING id order (or MOE_EXPERT_SKIP
+// when the layer has fewer than cap = rows*topk distinct CPU experts), and prev_seq is that
+// expert's slice offset, the exclusive prefix sum of the counts of the lower experts (so the
+// slices of one layer partition the out region without a host-computed offset).
+//
+// Runs on the stream between the staging kernel (which writes sel into the pinned slot) and the
+// data_ready publish, so the worker -- which only looks at experts[0]/prev_seq after its
+// data_ready wait -- always sees a completed announce. Neither jobs_tail nor expert_done is
+// touched here: the parent owns the tail, the worker owns the flags.
+namespace {
+
+__global__ void moe_split_announce_kernel
+(
+    const int32_t* __restrict__ h_sel,   // pinned slot sel (rows * topk), worker-local ids, -1 = GPU
+    uint8_t* __restrict__ ring,          // pinned job ring base
+    const int n,                         // rows * topk
+    const int cap,                       // reserved positions (>= number of distinct experts)
+    const int e_cpu,                     // worker-local expert count
+    const uint32_t tail0                 // first reserved ring index
+)
+{
+    extern __shared__ int s_cnt[];       // e_cpu counters
+    const int t = threadIdx.x;
+    const int words = blockDim.x;
+
+    for (int e = t; e < e_cpu; e += words) s_cnt[e] = 0;
+    __syncthreads();
+    for (int i = t; i < n; i += words)
+    {
+        const int32_t e = *reinterpret_cast<const volatile int32_t*>(h_sel + i);
+        if (e >= 0 && e < e_cpu) atomicAdd(&s_cnt[e], 1);
+    }
+    __syncthreads();
+
+    // Warp 0 scans the histogram in one shot: each lane sums its chunk of expert ids, a shuffle
+    // scan turns that into (distinct experts before, assignments before) per lane, then the lane
+    // walks its chunk again writing descriptors. A serial walk over e_cpu here would cost more
+    // than the fold it enables (it runs per layer, on the decode critical path)
+    __shared__ int s_distinct;
+    if (t < 32)
+    {
+        const int chunk = (e_cpu + 31) / 32;
+        const int e0 = t * chunk;
+        const int e1 = min(e_cpu, e0 + chunk);
+        int nz = 0, sum = 0;
+        for (int e = e0; e < e1; ++e)
+        {
+            const int c = s_cnt[e];
+            sum += c;
+            nz += (c != 0);
+        }
+        const int own_nz = nz, own_sum = sum;
+        for (int d = 1; d < 32; d <<= 1)
+        {
+            const int vnz = __shfl_up_sync(0xffffffffu, nz, d);
+            const int vsum = __shfl_up_sync(0xffffffffu, sum, d);
+            if (t >= d) { nz += vnz; sum += vsum; }
+        }
+        if (t == 31) s_distinct = nz;      // inclusive scan: total distinct experts
+        int pos = nz - own_nz;
+        uint32_t off = static_cast<uint32_t>(sum - own_sum);
+        for (int e = e0; e < e1; ++e)
+        {
+            const int c = s_cnt[e];
+            if (!c) continue;
+            MoeJob* job = reinterpret_cast<MoeJob*>(ring) + ((tail0 + pos) % MOE_JOB_RING);
+            job->experts[0] = static_cast<uint32_t>(e);
+            job->prev_seq = off;
+            off += static_cast<uint32_t>(c);
+            ++pos;
+        }
+    }
+    __syncthreads();
+    const int distinct = s_distinct;
+    for (int i = distinct + t; i < cap; i += words)
+    {
+        MoeJob* job = reinterpret_cast<MoeJob*>(ring) + ((tail0 + i) % MOE_JOB_RING);
+        job->experts[0] = MOE_EXPERT_SKIP;
+        job->prev_seq = 0;
+    }
+    __syncthreads();
+    // System-scope fence so the descriptors are visible to the worker before data_ready (which
+    // this call publishes right after) can be observed
+    if (t == 0) __threadfence_system();
+}
+
+} // namespace
+
 bool exl3_moe_split_issue_fused
 (
     uintptr_t shm_base,
@@ -264,7 +355,11 @@ bool exl3_moe_split_issue_fused
     int64_t first_cpu,
     uintptr_t data_ready_flag,
     uintptr_t consumed_flag,
-    uintptr_t abort_flag
+    uintptr_t abort_flag,
+    int64_t partial,
+    int64_t partial_tail,
+    int64_t cap,
+    int64_t e_cpu
 )
 {
     uint8_t* base = reinterpret_cast<uint8_t*>(shm_base);
@@ -272,22 +367,53 @@ bool exl3_moe_split_issue_fused
     uint32_t* jobs_head = reinterpret_cast<uint32_t*>(base + 320);
     MoeJob* jobs = reinterpret_cast<MoeJob*>(base + MOE_CTRL_JOBS_OFFSET);
     const uint32_t tail = *jobs_tail;
-    if (tail - load_acquire_u32(jobs_head) >= MOE_JOB_RING - 4) return false;
-    // Descriptor first: host-visible before the GPU can publish the data flag
-    MoeJob& job = jobs[tail % MOE_JOB_RING];
-    job.seq = (uint32_t) (seq & 0xFFFFFFFFull);
-    job.seq_hi = (uint32_t) ((uint64_t) seq >> 32);
-    job.layer = (uint32_t) layer;
-    job.rows = (uint32_t) rows;
-    job.topk = (uint32_t) topk;
-    job.slot = (uint32_t) slot;
-    job.kind = MOE_JOB_KIND_COMPUTE_GATED;
-    store_release_u32(jobs_tail, tail + 1);
+    const uint32_t need = partial ? (uint32_t) cap : 1u;
+    if (need + 4 > (uint32_t) MOE_JOB_RING)
+        TORCH_CHECK(false, "exl3_moe_split_issue_fused: cap ", cap, " does not fit the job ring");
+    // The ring-space check belongs to the whole-layer path, which reserves its own position here.
+    // In partial mode the parent already reserved `cap` positions and advanced jobs_tail (it has
+    // to, to know the completion flag of every job without a sync), so the tail read above is
+    // past the reservation and says nothing about free space: the caller throttles instead
+    if (!partial && tail - load_acquire_u32(jobs_head) >= MOE_JOB_RING - 4) return false;
+    // Descriptor first: host-visible before the GPU can publish the data flag. In partial mode the
+    // parent has already written the `cap` fixed-field descriptors and advanced jobs_tail past
+    // them (the per-expert fields of those -- experts[0], prev_seq -- are announced by the GPU
+    // below, which is why the worker only reads them after its data_ready wait)
+    if (!partial)
+    {
+        MoeJob& job = jobs[tail % MOE_JOB_RING];
+        job.seq = (uint32_t) (seq & 0xFFFFFFFFull);
+        job.seq_hi = (uint32_t) ((uint64_t) seq >> 32);
+        job.layer = (uint32_t) layer;
+        job.rows = (uint32_t) rows;
+        job.topk = (uint32_t) topk;
+        job.slot = (uint32_t) slot;
+        job.kind = MOE_JOB_KIND_COMPUTE_GATED;
+        store_release_u32(jobs_tail, tail + 1);
+    }
 
     const at::cuda::OptionalCUDAGuard device_guard(y.device());
     cudaStream_t stream = at::cuda::getCurrentCUDAStream(y.get_device()).stream();
     if (prev_seq) flag_wait_on(stream, consumed_flag, prev_seq, abort_flag);
     moe_split_issue(sel, map, hist, y, w, h_sel_ptr, h_x_ptr, h_w_ptr, dev_count, slot, hi, first_cpu);
+    if (partial)
+    {
+        // The staging kernel has written sel into the pinned slot; the announce turns it into the
+        // per-expert descriptor fields. Same stream, so data_ready below publishes both
+        const int announce_threads = 256;
+        const size_t smem = size_t(e_cpu) * sizeof(int);
+        moe_split_announce_kernel<<<1, announce_threads, smem, stream>>>
+        (
+            reinterpret_cast<const int32_t*>(h_sel_ptr),
+            // The ring is host memory; on WDDM the host pointer is not a valid device address,
+            // so recover the GPU-visible base from abort_flag (gpu_base + 128 by construction).
+            reinterpret_cast<uint8_t*>(abort_flag - 128 + MOE_CTRL_JOBS_OFFSET),
+            (int) (rows * topk),
+            (int) cap,
+            (int) e_cpu,
+            (uint32_t) partial_tail
+        );
+    }
     flag_write_on(stream, data_ready_flag, seq);
     return true;
 }
@@ -361,7 +487,8 @@ void exl3_moe_cpu_worker_run
     int64_t num_wslots,
     int64_t wslot_size,
     int64_t threads,
-    int64_t stage_threads
+    int64_t stage_threads,
+    int64_t partial
 )
 {
     // GIL is released by the binding's call_guard; do not release it again here
@@ -374,8 +501,9 @@ void exl3_moe_cpu_worker_run
     MoeJob* jobs = reinterpret_cast<MoeJob*>(base + MOE_CTRL_JOBS_OFFSET);
     uint32_t* data_ready = reinterpret_cast<uint32_t*>(base + MOE_SLOT_FLAGS_OFFSET);
     uint32_t* done = reinterpret_cast<uint32_t*>(base + MOE_SLOT_FLAGS_OFFSET + 64 * MOE_MAX_SLOTS);
-    uint32_t* stage_done = reinterpret_cast<uint32_t*>(base + MOE_SLOT_FLAGS_OFFSET + 3 * 64 * MOE_MAX_SLOTS);
-    uint32_t* pinned_free = reinterpret_cast<uint32_t*>(base + MOE_SLOT_FLAGS_OFFSET + 3 * 64 * MOE_MAX_SLOTS + 64 * MOE_MAX_WSLOTS);
+    uint32_t* expert_done = reinterpret_cast<uint32_t*>(base + MOE_EXPERT_DONE_OFFSET);
+    uint32_t* stage_done = reinterpret_cast<uint32_t*>(base + MOE_STAGE_FLAGS_OFFSET);
+    uint32_t* pinned_free = reinterpret_cast<uint32_t*>(base + MOE_STAGE_FLAGS_OFFSET + 64 * MOE_MAX_WSLOTS);
     uint32_t* stage_tail = reinterpret_cast<uint32_t*>(base + MOE_STAGE_TAIL_OFFSET);
     uint32_t* stage_head = reinterpret_cast<uint32_t*>(base + MOE_STAGE_HEAD_OFFSET);
     MoeJob* stage_jobs = reinterpret_cast<MoeJob*>(base + MOE_STAGE_JOBS_OFFSET);
@@ -426,11 +554,17 @@ void exl3_moe_cpu_worker_run
         }
     });
 
-    // Fixed slot section offsets from the registered maxima
+    // Fixed slot section offsets from the registered maxima (mirrored by ensure_started in
+    // moe_cpu_host.py): out_rows is the compact per-expert slice capacity when the parent sized
+    // the slots for partial completion
+    const bool partial_ = partial != 0;
+    const size_t out_rows = size_t(cap_rows) * (partial_ ? size_t(max_topk) : 1);
     const size_t off_x = 0;
     const size_t off_sel = align64(off_x + size_t(cap_rows) * max_hi * 2);
     const size_t off_w = align64(off_sel + size_t(cap_rows) * max_topk * 4);
     const size_t off_out = align64(off_w + size_t(cap_rows) * max_topk * 2);
+    const size_t off_rowidx = align64(off_out + out_rows * max_ho * 4);
+    const size_t off_segtab = align64(off_rowidx + out_rows * 4);
 
     // Handoff profiling (EXL3_MOE_HANDOFF_PROF): per-job wall times for the three segments the
     // worker can observe -- idle gap since the previous job, spin-on-data_ready, and compute
@@ -486,8 +620,57 @@ void exl3_moe_cpu_worker_run
 
         const auto hp_t1 = std::chrono::steady_clock::now();
 
+        uint8_t* slot = data + size_t(job.slot) * slot_size;
+        if (job.kind == MOE_JOB_KIND_COMPUTE_EXPERT)
         {
-            uint8_t* slot = data + size_t(job.slot) * slot_size;
+            // Per-expert job (EXL3_MOE_PARTIAL_COMPLETION). The ring position is the flag index;
+            // experts[0] and prev_seq (the slice offset) are announced by the GPU and are only
+            // valid now, after the data_ready wait above (the announce kernel runs on the
+            // collecting stream ahead of the data_ready publish). MOE_EXPERT_SKIP marks a reserved
+            // position with no job behind it: nothing to compute, but the flag is still published
+            // so the collecting stream's wait for that position completes
+            const size_t pos = size_t((head - 1) % MOE_JOB_RING);
+            MoeJob* jp = jobs + pos;
+            const uint32_t expert = load_acquire_u32(&jp->experts[0]);
+            if (expert != MOE_EXPERT_SKIP)
+            {
+                const size_t off = size_t(load_acquire_u32(&jp->prev_seq));
+                const int rows_ = (int) job.rows;
+                const int topk_ = (int) job.topk;
+                const int32_t* selp = reinterpret_cast<const int32_t*>(slot + off_sel);
+                int32_t* rowidx = reinterpret_cast<int32_t*>(slot + off_rowidx);
+                int32_t* segtab = reinterpret_cast<int32_t*>(slot + off_segtab);
+                float* out = reinterpret_cast<float*>(slot + off_out) + off * max_ho;
+                // Slice rows in sel scan order, which is the order forward_expert builds its
+                // chunks in: slice row r belongs to the r-th (token, expert) assignment
+                int n = 0;
+                for (int i = 0; i < rows_ * topk_; ++i)
+                    if (selp[i] == (int32_t) expert) rowidx[off + n++] = i / topk_;
+                if (n)
+                    exl3_moe_cpu_forward_expert(
+                        static_cast<int64_t>(job.layer),
+                        reinterpret_cast<const at::Half*>(slot + off_x),
+                        selp,
+                        reinterpret_cast<const at::Half*>(slot + off_w),
+                        out,
+                        rows_,
+                        topk_,
+                        (int) expert,
+                        static_cast<int>(threads)
+                    );
+                // Published before the flag: the collecting stream's fold reads both after it
+                segtab[expert * 2] = static_cast<int32_t>(off);
+                segtab[expert * 2 + 1] = n;
+                if (hprof) { hp_assign += n; hp_rows += rows_; if (!n) hp_empty++; }
+            }
+            else if (hprof) hp_empty++;
+            // Per-expert jobs publish expert_done only: nothing waits on done[slot] for a partial
+            // layer (the whole-layer collects wait for their own, later, seq), and publishing it
+            // mid-layer would mean "one of the layer's experts is done"
+            store_release_flag(expert_done + pos * 16, job);
+        }
+        else
+        {
             bool run = true;
             if (job.kind == MOE_JOB_KIND_COMPUTE_GATED)
             {
@@ -524,9 +707,8 @@ void exl3_moe_cpu_worker_run
                     static_cast<int>(job.topk),
                     static_cast<int>(threads)
                 );
+            store_release_flag(done + size_t(job.slot) * 16, job);
         }
-
-        store_release_flag(done + size_t(job.slot) * 16, job);
 
         if (hprof)
         {

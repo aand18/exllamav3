@@ -3015,6 +3015,7 @@ struct Chunk
     int expert;
     int m;
     int token[MAX_M];
+    int out_row[MAX_M];
     float weight[MAX_M];
 };
 
@@ -3053,6 +3054,9 @@ struct ForwardCtx
     PaddedCounter* cursor = nullptr;
 
     int phase = 0;
+    // Per-expert partial completion (see exl3_moe_cpu_forward_expert): out receives the slice's
+    // own rows and is stored into, not accumulated, since every row belongs to one assignment
+    bool out_store = false;
 };
 
 struct ForwardArena
@@ -3304,10 +3308,14 @@ void decode_out_block(ForwardCtx& c, int block, bool fold)
         for (int r = 0; r < ch.m; ++r)
         {
             float* v = d + static_cast<size_t>(r) * H;
-            float* dst = c.out + static_cast<size_t>(ch.token[r]) * H;
+            float* dst = c.out + static_cast<size_t>(c.out_store ? ch.out_row[r] : ch.token[r]) * H;
             transform_out_block(mat, v, block);
-            for (int col = 0; col < 128; ++col)
-                dst[block + col] += ch.weight[r] * v[block + col];
+            if (c.out_store)
+                for (int col = 0; col < 128; ++col)
+                    dst[block + col] = ch.weight[r] * v[block + col];
+            else
+                for (int col = 0; col < 128; ++col)
+                    dst[block + col] += ch.weight[r] * v[block + col];
         }
     }
 }
@@ -3422,11 +3430,15 @@ void forward_phase(void* vctx, int worker, int num_workers)
                 const Chunk& ch = c.chunks[j];
                 const float* d = c.tout_d + static_cast<size_t>(j) * MAX_SLOTS * H;
                 for (int r = 0; r < ch.m; ++r) {
-                    float* dst = c.out + static_cast<size_t>(ch.token[r]) * H;
+                    float* dst = c.out + static_cast<size_t>(c.out_store ? ch.out_row[r] : ch.token[r]) * H;
                     const float* src = d + static_cast<size_t>(r) * H;
                     const float w = ch.weight[r];
-                    for (int col = c0; col < c1; ++col)
-                        dst[col] += w * src[col];
+                    if (c.out_store)
+                        for (int col = c0; col < c1; ++col)
+                            dst[col] = w * src[col];
+                    else
+                        for (int col = c0; col < c1; ++col)
+                            dst[col] += w * src[col];
                 }
             }
             break;
@@ -3834,49 +3846,87 @@ int64_t exl3_moe_cpu_pool_stress(int threads, int iters, int small, int spin)
     return anomalies;
 }
 
-void exl3_moe_cpu_forward_raw(
-    int64_t handle,
+// Shared body of exl3_moe_cpu_forward_raw and exl3_moe_cpu_forward_expert. `only_expert` < 0
+// computes every selected expert and accumulates into the layer-wide output, which is zeroed
+// first. `only_expert` >= 0 restricts the job to one expert's assignments
+// (EXL3_MOE_PARTIAL_COMPLETION): the rows then are that expert's slice, consecutive in sel scan
+// order, out_store says each is stored rather than accumulated (every slice row belongs to one
+// assignment, so no other job writes it)
+static void moe_forward_impl
+(
+    const MoeCpuLayer* layer,
     const at::Half* x,
     const int32_t* sel,
     const at::Half* wts,
     float* out,
     int rows,
     int topk,
-    int threads
+    int threads,
+    int only_expert,
+    bool out_store
 )
 {
-    const MoeCpuLayer* layer = get_layer(handle);
-    const int m_total = rows;
-    const int top_k = topk;
+    const int top_k = static_cast<int>(topk);
 
     ForwardCtx ctx;
     ctx.layer = layer;
     ctx.x = x;
     ctx.out = out;
-    ctx.m_total = m_total;
-    std::memset(ctx.out, 0, static_cast<size_t>(m_total) * layer->hidden_size * sizeof(float));
+    ctx.out_store = out_store;
+    ctx.m_total = rows;
 
-    // Group token assignments by expert, then split into chunks of MAX_M rows
-    std::vector<std::vector<std::pair<int, float>>> per_expert(layer->num_experts);
-    for (int t = 0; t < m_total; ++t)
-        for (int j = 0; j < top_k; ++j)
-        {
-            const int32_t e = sel[static_cast<size_t>(t) * top_k + j];
-            if (e >= 0 && e < layer->num_experts)
-                per_expert[e].emplace_back(t, half_to_float(wts[static_cast<size_t>(t) * top_k + j]));
-        }
-    for (int e = 0; e < layer->num_experts; ++e)
+    if (only_expert < 0)
     {
-        auto& lst = per_expert[e];
+        std::memset(ctx.out, 0, static_cast<size_t>(rows) * layer->hidden_size * sizeof(float));
+
+        // Group token assignments by expert, then split into chunks of MAX_M rows
+        std::vector<std::vector<std::pair<int, float>>> per_expert(layer->num_experts);
+        for (int t = 0; t < rows; ++t)
+            for (int j = 0; j < top_k; ++j)
+            {
+                const int32_t e = sel[static_cast<size_t>(t) * top_k + j];
+                if (e >= 0 && e < layer->num_experts)
+                    per_expert[e].emplace_back(t, half_to_float(wts[static_cast<size_t>(t) * top_k + j]));
+            }
+        for (int e = 0; e < layer->num_experts; ++e)
+        {
+            auto& lst = per_expert[e];
+            for (size_t i = 0; i < lst.size(); i += MAX_M)
+            {
+                Chunk ch;
+                ch.expert = e;
+                ch.m = static_cast<int>(std::min<size_t>(MAX_M, lst.size() - i));
+                for (int r = 0; r < ch.m; ++r)
+                {
+                    ch.token[r] = lst[i + r].first;
+                    ch.weight[r] = lst[i + r].second;
+                }
+                ctx.chunks.push_back(ch);
+            }
+        }
+    }
+    else
+    {
+        // One expert's assignments in sel scan order: slice row r is the r-th (token, expert) pick
+        // of the layer. `ch.token` is the assignment's actual x row; `ch.out_row` is the slice row the
+        // result belongs to, because decode_out_block writes compact slices for partial completion.
+        std::vector<std::tuple<int, int, float>> lst;
+        lst.reserve(static_cast<size_t>(rows) * top_k);
+        const int total = rows * top_k;
+        for (int i = 0; i < total; ++i)
+            if (sel[i] == only_expert)
+                lst.emplace_back(i / top_k, static_cast<int>(lst.size()), half_to_float(wts[i]));
+        ctx.m_total = static_cast<int>(lst.size());
         for (size_t i = 0; i < lst.size(); i += MAX_M)
         {
             Chunk ch;
-            ch.expert = e;
+            ch.expert = only_expert;
             ch.m = static_cast<int>(std::min<size_t>(MAX_M, lst.size() - i));
             for (int r = 0; r < ch.m; ++r)
             {
-                ch.token[r] = lst[i + r].first;
-                ch.weight[r] = lst[i + r].second;
+                ch.token[r] = std::get<0>(lst[i + r]);
+                ch.out_row[r] = std::get<1>(lst[i + r]);
+                ch.weight[r] = std::get<2>(lst[i + r]);
             }
             ctx.chunks.push_back(ch);
         }
@@ -3989,7 +4039,7 @@ void exl3_moe_cpu_forward_raw(
         ctx.cursor = ar.cursors.get();
     }
 
-    const int num_phases = decode ? 2 : (rows == 1 ? 5 : 6);
+    const int num_phases = decode ? 2 : (ctx.m_total == 1 ? 5 : 6);
     const PoolFn phase_fn = decode ? &decode_phase : &forward_phase;
     for (int phase = 0; phase < num_phases; ++phase) {
         ctx.phase = phase;
@@ -4028,6 +4078,44 @@ void exl3_moe_cpu_forward_raw(
                phase_us[4] / prof_jobs, phase_us[5] / prof_jobs);
         fflush(stdout);
     }
+}
+
+void exl3_moe_cpu_forward_raw
+(
+    int64_t handle,
+    const at::Half* x,
+    const int32_t* sel,
+    const at::Half* wts,
+    float* out,
+    int rows,
+    int topk,
+    int threads
+)
+{
+    moe_forward_impl(get_layer(handle), x, sel, wts, out, rows, topk, threads, -1, false);
+}
+
+// Per-expert partial completion (EXL3_MOE_PARTIAL_COMPLETION): see the header for the contract.
+// `expert` is a worker-local expert id; the rows that select it are computed exactly as in the
+// whole-layer path and stored, routing-weighted, at consecutive rows of `out`
+void exl3_moe_cpu_forward_expert
+(
+    int64_t handle,
+    const at::Half* x,
+    const int32_t* sel,
+    const at::Half* wts,
+    float* out,
+    int rows,
+    int topk,
+    int expert,
+    int threads
+)
+{
+    const MoeCpuLayer* layer = get_layer(handle);
+    TORCH_CHECK(expert >= 0 && expert < layer->num_experts,
+                "exl3_moe_cpu_forward_expert: expert out of range");
+    TORCH_CHECK(rows > 0 && topk > 0, "exl3_moe_cpu_forward_expert: rows and topk must be positive");
+    moe_forward_impl(layer, x, sel, wts, out, rows, topk, threads, expert, true);
 }
 
 void exl3_moe_cpu_forward
@@ -4102,5 +4190,6 @@ int64_t exl3_moe_cpu_make_layer(
     int64_t, double, int64_t) { NO_MOE_CPU(); return 0; }
 void exl3_moe_cpu_free_layer(int64_t) {}
 void exl3_moe_cpu_forward_raw(int64_t, const at::Half*, const int32_t*, const at::Half*, float*, int, int, int) { NO_MOE_CPU(); }
+void exl3_moe_cpu_forward_expert(int64_t, const at::Half*, const int32_t*, const at::Half*, float*, int, int, int, int) { NO_MOE_CPU(); }
 void exl3_moe_cpu_forward(int64_t, const at::Tensor&, const at::Tensor&, const at::Tensor&, at::Tensor&, int64_t) { NO_MOE_CPU(); }
 #endif

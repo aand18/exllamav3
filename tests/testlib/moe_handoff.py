@@ -13,6 +13,13 @@ Slot sections are torch views (x fp16 [cap_rows, max_hi], sel int32 [cap_rows, m
 [cap_rows, max_ho]); flags are words at a 64-byte stride, u32 compared cyclically on CUDA and u64 on ROCm (whose
 stream wait has no cyclic compare; FLAG_BITS), and job descriptors carry the sequence number as two u32 halves (seq,
 seq_hi). `register()` pins and maps the segment for GPU flag ops / copies and returns the device alias of its base.
+
+Per-expert partial completion (`partial = True`, e_cpu = worker-local expert count) adds the compact slice sections
+(out becomes cap_rows*max_topk rows, then rowidx int32 and segtab int32 [e_cpu, 2]) and splits the submission in two
+steps a test can order like the real path: `push_experts(seq, layer, rows, topk, slot)` reserves the rows*topk
+positions with the parent's fixed fields and returns the first ring index; `announce(tail, rows, topk, slot, e_cpu)`
+stands in for the GPU announce kernel, filling experts[0]/prev_seq from the slot's sel. Completion is published per
+job in the EXPERT_DONE bank, indexed by ring position.
 """
 
 import threading
@@ -22,23 +29,27 @@ from multiprocessing import shared_memory
 import numpy as np
 import torch
 
-MOE_JOB_RING = 256
+MOE_JOB_RING = 2048
 MOE_MAX_SLOTS = 8
 MOE_MAX_WSLOTS = 8
 MOE_JOB_MAX_EXPERTS = 256
 MOE_JOB_BYTES = 4 * (7 + MOE_JOB_MAX_EXPERTS + 1)     # sizeof(MoeJob)
 JOB_SEQ_HI = 7 + MOE_JOB_MAX_EXPERTS                   # u32 index of MoeJob.seq_hi
+JOB_EXPERT0 = 7                                        # u32 index of MoeJob.experts[0]
 FLAG_BITS = 64 if torch.version.hip else 32            # MOE_FLAG_BITS
 MOE_CTRL_JOBS_OFFSET = 384
 MOE_SLOT_FLAGS_OFFSET = MOE_CTRL_JOBS_OFFSET + MOE_JOB_RING * MOE_JOB_BYTES
-MOE_FLAGS_SIZE = 3 * 64 * MOE_MAX_SLOTS + 2 * 64 * MOE_MAX_WSLOTS
+MOE_FLAGS_SIZE = 3 * 64 * MOE_MAX_SLOTS + 64 * MOE_JOB_RING + 2 * 64 * MOE_MAX_WSLOTS
+MOE_EXPERT_DONE_OFFSET = MOE_SLOT_FLAGS_OFFSET + 3 * 64 * MOE_MAX_SLOTS
+MOE_STAGE_FLAGS_OFFSET = MOE_EXPERT_DONE_OFFSET + 64 * MOE_JOB_RING
 MOE_STAGE_RING = 64
 MOE_STAGE_TAIL_OFFSET = MOE_SLOT_FLAGS_OFFSET + MOE_FLAGS_SIZE
 MOE_STAGE_HEAD_OFFSET = MOE_STAGE_TAIL_OFFSET + 64
 MOE_STAGE_JOBS_OFFSET = MOE_STAGE_TAIL_OFFSET + 128
 MOE_CTRL_SIZE = MOE_STAGE_JOBS_OFFSET + MOE_STAGE_RING * MOE_JOB_BYTES
 
-KIND_COMPUTE, KIND_STAGE, KIND_COMPUTE_GATED = 0, 1, 2
+KIND_COMPUTE, KIND_STAGE, KIND_COMPUTE_GATED, KIND_COMPUTE_EXPERT = 0, 1, 2, 3
+EXPERT_SKIP = 0xFFFFFFFF
 
 # Control words (byte offsets)
 QUIT, PASS_WAKE, ABORT, READY, JOBS_TAIL, JOBS_HEAD = 0, 64, 128, 192, 256, 320
@@ -46,7 +57,8 @@ QUIT, PASS_WAKE, ABORT, READY, JOBS_TAIL, JOBS_HEAD = 0, 64, 128, 192, 256, 320
 DATA_READY = MOE_SLOT_FLAGS_OFFSET
 DONE = DATA_READY + 64 * MOE_MAX_SLOTS
 CONSUMED = DONE + 64 * MOE_MAX_SLOTS
-STAGE_DONE = CONSUMED + 64 * MOE_MAX_SLOTS
+EXPERT_DONE = CONSUMED + 64 * MOE_MAX_SLOTS
+STAGE_DONE = EXPERT_DONE + 64 * MOE_JOB_RING
 PINNED_FREE = STAGE_DONE + 64 * MOE_MAX_WSLOTS
 
 
@@ -57,14 +69,21 @@ def align64(x: int) -> int:
 class Segment:
 
     def __init__(self, num_slots, cap_rows, max_hi, max_ho, max_topk, num_wslots = 0, wslot_size = 0,
-                 sentinel = 0x7B):
+                 sentinel = 0x7B, partial = False, e_cpu = 0):
         self.num_slots, self.cap_rows = num_slots, cap_rows
         self.max_hi, self.max_ho, self.max_topk = max_hi, max_ho, max_topk
+        self.partial, self.e_cpu = partial, e_cpu
         self.off_x = 0
         self.off_sel = align64(cap_rows * max_hi * 2)
         self.off_w = align64(self.off_sel + cap_rows * max_topk * 4)
         self.off_out = align64(self.off_w + cap_rows * max_topk * 2)
-        self.slot_size = align64(self.off_out + cap_rows * max_ho * 4)
+        # Per-expert partial completion: one compact slice row per (token, expert) assignment, the
+        # slice's token row, and the per-expert (offset, count) table (see cpu/moe_handoff.h)
+        self.out_rows = cap_rows * max_topk if partial else cap_rows
+        self.off_rowidx = align64(self.off_out + self.out_rows * max_ho * 4)
+        self.off_segtab = align64(self.off_rowidx + self.out_rows * 4)
+        self.slot_size = align64(self.off_segtab + 2 * e_cpu * 4) if partial \
+            else align64(self.off_out + self.out_rows * max_ho * 4)
         self.wstage_off = MOE_CTRL_SIZE + num_slots * self.slot_size
         self.num_wslots, self.wslot_size = num_wslots, wslot_size
         self.size = self.wstage_off + num_wslots * wslot_size
@@ -104,10 +123,14 @@ class Segment:
             x = (self.off_x, self.cap_rows * self.max_hi, torch.half, self.max_hi),
             sel = (self.off_sel, self.cap_rows * self.max_topk, torch.int32, self.max_topk),
             w = (self.off_w, self.cap_rows * self.max_topk, torch.half, self.max_topk),
-            out = (self.off_out, self.cap_rows * self.max_ho, torch.float, self.max_ho),
+            out = (self.off_out, self.out_rows * self.max_ho, torch.float, self.max_ho),
+            rowidx = (self.off_rowidx, self.out_rows, torch.int32, 1),
+            segtab = (self.off_segtab, 2 * self.e_cpu, torch.int32, 2),
         )[name]
+        rows = self.cap_rows if name in ("x", "sel", "w") else \
+               (self.e_cpu if name == "segtab" else self.out_rows)
         return torch.frombuffer(self.shm.buf, dtype = dtype, count = count,
-                                offset = MOE_CTRL_SIZE + slot * self.slot_size + off).view(self.cap_rows, cols)
+                                offset = MOE_CTRL_SIZE + slot * self.slot_size + off).view(rows, cols)
 
     def slot_bytes(self, slot: int) -> np.ndarray:
         b = MOE_CTRL_SIZE + slot * self.slot_size
@@ -140,6 +163,49 @@ class Segment:
                         prev_seq, experts)
         self.set_word(MOE_STAGE_TAIL_OFFSET, tail + 1)
 
+    # Per-expert jobs (EXL3_MOE_PARTIAL_COMPLETION)
+
+    def push_experts(self, seq, layer, rows, topk, slot):
+        """Reserve rows*topk ring positions the way the parent does for a partial layer: all the
+        fixed descriptor fields, then jobs_tail. Returns the first ring index; the per-expert
+        fields are left to announce(), which stands in for the fused issue kernel's GPU step"""
+        tail = self.word(JOBS_TAIL)
+        cap = rows * topk
+        assert tail - self.word(JOBS_HEAD) + cap <= MOE_JOB_RING
+        for i in range(cap):
+            self._write_job(MOE_CTRL_JOBS_OFFSET, (tail + i) % MOE_JOB_RING,
+                            seq, layer, rows, topk, slot, KIND_COMPUTE_EXPERT)
+        self.set_word(JOBS_TAIL, tail + cap)
+        return tail
+
+    def announce(self, tail, rows, topk, slot, e_cpu):
+        """Python stand-in for moe_split_announce_kernel: fill experts[0] of the reserved positions
+        with the distinct worker-local experts in ascending order and prev_seq with their slice
+        offsets (exclusive prefix sum of the counts), MOE_EXPERT_SKIP for the surplus. Returns the
+        counts per expert, i.e. the segtab the worker will publish"""
+        sel = self.section(slot, "sel")[:rows].reshape(-1).tolist()
+        counts = [0] * e_cpu
+        for e in sel:
+            if 0 <= e < e_cpu:
+                counts[e] += 1
+        cap = rows * topk
+        pos, off = 0, 0
+        for e in range(e_cpu):
+            if not counts[e]:
+                continue
+            j = np.ndarray((MOE_JOB_BYTES // 4,), dtype = np.uint32, buffer = self.shm.buf,
+                           offset = MOE_CTRL_JOBS_OFFSET + ((tail + pos) % MOE_JOB_RING) * MOE_JOB_BYTES)
+            j[JOB_EXPERT0] = e
+            j[6] = off                       # prev_seq: this expert's slice offset
+            off += counts[e]
+            pos += 1
+        for i in range(pos, cap):
+            j = np.ndarray((MOE_JOB_BYTES // 4,), dtype = np.uint32, buffer = self.shm.buf,
+                           offset = MOE_CTRL_JOBS_OFFSET + ((tail + i) % MOE_JOB_RING) * MOE_JOB_BYTES)
+            j[JOB_EXPERT0] = EXPERT_SKIP
+            j[6] = 0
+        return counts
+
     def wait(self, bank, idx, seq, timeout = 30.0):
         """Poll a flag until it reaches seq (>= on 64-bit flags, cyclic >= on 32-bit ones), as the GPU wait does"""
         deadline = time.monotonic() + timeout
@@ -160,7 +226,7 @@ class Segment:
             try:
                 ext.exl3_moe_cpu_worker_run(self.base, self.num_slots, self.slot_size, self.cap_rows, self.max_hi,
                                             self.max_ho, self.max_topk, self.wstage_off, self.num_wslots,
-                                            self.wslot_size, threads, stage_threads)
+                                            self.wslot_size, threads, stage_threads, 1 if self.partial else 0)
             except Exception as e:
                 self.error.append(e)
 

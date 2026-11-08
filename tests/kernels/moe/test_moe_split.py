@@ -18,6 +18,13 @@ moe_split_collect_add(final, h_out, dev_count, slot, ho): if dev_count[slot] != 
 h_out (rows, ho)[:, :h_]; otherwise nothing, and h_out is never read. Rejects non-fp32 or non-contiguous final
 and a non-int32 dev_count.
 
+moe_split_collect_add_expert(final, h_out, h_rowidx, h_segtab, h_expert, ho, n_cap): the per-expert partial-
+completion fold (T57, EXL3_MOE_PARTIAL_COMPLETION). The expert id comes from the descriptor word at h_expert
+(MOE_EXPERT_SKIP marks a reserved position with no job: nothing is read), its slice offset and row count from
+h_segtab[expert] (worker-written), and slice row r covers token h_rowidx[off + r]. One block per token row t sums,
+in ascending slice order, the rows whose token is t, then adds that into final[t] once; columns past h_ are ignored.
+Rejects non-fp32 or non-contiguous final, and a rowidx window past the shared-memory budget.
+
 References: plain torch indexing / bincount, exact (integer data, copies and single fp32 additions).
 """
 
@@ -291,3 +298,114 @@ def test_moe_split_collect_add_empty(device, rows, h_):
     ext.moe_split_collect_add(final, 0, torch.ones(1, dtype = torch.int32, device = device), 0, 64)
     torch.cuda.synchronize(device)
     assert (torch.ones(4, device = device) + 1).sum().item() == 8.0, "a later torch op failed after the empty call"
+
+
+class _ExpertSlot:
+    """The per-expert slot sections a partial job owns (out slice rows, their token rows, the per-expert
+    (offset, count) table) plus the descriptor's experts[0] word, in device memory or pinned host memory passed
+    by its device alias, as the fold kernel reads it"""
+
+    def __init__(self, n_cap, ho, e_cpu, pinned, device):
+        kw = dict(pin_memory = True) if pinned else dict(device = device)
+        self.out = torch.zeros((n_cap, ho), dtype = torch.float, **kw)
+        self.rowidx = torch.full((n_cap,), -1, dtype = torch.int32, **kw)
+        self.segtab = torch.zeros((e_cpu, 2), dtype = torch.int32, **kw)
+        self.expert = torch.zeros((1,), dtype = torch.int32, **kw)
+        self.pinned = pinned
+
+    def ptr(self, t):
+        return ext.cuda_host_get_device_pointer(t.data_ptr()) if self.pinned else t.data_ptr()
+
+    def fold(self, final, ho, n_cap):
+        ext.moe_split_collect_add_expert(final, self.ptr(self.out), self.ptr(self.rowidx), self.ptr(self.segtab),
+                                         self.ptr(self.expert), ho, n_cap)
+
+
+def _expert_case(rows, g, e_cpu = 4, topk = 8):
+    """A (token, topk) selection over 8 experts, one expert of which is picked twice by the same token: returns the
+    slice of each CPU-resident expert (its token rows, in sel scan order) and its prefix offset in the out region"""
+    sel = torch.randint(0, 8, (rows, topk), generator = g)
+    sel[0, 0] = sel[0, 1] = 0               # a duplicate pick of one expert by one token: two slice rows, one rowidx
+    slices = {e: [t for t in range(rows) for j in range(topk) if int(sel[t, j]) == e] for e in range(e_cpu)}
+    off, offsets = 0, {}
+    for e in sorted(slices):
+        offsets[e] = off
+        off += len(slices[e])
+    return slices, offsets, off
+
+
+@pytest.mark.parametrize("pinned", [False, True])
+@pytest.mark.parametrize("rows, h_, ho", [(4, 256, 256), (5, 100, 128), (6, 64, 64), (2, 32, 96)])
+@torch.inference_mode()
+def test_moe_split_collect_add_expert(device, rows, h_, ho, pinned):
+    g = torch.Generator().manual_seed(rows * 31 + h_ + ho)
+    e_cpu = 4
+    n_cap = rows * 8
+    slices, offsets, total = _expert_case(rows, g, e_cpu)
+    assert total <= n_cap
+    final = torch.randn((rows, h_), generator = g).to(device)
+    final0 = final.clone()
+    slot = _ExpertSlot(n_cap, ho, e_cpu, pinned, device)
+    part = torch.randn((n_cap, ho), generator = g)
+    slot.out.copy_(part.to(slot.out.device))
+    # Slices are disjoint compact segments, written before the folds start (the worker publishes each one
+    # behind its own completion flag; a test can hand them all over at once, the kernel reads only its own)
+    for e, toks in slices.items():
+        for r, t in enumerate(toks):
+            slot.rowidx[offsets[e] + r] = t
+        slot.segtab[e] = torch.tensor([offsets[e], len(toks)], device = slot.segtab.device, dtype = torch.int32)
+    # Folds in expert-ascending order, as the parent enqueues them
+    for e in sorted(slices):
+        slot.expert[0] = e
+        slot.fold(final, ho, n_cap)
+        # The kernel reads the descriptor word asynchronously: synchronize before the next
+        # expert overwrites it. The real path never rewrites a ring position while pending.
+        torch.cuda.synchronize(device)
+    # Per token, its slice rows in ascending order (one block owns a token row, so the order is fixed), added to
+    # the routed sum once -- the closed form the kernel's `acc` must reproduce
+    acc = torch.zeros((rows, h_))
+    for e in sorted(slices):
+        for r, t in enumerate(slices[e]):
+            acc[t] += part[offsets[e] + r, :h_]
+    assert torch.allclose(final, final0 + acc.to(device), rtol = 1e-5, atol = 1e-5)
+    # Rows no expert covered are untouched
+    covered = torch.zeros(rows, dtype = torch.bool)
+    for e in sorted(slices):
+        covered[[t for t in slices[e]]] = True
+    assert torch.equal(final[~covered], final0[~covered])
+
+
+@pytest.mark.parametrize("pinned", [False, True])
+@torch.inference_mode()
+def test_moe_split_collect_add_expert_skips(device, pinned):
+    """A reserved ring position with no expert behind it, and an empty slice, both fold nothing (and read nothing:
+    the out region is left at a sentinel that would change the sum if it were read)"""
+    rows, h_, ho, e_cpu = 3, 64, 64, 2
+    slot = _ExpertSlot(rows * 8, ho, e_cpu, pinned, device)
+    slot.out.fill_(7.0)
+    slot.rowidx.fill_(0)
+    slot.segtab.fill_(0)
+    final = torch.zeros((rows, h_), device = device)
+    slot.expert[0] = -1                    # 0xFFFFFFFF: MOE_EXPERT_SKIP
+    slot.fold(final, ho, rows * 8)
+    torch.cuda.synchronize(device)
+    assert not final.any(), "a skip position folded its slice"
+    slot.expert[0] = 1                     # a real position whose expert had no picks: count 0
+    slot.fold(final, ho, rows * 8)
+    torch.cuda.synchronize(device)
+    assert not final.any(), "an empty slice folded its stale rows"
+
+
+@torch.inference_mode()
+def test_moe_split_collect_add_expert_rejections(device):
+    final = torch.zeros((2, 64), device = device)
+    slot = _ExpertSlot(4, 64, 2, False, device)
+    with pytest.raises(RuntimeError):
+        ext.moe_split_collect_add_expert(final.half(), slot.ptr(slot.out), slot.ptr(slot.rowidx),
+                                         slot.ptr(slot.segtab), slot.ptr(slot.expert), 64, 4)
+    with pytest.raises(RuntimeError, match = "contiguous"):
+        ext.moe_split_collect_add_expert(torch.zeros((64, 2), device = device).t(), slot.ptr(slot.out),
+                                         slot.ptr(slot.rowidx), slot.ptr(slot.segtab), slot.ptr(slot.expert), 64, 4)
+    with pytest.raises(RuntimeError, match = "shared-memory"):
+        ext.moe_split_collect_add_expert(final, slot.ptr(slot.out), slot.ptr(slot.rowidx),
+                                         slot.ptr(slot.segtab), slot.ptr(slot.expert), 64, 20000)

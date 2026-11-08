@@ -42,20 +42,30 @@ rollback retry) returns the existing layer index without reloading.
 Shared-memory layout constants mirror cpu/moe_handoff.h.
 """
 
-MOE_JOB_RING = 256
+MOE_JOB_RING = 2048
 MOE_MAX_SLOTS = 8
 MOE_JOB_MAX_EXPERTS = 256   # structural capacity of MoeJob.experts[]; see cpu/moe_handoff.h
 # sizeof(MoeJob): 7 uint32 fields + experts[MOE_JOB_MAX_EXPERTS] + seq_hi, all 4-byte
 # fields so no compiler padding -- recompute this if the struct's fixed fields ever change
 MOE_JOB_BYTES = (7 + MOE_JOB_MAX_EXPERTS + 1) * 4
 MOE_JOB_SEQ_HI = 7 + MOE_JOB_MAX_EXPERTS   # u32 index of MoeJob.seq_hi
+MOE_JOB_EXPERTS0 = 7                       # u32 index of MoeJob.experts[0] (per-expert jobs)
+# Per-expert partial completion (EXL3_MOE_PARTIAL_COMPLETION, see cpu/moe_handoff.h): one job per
+# distinct CPU-routed expert, kind 3, with the expert id announced by the GPU; a reserved position
+# with no expert behind it carries MOE_EXPERT_SKIP
+MOE_JOB_KIND_COMPUTE_EXPERT = 3
+MOE_EXPERT_SKIP = 0xFFFFFFFF
 # Flag width (MOE_FLAG_BITS in cpu/moe_handoff.h): ROCm's stream wait has no cyclic compare, so its
 # flags are 64-bit and never wrap; CUDA's are 32-bit and compared cyclically
 MOE_FLAG_BITS = 64 if torch.version.hip else 32
 MOE_CTRL_JOBS_OFFSET = 384
 MOE_SLOT_FLAGS_OFFSET = MOE_CTRL_JOBS_OFFSET + MOE_JOB_RING * MOE_JOB_BYTES
 MOE_MAX_WSLOTS = 8
-MOE_FLAGS_SIZE = 3 * 64 * MOE_MAX_SLOTS + 2 * 64 * MOE_MAX_WSLOTS
+# Flag regions, in order: data_ready[slots], done[slots], consumed[slots], expert_done[ring],
+# stage_done[wslots], pinned_free[wslots], each entry 64-byte strided
+MOE_FLAGS_SIZE = 3 * 64 * MOE_MAX_SLOTS + 64 * MOE_JOB_RING + 2 * 64 * MOE_MAX_WSLOTS
+MOE_EXPERT_DONE_OFFSET = MOE_SLOT_FLAGS_OFFSET + 3 * 64 * MOE_MAX_SLOTS
+MOE_STAGE_FLAGS_OFFSET = MOE_EXPERT_DONE_OFFSET + 64 * MOE_JOB_RING
 MOE_STAGE_RING = 64
 MOE_STAGE_TAIL_OFFSET = MOE_SLOT_FLAGS_OFFSET + MOE_FLAGS_SIZE
 MOE_STAGE_HEAD_OFFSET = MOE_STAGE_TAIL_OFFSET + 64
@@ -194,6 +204,12 @@ class MoeCpuTuning:
         self.stream_debug = bool(os.environ.get("EXL3_MOE_STREAM_DEBUG"))
         self.cpu_prof = bool(os.environ.get("EXL3_MOE_CPU_PROF"))
         self.memops = os.environ.get("EXL3_MOE_MEMOPS", "1") != "0"
+        # Per-expert partial completion (T57): decode fused submissions hand the worker ONE job per
+        # distinct CPU-routed expert and fold each expert's slice as it lands, instead of one job
+        # per layer. Default off: the whole-layer path stays the production one until the
+        # pre-registered ABBA measurement in wiki/plans/2026-11-08-partial-completion-spec.md §8
+        # says the finer makespan pays for the per-job overhead
+        self.partial_completion = os.environ.get("EXL3_MOE_PARTIAL_COMPLETION", "0") != "0"
 
 
 TUNING = MoeCpuTuning()
@@ -892,7 +908,7 @@ def _moe_cpu_child_main(conn, model_dir, threads, stage_threads, pinned = False,
                 layout["num_slots"], layout["slot_size"], layout["cap_rows"],
                 layout["max_hi"], layout["max_ho"], layout["max_topk"],
                 layout["wstage_off"], layout["num_wslots"], layout["wslot_size"],
-                threads, stage_threads,
+                threads, stage_threads, layout.get("partial", 0),
             ),
             daemon = True,
         )
@@ -1039,6 +1055,11 @@ class MoeCpuHost:
         # stream of its own and two expert-sized staging buffers (packed and native order)
         self._promo = {}
         self.batch_recon = TUNING.stream_batch_recon
+        # Per-expert partial completion (EXL3_MOE_PARTIAL_COMPLETION, T57): decode fused
+        # submissions become one job per CPU-routed expert; see submit_issue_fused
+        self.partial_completion = TUNING.partial_completion
+        self.max_experts = 0        # worker-local expert count, set in ensure_started
+        self.partial_cap = 0        # slice rows per slot when partial_completion is on
 
     def _spawn(self):
         if self.proc is not None:
@@ -1268,10 +1289,26 @@ class MoeCpuHost:
         off_sel = _align64(off_x + self.cap_rows * max_hi * 2)
         off_w = _align64(off_sel + self.cap_rows * max_topk * 4)
         off_out = _align64(off_w + self.cap_rows * max_topk * 2)
-        slot_size = _align64(off_out + self.cap_rows * max_ho * 4)
+        # Per-expert partial completion needs one compact slice row per (token, expert)
+        # assignment, plus the slice's token row and the per-expert (offset, count) table. Both
+        # mirrors derive them from the same flag: cpu/moe_handoff.h and moe_handoff.cu's worker
+        self.max_experts = max(s["num_experts"] for s in self.specs)
+        out_rows = self.cap_rows * max_topk if self.partial_completion else self.cap_rows
+        self.partial_cap = out_rows
+        off_rowidx = _align64(off_out + out_rows * max_ho * 4)
+        off_segtab = _align64(off_rowidx + out_rows * 4)
+        slot_size = _align64(off_segtab + 2 * self.max_experts * 4) if self.partial_completion \
+            else _align64(off_out + out_rows * max_ho * 4)
+        if self.partial_completion:
+            # A layer reserves rows*topk <= cap_rows*topk ring positions in one go; the ring must
+            # hold them plus the pipeline margin the throttle in submit_issue_fused leaves
+            assert out_rows + 4 <= MOE_JOB_RING, \
+                f"per-expert partial completion needs {out_rows} ring positions, " \
+                f"MOE_JOB_RING is {MOE_JOB_RING}"
         self.layout = dict(
             num_slots = self.num_slots, slot_size = slot_size, cap_rows = self.cap_rows,
             max_hi = max_hi, max_ho = max_ho, max_topk = max_topk,
+            partial = 1 if self.partial_completion else 0,
         )
 
         self.layout["wstage_off"] = MOE_CTRL_SIZE + self.num_slots * slot_size
@@ -1314,11 +1351,16 @@ class MoeCpuHost:
                 x = view(off_x, self.cap_rows * max_hi, torch.half).view(self.cap_rows, max_hi),
                 sel = view(off_sel, self.cap_rows * max_topk, torch.int32).view(self.cap_rows, max_topk),
                 w = view(off_w, self.cap_rows * max_topk, torch.half).view(self.cap_rows, max_topk),
-                out = view(off_out, self.cap_rows * max_ho, torch.float).view(self.cap_rows, max_ho),
+                out = view(off_out, out_rows * max_ho, torch.float).view(out_rows, max_ho),
                 x_dev = gpu_data + off_x,
                 sel_dev = gpu_data + off_sel,
                 w_dev = gpu_data + off_w,
                 out_dev = gpu_data + off_out,
+                # Per-expert partial completion only: the job's slice token rows and the
+                # (offset, count) table, device-visible aliases for the fold kernel's zero-copy
+                # reads of the worker's writes
+                rowidx_dev = gpu_data + off_rowidx if self.partial_completion else None,
+                segtab_dev = gpu_data + off_segtab if self.partial_completion else None,
                 data_ready = self.gpu_base_ptr + MOE_SLOT_FLAGS_OFFSET + s * 64,
                 done = self.gpu_base_ptr + MOE_SLOT_FLAGS_OFFSET + 64 * MOE_MAX_SLOTS + s * 64,
                 consumed = self.gpu_base_ptr + MOE_SLOT_FLAGS_OFFSET + 2 * 64 * MOE_MAX_SLOTS + s * 64,
@@ -1332,9 +1374,9 @@ class MoeCpuHost:
             self.wviews.append(torch.frombuffer(
                 self.shm.buf, dtype = torch.int16, count = self.wslot_size // 2,
                 offset = self.layout["wstage_off"] + s * self.wslot_size))
-        # Wslot flag banks sit after data_ready/done/consumed (keep in sync with
+        # Wslot flag banks sit after data_ready/done/consumed/expert_done (keep in sync with
         # moe_handoff.h's layout comment and the watchdog unblock above)
-        fl = self.gpu_base_ptr + MOE_SLOT_FLAGS_OFFSET + 3 * 64 * MOE_MAX_SLOTS
+        fl = self.gpu_base_ptr + MOE_STAGE_FLAGS_OFFSET
         self.stage_done_addr = [fl + s * 64 for s in range(MOE_MAX_WSLOTS)]
         self.pinned_free_addr = [fl + 64 * MOE_MAX_WSLOTS + s * 64 for s in range(MOE_MAX_WSLOTS)]
         self.v_stage_tail = u32[MOE_STAGE_TAIL_OFFSET // 4 : MOE_STAGE_TAIL_OFFSET // 4 + 1]
@@ -1393,10 +1435,15 @@ class MoeCpuHost:
                         for s in range(MOE_MAX_SLOTS):
                             _write_flag(u32, done0 + s * 64, seq)
                             _write_flag(u32, cons0 + s * 64, seq)
-                        fl = MOE_SLOT_FLAGS_OFFSET + 3 * 64 * MOE_MAX_SLOTS
+                        fl = MOE_STAGE_FLAGS_OFFSET
                         for s in range(MOE_MAX_WSLOTS):
                             _write_flag(u32, fl + s * 64, wseq)                         # stage_done
                             _write_flag(u32, fl + 64 * MOE_MAX_WSLOTS + s * 64, wseq)   # pinned_free
+                        # Per-expert completion flags are ring-indexed: a dead worker can leave
+                        # any of them pending, and a partial layer's fold waits on every position
+                        # of its reservation before it enqueues the next fold
+                        for i in range(MOE_JOB_RING):
+                            _write_flag(u32, MOE_EXPERT_DONE_OFFSET + i * 64, seq)
                         self.v_abort[0] = 1
                     except Exception:
                         pass
@@ -1502,14 +1549,44 @@ class MoeCpuHost:
         self.seq += 1
         seq = self.seq
         slot = self.slots[slot_idx]
+        last_seq = self.slot_last_seq[slot_idx]
         # One extension call: the job descriptor into the shared ring, the slot's consumed wait,
         # the issue kernel and the data_ready flag, all on the stream of y's device. It declines
         # (touching nothing) only when the job ring is near overflow, which a long prefill can
         # reach; then throttle on the worker's progress and retry
-        args = (self.base_ptr, seq, layer_idx, rows, spec["topk"], slot_idx, self.slot_last_seq[slot_idx],
+        extra = (0, 0, 0, 0)
+        if self.partial_completion:
+            # One job per distinct CPU-routed expert (T57). The parent reserves the whole
+            # reservation itself -- rows*topk consecutive positions with the fixed descriptor
+            # fields, then jobs_tail -- so it knows every job's completion flag position without
+            # a sync, while the expert id and the slice offset stay GPU-side knowledge: the
+            # announce step of the fused issue kernel fills experts[0]/prev_seq from sel after
+            # the staging kernel and before data_ready, so the worker reads them only after its
+            # data_ready wait. Surplus positions carry MOE_EXPERT_SKIP and are acknowledged by the
+            # worker without compute, keeping the reservation a fixed-size pair count
+            cap = rows * spec["topk"]
+            tail = int(self.v_jobs_tail[0])
+            import time
+            while tail - int(self.v_jobs_head[0]) >= MOE_JOB_RING - 4 - (cap - 1):
+                if self.v_abort[0] or not self.proc.is_alive():
+                    raise RuntimeError("CPU MoE worker failed (ring stall)")
+                time.sleep(0.0002)
+                tail = int(self.v_jobs_tail[0])
+            for i in range(cap):
+                job = self.v_jobs[(tail + i) % MOE_JOB_RING]
+                _set_job_seq(job, seq)
+                job[1] = layer_idx
+                job[2] = rows
+                job[3] = spec["topk"]
+                job[4] = slot_idx
+                job[5] = MOE_JOB_KIND_COMPUTE_EXPERT
+                job[6] = 0                      # prev_seq: the announce writes the slice offset
+            self.v_jobs_tail[0] = tail + cap
+            extra = (1, tail, cap, self.max_experts)
+        args = (self.base_ptr, seq, layer_idx, rows, spec["topk"], slot_idx, last_seq,
                 selected_experts.view(-1), split_map, split_hist, y, routing_weights,
                 slot["sel_dev"], slot["x_dev"], slot["w_dev"], counts, spec["hi"], first_cpu,
-                slot["data_ready"], slot["consumed"], self.gpu_base_ptr + 128)
+                slot["data_ready"], slot["consumed"], self.gpu_base_ptr + 128) + extra
         if not ext.exl3_moe_split_issue_fused(*args):
             import time
             while int(self.v_jobs_tail[0]) - int(self.v_jobs_head[0]) >= MOE_JOB_RING - 4:
@@ -1518,17 +1595,52 @@ class MoeCpuHost:
                 time.sleep(0.0002)
             ext.exl3_moe_split_issue_fused(*args)
         self.slot_last_seq[slot_idx] = seq
+        if self.partial_completion:
+            return ("partial", seq, slot_idx, rows, h_, spec["ho"], dev, tail, cap)
         return (seq, slot_idx, rows, h_, spec["ho"], dev, counts)
 
     def submit_collect_fused(self, handle, final_2d):
         """Fold the worker's partial into final_2d (rows, h) in place, straight from the
         pinned slot, or, for a job the issue kernel recorded as empty, do nothing (no
         PCIe reads). Never synchronizes the host."""
+        if handle[0] == "partial":
+            self._collect_partial(handle, final_2d)
+            return
         seq, slot_idx, rows, h_, ho, dev, counts = handle
         slot = self.slots[slot_idx]
         ext.exl3_moe_split_collect_fused(
             final_2d, slot["out_dev"], counts, slot_idx, ho,
             slot["done"], seq, slot["consumed"], self.gpu_base_ptr + 128)
+
+    def _collect_partial(self, handle, final_2d):
+        """
+        Per-expert completion (T57): for each reserved ring position, in submission order (which
+        is the announce's expert-ascending order), wait for that job's expert_done flag and fold
+        its slice into final_2d -- then ONE consumed write for the slot, after the last fold, as
+        in the whole-layer path (slot reuse must wait for every fold, and the next tenant's issue
+        runs on a possibly different device's stream).
+
+        Every wait/fold lands on the caller's stream, so the folds execute in the order they were
+        enqueued regardless of which expert finishes first, and the sum's order is fixed. The
+        waits are memops with no timeout (moe_handoff.cu), so a dead worker is unblocked by the
+        watchdog, which satisfies the whole expert_done bank before setting abort.
+        """
+        _, seq, slot_idx, rows, h_, ho, dev, tail, cap = handle
+        with torch.cuda.device(dev):
+            slot = self.slots[slot_idx]
+            abort = self.gpu_base_ptr + 128
+            for i in range(cap):
+                pos = (tail + i) % MOE_JOB_RING
+                ext.exl3_moe_flag_wait(
+                    self.gpu_base_ptr + MOE_EXPERT_DONE_OFFSET + pos * 64, seq, abort)
+                # The descriptor's experts[0] word tells the kernel which expert this position
+                # holds (the GPU decided it); segtab turns that into its slice offset and length
+                ext.moe_split_collect_add_expert(
+                    final_2d, slot["out_dev"], slot["rowidx_dev"], slot["segtab_dev"],
+                    self.gpu_base_ptr + MOE_CTRL_JOBS_OFFSET + pos * MOE_JOB_BYTES
+                        + 4 * MOE_JOB_EXPERTS0,
+                    ho, self.partial_cap)
+            ext.exl3_moe_flag_write(slot["consumed"], seq)
 
     def _issue_compute(self, layer_idx, y, selected_experts, routing_weights, spec, out, h):
         """

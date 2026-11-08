@@ -1,6 +1,7 @@
 #include <cuda_fp16.h>
 #include "routing.cuh"
 #include "det_gemm.cuh"
+#include "cpu/moe_handoff.h"     // MOE_EXPERT_SKIP: the per-expert collect's skip marker
 #include <c10/cuda/CUDAGuard.h>
 #include <ATen/cuda/CUDAContext.h>
 #include "util.h"
@@ -1341,6 +1342,106 @@ void moe_split_collect_add
         reinterpret_cast<const float*>(h_out_ptr),
         (const int32_t*) dev_count.data_ptr(),
         total, h_, (int) ho, (int) slot_idx
+    );
+    cuda_check(cudaPeekAtLastError());
+}
+
+// Per-expert collect (EXL3_MOE_PARTIAL_COMPLETION): fold one expert job's compact slice into the
+// routed sum, straight from the pinned slot -- no H2D copy, no host sync. Slice row r of the job
+// lives at out/rowidx index off + r, where off is the job's slice offset and n its row count, both
+// published by the worker in segtab[2 * expert]; the expert id itself is read from the job
+// descriptor's experts[0] word, which the announce step filled (MOE_EXPERT_SKIP marks a reserved
+// position that has no job). One block per token row t: it copies the job's rowidx into shared
+// memory (once, instead of one pinned read per token row) and sums the slice rows that belong to
+// t in ASCENDING slice order, so the sum is deterministic even when two picks of a token select
+// the same expert. Pinned loads go through volatile: a position's previous tenant's data must
+// never be served from a stale line
+__global__ void moe_split_collect_add_expert_kernel
+(
+    float* __restrict__ final_out,          // (rows, h_) device, contiguous
+    const float* __restrict__ h_out,        // slot out section, (n_cap, ho) of slice rows
+    const int32_t* __restrict__ h_rowidx,   // slot rowidx section, n_cap entries
+    const int32_t* __restrict__ h_segtab,   // slot segtab section, 2 * e_cpu entries
+    const uint32_t* __restrict__ h_expert,  // descriptor experts[0] of this ring position
+    const int h_,
+    const int ho,
+    const int n_cap
+)
+{
+    // The row-index window and its three scalars share the dynamic window: static __shared__
+    // variables would overlap it on some architectures, corrupting the copied row indices.
+    extern __shared__ int32_t s_mem[];
+    int32_t* s_rowidx = s_mem;
+    int* s_off = reinterpret_cast<int*>(s_mem + n_cap);
+    int* s_n = s_off + 1;
+    int* s_skip = s_off + 2;
+
+    // One thread reads the job's three words and broadcasts them: the block either folds the
+    // whole slice or returns, so every thread must see the same answer
+    if (threadIdx.x == 0)
+    {
+        const uint32_t e = *reinterpret_cast<const volatile uint32_t*>(h_expert);
+        const volatile int32_t* vseg = h_segtab;
+        *s_skip = e == MOE_EXPERT_SKIP;
+        *s_off = *s_skip ? 0 : vseg[2 * static_cast<int>(e)];
+        *s_n = *s_skip ? 0 : vseg[2 * static_cast<int>(e) + 1];
+    }
+    __syncthreads();
+    if (*s_skip || *s_n <= 0) return;
+
+    const int off = *s_off;
+    const int n = *s_n;
+    // The layout gives every expert of a layer a slice inside the out region, so n <= n_cap by
+    // construction (the clamp only keeps a mis-sized n_cap from reading past the section)
+    const int m = n < n_cap ? n : n_cap;
+    const int32_t* vri = h_rowidx;
+    for (int i = threadIdx.x; i < m; i += blockDim.x) s_rowidx[i] = vri[off + i];
+    __syncthreads();
+
+    const int t = blockIdx.x;
+    const volatile float* vo = h_out;
+    float* dst = final_out + static_cast<size_t>(t) * h_;
+    for (int c = threadIdx.x; c < h_; c += blockDim.x)
+    {
+        float acc = 0.0f;
+        for (int r = 0; r < m; ++r)
+            if (s_rowidx[r] == t) acc += vo[static_cast<size_t>(off + r) * ho + c];
+        dst[c] += acc;
+    }
+}
+
+void moe_split_collect_add_expert
+(
+    at::Tensor final_out,
+    int64_t h_out_ptr,
+    int64_t h_rowidx_ptr,
+    int64_t h_segtab_ptr,
+    int64_t h_expert_ptr,
+    const int64_t ho,
+    const int64_t n_cap
+)
+{
+    const at::cuda::OptionalCUDAGuard device_guard(final_out.device());
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
+    TORCH_CHECK_DTYPE(final_out, kFloat);
+    TORCH_CHECK(final_out.is_contiguous(), "moe_split_collect_add_expert: output must be contiguous");
+    const int rows = (int) final_out.size(0);
+    const int h_ = (int) final_out.size(1);
+    if (rows == 0 || h_ == 0 || n_cap <= 0) return;
+    // n_cap = cap_rows * topk is bounded by the job ring (see moe_cpu_host.py), so the rowidx
+    // window stays far below the shared-memory limit; the check keeps that a layout invariant
+    const size_t smem = (static_cast<size_t>(n_cap) + 3) * sizeof(int32_t);
+    TORCH_CHECK(smem <= 48 * 1024, "moe_split_collect_add_expert: rowidx window ", smem,
+                " bytes exceeds the shared-memory budget");
+    const int threads = h_ < 512 ? ((h_ + 31) / 32) * 32 : 512;
+    moe_split_collect_add_expert_kernel<<<rows, threads, smem, stream>>>
+    (
+        (float*) final_out.data_ptr(),
+        reinterpret_cast<const float*>(h_out_ptr),
+        reinterpret_cast<const int32_t*>(h_rowidx_ptr),
+        reinterpret_cast<const int32_t*>(h_segtab_ptr),
+        reinterpret_cast<const uint32_t*>(h_expert_ptr),
+        h_, (int) ho, (int) n_cap
     );
     cuda_check(cudaPeekAtLastError());
 }

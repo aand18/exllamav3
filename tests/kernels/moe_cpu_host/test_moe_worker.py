@@ -8,7 +8,7 @@ thread pool and its pinning are process-wide).
 Contracts:
 - The worker sets `ready` on entry and returns (stager joined) once `quit` is set: when idle, while a compute job
   waits for its data_ready flag and while a stage job waits for its pinned_free flag.
-- Compute jobs are taken in ring order (across the 256-entry ring's wraparound); a job runs only after its slot's
+- Compute jobs are taken in ring order (across the MOE_JOB_RING-entry ring's wraparound); a job runs only after its slot's
   data_ready flag reaches the job's seq (cyclic >=), then done[slot] = seq. kind COMPUTE: out[:rows] =
   exl3_moe_cpu_forward(layer, x[:rows], sel[:rows], w[:rows]) of the slot's sections (an all-unselected job
   writes zeros); out rows past `rows` and the input sections are untouched. kind COMPUTE_GATED: the same, except a
@@ -16,6 +16,14 @@ Contracts:
   registration index of exl3_moe_cpu_make_layer in the worker's process. Reference: exl3_moe_cpu_forward on the
   same inputs (bitwise: the forward is deterministic for any thread count; it is itself tested against an fp64
   dense reference in tests/moe_cpu/test_wide_rows.py).
+- kind COMPUTE_EXPERT (EXL3_MOE_PARTIAL_COMPLETION): the parent reserved `rows*topk` ring positions and the GPU
+  announced experts[0] (or MOE_EXPERT_SKIP) and prev_seq (the slice offset) for each, ahead of the data_ready
+  publish. The worker reads both after that wait and, per job, writes the slice's token rows to rowidx[off:off+n],
+  segtab[2*expert] = (off, n), and the expert's output for its n slice rows to out[off:off+n] (each row = weight *
+  the expert's down output, stored, not accumulated); it then publishes EXPERT_DONE at the job's ring position and
+  never done[slot]. A MOE_EXPERT_SKIP position publishes EXPERT_DONE only. Reference: exl3_moe_cpu_forward with sel
+  masked to one expert (bitwise; a row selects a given expert at most once here, so each slice row is that row).
+  Rows past the announced total, and rowidx/segtab entries of experts with no pick, stay untouched.
 - Stage jobs (own ring, own thread) wait until pinned_free[wslot] reaches prev_seq, then copy the listed experts'
   trellis bytes (gate, up, down per expert, gate absent for gateless layers) back to back into the weight slot
   and publish stage_done[wslot] = seq; nothing past the copied bytes is written. They complete while a compute
@@ -34,8 +42,9 @@ import torch
 
 from testlib.exl3 import rand_experts
 from testlib.isolated import device_env, run_isolated
-from testlib.moe_handoff import (ABORT, CONSUMED, DATA_READY, DONE, KIND_COMPUTE, KIND_COMPUTE_GATED, PASS_WAKE,
-                                 PINNED_FREE, QUIT, READY, STAGE_DONE, Segment)
+from testlib.moe_handoff import (ABORT, CONSUMED, DATA_READY, DONE, EXPERT_DONE, JOBS_HEAD, JOBS_TAIL,
+                                 KIND_COMPUTE, KIND_COMPUTE_GATED, MOE_JOB_RING, PASS_WAKE, PINNED_FREE, QUIT,
+                                 READY, STAGE_DONE, Segment)
 
 pytestmark = pytest.mark.cpu_flags("avx2")
 
@@ -185,10 +194,10 @@ def protocol_child() -> dict:
             seg.wait(DONE, slot, seq)
             check(f"pipelined_{slot}", slot, layer, rows, x, sel, w, mode, kind)
 
-        # Ring wraparound (256 entries)
-        for i in range(300):
+        # Ring wraparound (MOE_JOB_RING entries)
+        for i in range(MOE_JOB_RING + 50):
             job(f"ring_{i}", i % 2, 1 + i % 3)
-        R["jobs_head"], R["jobs_tail"] = seg.word(320), seg.word(256)
+        R["jobs_head"], R["jobs_tail"] = seg.word(JOBS_HEAD), seg.word(JOBS_TAIL)
 
         # Stage jobs: blocked on pinned_free, then expert trellis bytes back to back
         h0, ex0, g0 = layers[0]
@@ -263,7 +272,7 @@ def test_data_ready_gating(protocol):
 
 @pytest.mark.nogpu
 def test_ring_wraparound(protocol):
-    assert protocol["jobs_head"] == protocol["jobs_tail"] > 256
+    assert protocol["jobs_head"] == protocol["jobs_tail"] > MOE_JOB_RING
 
 
 @pytest.mark.nogpu
@@ -281,6 +290,161 @@ def test_quit(protocol):
     assert protocol["stopped_waiting"], "worker did not return after quit while jobs were waiting on their flags"
     assert protocol["error"] == [] and protocol["error2"] == []
     assert protocol["abort"] == 0
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Per-expert partial completion (EXL3_MOE_PARTIAL_COMPLETION), protocol-driven
+
+E_CPU = max(spec["E"] for spec in LAYERS)
+
+
+def partial_child() -> dict:
+    """Per-expert jobs the way MoeCpuHost._collect_partial submits them: the parent reserves rows*topk ring
+    positions (push_experts), announce() stands in for the GPU's announce kernel, then data_ready[slot] = seq. The
+    segment starts near MOE_JOB_RING so the jobs cross the wraparound, where EXPERT_DONE is indexed by ring
+    position. Each job is checked against exl3_moe_cpu_forward with sel masked to one expert: a token row picks a
+    given expert at most once here, so every slice row is exactly that row of the masked reference"""
+    torch.set_num_threads(1)
+    layers = make_layers()
+    R = {"handles": [h for h, _, _ in layers]}
+    gen = torch.Generator().manual_seed(4)
+    seg = Segment(NUM_SLOTS, CAP_ROWS, H, H, TOPK, sentinel = SENTINEL, partial = True, e_cpu = E_CPU)
+    start = MOE_JOB_RING - 12
+    seg.set_word(JOBS_HEAD, start)
+    seg.set_word(JOBS_TAIL, start)
+    state = dict(seq = 0, slot = 0)
+    mismatches = []
+
+    def stage_inputs(slot, layer, rows):
+        x, sel, w = job_inputs(gen, layer, rows)
+        seg.section(slot, "x")[:rows] = x
+        seg.section(slot, "sel")[:rows] = sel
+        seg.section(slot, "w")[:rows] = w
+        seg.section(slot, "out").view(torch.uint8)[:] = SENTINEL
+        seg.section(slot, "rowidx").view(torch.uint8)[:] = SENTINEL
+        seg.section(slot, "segtab").view(torch.uint8)[:] = SENTINEL
+        return x, sel, w
+
+    def check(name, slot, layer, rows, x, sel, w, tail, counts):
+        handle = layers[layer][0]
+        out = seg.section(slot, "out")
+        rowidx = seg.section(slot, "rowidx")[:, 0].tolist()
+        segtab = seg.section(slot, "segtab").tolist()
+        flat = sel.reshape(-1).tolist()
+        got = torch.zeros(rows, H, dtype = torch.float)
+        off = 0
+        for e in range(E_CPU):
+            want_rows = [i // TOPK for i in range(rows * TOPK) if flat[i] == e]
+            if want_rows:
+                if segtab[e] != [off, len(want_rows)]:
+                    mismatches.append(f"{name}: segtab[{e}] = {segtab[e]}, want {[off, len(want_rows)]}")
+            elif segtab[e] != [0x7B7B7B7B, 0x7B7B7B7B]:
+                mismatches.append(f"{name}: segtab[{e}] = {segtab[e]}, want sentinel for no pick")
+            if rowidx[off : off + len(want_rows)] != want_rows:
+                mismatches.append(f"{name}: rowidx[{off}:] = {rowidx[off : off + len(want_rows)]}, "
+                                  f"want {want_rows}")
+            sel_e = sel.clone()
+            sel_e[sel_e != e] = -1
+            ref = forward_ref(handle, x, sel_e, w)
+            for r, t in enumerate(want_rows):
+                if off + r >= out.shape[0]:
+                    mismatches.append(f"{name}: total {rows * TOPK} exceeds the slot's {out.shape[0]} rows")
+                    return
+                got[t] += out[off + r]
+                if not torch.equal(out[off + r].view(torch.int32), ref[t].view(torch.int32)):
+                    mismatches.append(f"{name}: slice row {off + r} (token {t}, expert {e})")
+            off += len(want_rows)
+        dense = forward_ref(handle, x, sel, w)
+        if off != sum(counts):
+            mismatches.append(f"{name}: {off} slice rows, announce counts sum to {sum(counts)}")
+        # Per-expert rows are exact; the dense comparison only sums fp32 terms in a different order
+        if not torch.allclose(got, dense, rtol = 1e-6, atol = 1e-6):
+            mismatches.append(f"{name}: slice rows do not sum to the dense forward")
+        # Everything the jobs did not write stays untouched
+        if not bool((out.view(torch.uint8)[off * H * 4 :] == SENTINEL).all()):
+            mismatches.append(f"{name}: out past the last slice row")
+        if not bool((seg.section(slot, "rowidx").view(torch.uint8)[off * 4 :] == SENTINEL).all()):
+            mismatches.append(f"{name}: rowidx past the last slice row")
+        st = seg.section(slot, "segtab").view(torch.uint8)
+        for e in range(E_CPU):
+            if not counts[e] and not bool((st.view(-1)[e * 8 : (e + 1) * 8] == SENTINEL).all()):
+                mismatches.append(f"{name}: segtab of expert {e} (no pick) written: {st.view(-1)[e * 8 : (e + 1) * 8].tolist()}")
+        # A partial layer publishes EXPERT_DONE only, never done[slot]
+        if seg.flag(DONE, slot) != 0:
+            mismatches.append(f"{name}: done[slot] published by a per-expert job")
+        for i in range(rows * TOPK):
+            if seg.flag(EXPERT_DONE, (tail + i) % MOE_JOB_RING) != state["seq"]:
+                mismatches.append(f"{name}: EXPERT_DONE at ring position {tail + i}")
+
+    def job(name, layer, rows):
+        state["seq"] += 1
+        seq, slot = state["seq"], state["slot"]
+        state["slot"] = (slot + 1) % NUM_SLOTS
+        x, sel, w = stage_inputs(slot, layer, rows)
+        tail = seg.push_experts(seq, layer, rows, TOPK, slot)
+        counts = seg.announce(tail, rows, TOPK, slot, E_CPU)
+        seg.set_flag(DATA_READY, slot, seq)
+        for i in range(rows * TOPK):
+            seg.wait(EXPERT_DONE, (tail + i) % MOE_JOB_RING, seq)
+        check(name, slot, layer, rows, x, sel, w, tail, counts)
+        return seq, slot, (x, sel, w, tail, counts)
+
+    try:
+        seg.start(threads = 2)
+        R["ready"] = seg.word(READY)
+
+        for layer in (0, 1):
+            for rows in (1, CAP_ROWS):
+                job(f"partial_l{layer}_r{rows}", layer, rows)
+
+        # Nothing is published and the slot is untouched before data_ready reaches the job's seq
+        state["seq"] += 1
+        seq, slot = state["seq"], state["slot"]
+        state["slot"] = (slot + 1) % NUM_SLOTS
+        x, sel, w = stage_inputs(slot, 0, 3)
+        tail = seg.push_experts(seq, 0, 3, TOPK, slot)
+        counts = seg.announce(tail, 3, TOPK, slot, E_CPU)
+        time.sleep(0.3)
+        R["gating_expert_done_early"] = any(seg.flag(EXPERT_DONE, (tail + i) % MOE_JOB_RING) == seq
+                                           for i in range(3 * TOPK))
+        R["gating_untouched"] = seg.flag(DONE, slot) == 0 and bool((seg.section(slot, "out").view(torch.uint8)
+                                                                  == SENTINEL).all()) \
+            and bool((seg.section(slot, "rowidx").view(torch.uint8) == SENTINEL).all())
+        seg.set_flag(DATA_READY, slot, seq)
+        for i in range(3 * TOPK):
+            seg.wait(EXPERT_DONE, (tail + i) % MOE_JOB_RING, seq)
+        check("gating", slot, 0, 3, x, sel, w, tail, counts)
+
+        R["stopped"] = seg.stop()
+        R["error"] = [str(e) for e in seg.error]
+        R["abort"] = seg.word(ABORT)
+    finally:
+        seg.set_word(QUIT, 1)
+        seg.close()
+    R["mismatches"] = mismatches
+    return R
+
+
+@pytest.fixture(scope = "module")
+def partial():
+    return run_isolated(partial_child, env = {"CUDA_VISIBLE_DEVICES": ""}, timeout = 600)
+
+
+@pytest.mark.nogpu
+def test_partial_expert_jobs_match_forward(partial):
+    assert not partial["mismatches"], f"per-expert jobs that differ: {partial['mismatches']}"
+
+
+@pytest.mark.nogpu
+def test_partial_expert_gating(partial):
+    assert not partial["gating_expert_done_early"], "EXPERT_DONE published before data_ready reached its seq"
+    assert partial["gating_untouched"], "a per-expert job wrote its slot before data_ready reached its seq"
+
+
+@pytest.mark.nogpu
+def test_partial_expert_quit(partial):
+    assert partial["stopped"], "worker did not return after quit"
+    assert partial["error"] == [] and partial["abort"] == 0
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -394,9 +558,13 @@ def test_host_layout_matches_header():
     from exllamav3.model import moe_cpu_host as host
     for name in ("MOE_JOB_RING", "MOE_MAX_SLOTS", "MOE_MAX_WSLOTS", "MOE_JOB_BYTES", "MOE_CTRL_JOBS_OFFSET",
                  "MOE_SLOT_FLAGS_OFFSET", "MOE_FLAGS_SIZE", "MOE_STAGE_RING", "MOE_STAGE_TAIL_OFFSET",
-                 "MOE_STAGE_HEAD_OFFSET", "MOE_STAGE_JOBS_OFFSET", "MOE_CTRL_SIZE"):
+                 "MOE_STAGE_HEAD_OFFSET", "MOE_STAGE_JOBS_OFFSET", "MOE_CTRL_SIZE",
+                 "MOE_EXPERT_DONE_OFFSET", "MOE_STAGE_FLAGS_OFFSET"):
         assert getattr(host, name) == getattr(hdr, name), name
     assert host.MOE_JOB_SEQ_HI == hdr.JOB_SEQ_HI and host.MOE_FLAG_BITS == hdr.FLAG_BITS
+    assert host.MOE_JOB_EXPERTS0 == hdr.JOB_EXPERT0
+    assert host.MOE_JOB_KIND_COMPUTE_EXPERT == hdr.KIND_COMPUTE_EXPERT
+    assert host.MOE_EXPERT_SKIP == hdr.EXPERT_SKIP
 
 
 def _empty_forward_worker():

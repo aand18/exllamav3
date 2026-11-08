@@ -102,6 +102,26 @@ void exl3_moe_cpu_forward_raw
     int threads
 );
 
+// One expert's share of one forward (EXL3_MOE_PARTIAL_COMPLETION): the rows that select expert
+// `expert` are computed as in exl3_moe_cpu_forward_raw and written, routing-weighted, into
+// `out` at CONSECUTIVE rows in sel scan order (slice row r = the r-th (token, expert)
+// assignment), so the caller can hand each expert's slice to the GPU as it lands. The product
+// and its rounding are those of the whole-layer path; `out` is stored, not accumulated (each
+// slice row belongs to exactly one assignment), and neither the layer-wide output buffer nor the
+// other experts' rows are touched
+void exl3_moe_cpu_forward_expert
+(
+    int64_t handle,
+    const at::Half* x,
+    const int32_t* sel,
+    const at::Half* w,
+    float* out,
+    int rows,
+    int topk,
+    int expert,
+    int threads
+);
+
 // Copy `count` experts' packed trellis tensors (gate, up, down order; gate absent when
 // gateless) of a registered layer into a staging buffer, expert-major, parallelized over the
 // worker pool. Offsets are deterministic from the layer's matrix dims so the parent can compute
