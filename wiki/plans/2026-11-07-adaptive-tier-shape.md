@@ -82,8 +82,9 @@ table below is the corrected seat plan.
 
 | role | model | price ($/M in–out) | why |
 |---|---|---|---|
-| default implementer, design drafts, bulk reading | `opencode/opencode/deepseek-v4.1-flash-free` | **0 / 0** | free tier of this session's own model |
-| alternate implementer | `opencode/opencode/glm-5.3-flash-free` | **0 / 0** | when DeepSeek is rate-limited |
+| hard tasks, design drafts, design review | `opencode/opencode/crouton-alpha-free` | **0 / 0** | operator-selected seat (2026-11-08); this session's own model |
+| alternate implementer | `opencode/opencode/deepseek-v4.1-flash-free` | **0 / 0** | free tier of the same family; also GLM (`opencode/opencode/glm-5.3-flash-free`) when DeepSeek is rate-limited |
+| cross-review of a crouton-alpha implementation | `opencode/opencode/deepseek-v4.1-flash-free` | **0 / 0** | a different model line reviews crouton-alpha's work |
 | alternate implementer | `opencode/opencode/mimo-v2.6-flash-free` | **0 / 0** | transcription-only work |
 | local model (the served weights) | `tabbyapi/tabbyapi/Qwen3.8-Flash-Next-exl3-3.18bpw_h6_ng8` | **0** (own box) | registered and reachable; **runs on the GPU that serves traffic**, so small jobs only, never during a measurement pass |
 | cross-model review | a *different* free seat from the author (e.g. GLM reviewing DeepSeek) | **0 / 0** | disagreement between two free seats is the signal |
