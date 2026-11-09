@@ -14,6 +14,9 @@ it by construction.
     EXL3_DISTINCT_CSV=path         write round,layer,distinct,rows,topk at exit (R1: distinct CPU
                                    experts per layer per sampled round; see enqueue_distinct).
                                    Defaults to "<EXL3_ROUND_PROF_CSV>.distinct" when that is set.
+                                   Each sampled round's rows==5 layer-round is also scored
+                                   against the same layer's previous sampled round (T60
+                                   autocorr cover) in the periodic report line.
 
 The flag is read once, at import. A caller imports PROF into its own module-level `_RPROF`, so with
 the knob off the branch is a constant lookup and nothing else: no event object is built, and no
@@ -67,6 +70,11 @@ _rows = []                          # CSV rows: (round, layer, phase, ms)
 _dropped = 0                         # brackets whose exit event had not completed at read time
 _distinct = []                       # rows: (round, layer, distinct cpu experts, rows, topk)
 _pending = []                        # this sampled round's async sel copies, counted once at round end
+# T60 routing autocorr: each layer's distinct CPU expert set at the previous finalized sampled
+# round, and the intersection covers of rows==5 layer-rounds against it (one entry per
+# current-rows==5 layer-round with a previous set and a non-empty current set).
+_cpu_sets = {}                       # layer key -> set of cpu experts at the previous sampled round
+_covers = []                         # covers for rows==5 layer-rounds: |cur & prev| / |cur|
 
 
 def _new_pair():
@@ -176,6 +184,14 @@ def _report():
     print(" -- round prof: " + " | ".join(parts) +
           f" ms | round wall {w_med:.3f}/{w_p90:.3f} ms, floor {f_med:.3f} ms, "
           f"dropped {_dropped}, n={_sampled}", flush = True)
+    # T60 routing autocorr over the rows==5 layer-rounds so far: the share of this round's
+    # distinct CPU experts that the previous sampled round's same-layer set already held.
+    if _covers:
+        med, p90 = _quantiles(_covers)
+        frac = sum(1 for c in _covers if c >= 0.8) / len(_covers)
+        print(f" -- round prof autocorr cover: median {med:.3f} p90 {p90:.3f} "
+              f"frac>=0.8 {frac:.3f} (n={len(_covers)} rows=5 layer-rounds)",
+              flush = True)
 
 
 def write_csv(path = None, rows = None):
@@ -201,6 +217,9 @@ def write_csv(path = None, rows = None):
 # with one host sync total -- outside every phase bracket, so sub/ker/cmb stay clean.
 # The copy is enqueued before submit_issue_fused runs, hence on raw router ids;
 # the threshold rule is exactly _split_translate's: sel >= first_cpu is CPU-resident.
+# T60: each finalized layer-round's CPU set is also scored against the same layer's previous
+# sampled-round set (rows==5 intersection cover, see _autocorr_cover), still under the same
+# single round-end sync.
 # ---------------------------------------------------------------------------
 def is_sampling():
     """True while a sampled round is open (matches the event brackets' gate)"""
@@ -225,6 +244,27 @@ def count_distinct_cpu(buf_cpu, first_cpu, rows, topk):
     return len({int(v) for v in vals.tolist() if v >= first_cpu})
 
 
+def distinct_cpu_set(buf_cpu, first_cpu, rows, topk):
+    """The set backing count_distinct_cpu (pure, nogpu-testable): the distinct sel >= first_cpu
+    among the first `rows` rows of a CPU copy"""
+    if first_cpu is None:
+        return set()
+    vals = buf_cpu[:rows, :topk].reshape(-1)
+    return {int(v) for v in vals.tolist() if v >= first_cpu}
+
+
+def _autocorr_cover(layer, cur, rows):
+    """Score one finalized layer-round against the same layer's previous sampled round and
+    remember this round's set for the next: T60's intersection cover, recorded only when the
+    current round is rows==5 (the drafted window) with a previous set and a non-empty current
+    set. The set is updated every finalized round, so a cover always compares two consecutive
+    sampled rounds for the layer."""
+    prev = _cpu_sets.get(layer)
+    if prev is not None and rows == 5 and cur:
+        _covers.append(len(cur & prev) / len(cur))
+    _cpu_sets[layer] = cur
+
+
 def _finalize_distinct():
     global _pending, _distinct
     if not _pending:
@@ -236,6 +276,7 @@ def _finalize_distinct():
     for rnd, layer, buf_cpu, first_cpu, rows, topk in _pending:
         _distinct.append((rnd, layer, count_distinct_cpu(buf_cpu, first_cpu, rows, topk),
                           rows, topk))
+        _autocorr_cover(layer, distinct_cpu_set(buf_cpu, first_cpu, rows, topk), rows)
     _pending = []
 
 

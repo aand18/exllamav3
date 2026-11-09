@@ -1095,7 +1095,9 @@ class BlockSparseMLP_CPU:
         # no host sync lands inside any sub/ker/cmb bracket; the copy is enqueued before
         # submit_issue_fused, i.e. on raw router ids, under the same sel >= first rule as
         # _split_translate. Sampled-round tok/s is therefore slightly off a control -- only
-        # the distinct counts and slot-arm deltas are used.
+        # the distinct counts and slot-arm deltas are used. T60: this same enqueued buffer also
+        # feeds the routing-autocorr cover in round_prof (per-layer previous sampled-round CPU
+        # sets, rows==5 intersection covers at round end); the hook itself is unchanged.
         if (_RPROF and round_prof.is_sampling() and bsz < self.cpu_host.stream_min_rows
                 and self.cpu_split_first is not None
                 and not torch.cuda.is_current_stream_capturing()):
