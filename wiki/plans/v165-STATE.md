@@ -234,6 +234,9 @@ the RAM floor is the component shrunk instead.
 - **The exl3 drafter leaves ~0.75 GB idle in production at split 381.** Whether the static floor
   moves lower (more GPU experts) is a served-config question and needs the operator; T61's
   pre-registered split re-ladder was not run because the drafter arm failed its acceptance gate.
+  **Answered by T62: the Q4 floor at 262144 is 378 under the exl3 drafter (375, 373 and 372 all
+  refuse), and 378 is +0.28 % against the 381 pair — a null.** The headroom is real and not
+  spendable on decode speed; 378 is a margin choice for the operator, not a speed choice.
 
 ## Closing audit (2026-11-02)
 
