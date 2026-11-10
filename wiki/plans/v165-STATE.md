@@ -162,7 +162,7 @@ Consequence for the campaign: every arm in T7–T13 must be described as a delta
 - host RAM and determinism: `EXL3_HOST_MEM_RESERVE_MB=0` and `EXL3_MOE_ARENA_HUGEPAGE=0`, so page
   backing cannot vary between runs. Watcher floors **200 MB VRAM / 2048 MB available RAM**, armed
   for measurement passes only.
-- drafting: DFlash2 BF16 window 4 (DRAFT_WINNER), with `-sdh 0`, `-hdt 0` and `-dds` on (`dynamic_draft: true`, ceiling 4). The two `-dds` arms sit +1.4 % and +3.6 % above the reference nearest each; the sign repeats, the size does not resolve.
+- drafting: DFlash2 BF16 window 4 (DRAFT_WINNER), with `-sdh 0`, `-hdt 0` and `-dds` on (`dynamic_draft: true`, ceiling 4). The two `-dds` arms sit +1.4 % and +3.6 % above the reference nearest each; the sign repeats, the size does not resolve. **Note (T61): the measurement regime runs the BF16 drafter; production serves the 472 MB exl3 one (`config.yml:352`).** The recorded tok/s figures are BF16-drafter figures.
 - NGRAM: ng8 table present, `ngram_ram` off (T12), vision off.
 
 ## Superseded (read this before quoting an old number)
@@ -196,6 +196,13 @@ the RAM floor is the component shrunk instead.
 
 ## Open items
 
+- **The CPU-handoff line is closed (T57–T60).** Per-expert partial completion is 44 % slower (T57,
+  withdrawn); slots 4→8 is a null and the `sub` tail is not slot reuse (T58, +1.86 % inside a 3.3 %
+  spread); distinct CPU experts per layer are median 8 / p90 18, between the gates that would have
+  licensed either a bytes build or an overlap build (T58); at rows=5 the MoE window is 0.883 ms of
+  which `cmb` is 0.696 (**79 % wait**), so there is no launch-gap layer for graph capture to win
+  (T59); predicted-routing prefetch scores 25 % cover against an 80 % pass mark (T60, family
+  closed); a grouped expert kernel fails its rows=1 mark (0.0914 vs ≤0.061 ms/row, T59).
 - **Q4 against Q2 at one split: settled 2026-11-02.** Q2 at 389 runs 52.70 tok/s against Q4's
   52.96 with identical 2.34/4 acceptance (median per-category 0.993,
   `t16-q2-389-corpus-20261102-170933`). The cache width costs VRAM, not speed: the earlier 3.4 % gap
@@ -203,7 +210,8 @@ the RAM floor is the component shrunk instead.
 - **Production acceptance is lower than the corpus.** The corpus accepts 58.5 % of drafts; the live
   log of 760,980 drafts accepts 39.6 %, which is 1.58 of 4 against a break-even near 1.5. Every
   drafting number is priced on a friendlier workload. Measuring it needs archived production
-  prompts, which the box does not keep.
+  prompts, which the box does not keep. **Part of the gap is the drafter, not the traffic** (T61):
+  the served exl3 drafter accepts 1.88 of 4 on the corpus against the BF16 record's 2.07.
 - `-dds` is deployed (`dynamic_draft: true`, ceiling `draft_num_tokens: 4`). Two arms beat the
   reference on the corpus; a third reference run would make the pair a true ABBA.
 - **Cache precision is bounded, not proven equal** (T15): acceptance is flat and non-diagnostic,
@@ -216,8 +224,16 @@ the RAM floor is the component shrunk instead.
   resolve anything. Closed as not worth measuring.
 - `ambs 1` versus 2: the concurrency pairs are flat in aggregate (T15), so a single-slot arm buys
   latency, not throughput. Low value.
-- DFlash2 quantisation remains the last speed compromise: ~0.8 GB, about nine experts, and the
-  drafter's own break-even near 1.5 accepted per round. Needs the Windows converter and a window.
+- **DFlash2 quantisation: done 2026-11-02 and deployed** (`config.yml:352`
+  `draft_model_name: Qwen3.8-Flash-Next-DFlash2-exl3`, 472 MB against the BF16 1.2 GB). Measured in
+  T61 as an arm: **acceptance −0.184** (2.067 → 1.883 of 4, resolved, category-dependent) and
+  **+2.31 % tok/s unresolved** (inside the exl3 pair's own 2.28 % spread). It frees **728–940 MB**
+  of VRAM at split 381 (floor 2687 → 3415/3627 MB). Consequence: every campaign number since
+  2026-11-02 was measured on the **BF16** drafter (`state.json` still names it), so the record and
+  the served engine differ on this one component.
+- **The exl3 drafter leaves ~0.75 GB idle in production at split 381.** Whether the static floor
+  moves lower (more GPU experts) is a served-config question and needs the operator; T61's
+  pre-registered split re-ladder was not run because the drafter arm failed its acceptance gate.
 
 ## Closing audit (2026-11-02)
 
