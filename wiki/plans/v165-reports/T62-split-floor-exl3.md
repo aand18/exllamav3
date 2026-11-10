@@ -1,5 +1,13 @@
 # T62 — the exl3 drafter moves the split floor 381 → 378, and decode does not notice
 
+> **Correction (T63).** The verdict below is the aggregate one. On the campaign's agentic-weighted
+> primary the same runs read **0.9862 (−1.38 %)**, driven by **Agentic-curl −7.01 %** (acceptance
+> 2.09 → 1.88). `spec_primary.py` withholds a formal verdict because the 378 arm has one run, and
+> the control's own two runs differ 6.5 % on curl — so the arm is **unresolved on curl and worse
+> nowhere else that matters**; it is not better on the weighting that defines agentic traffic. The
+> "null, do not deploy" conclusion stands, with a weaker claim on the size. Per-category table in
+> `T63-per-domain-table.md`.
+
 Pre-registered in `wiki/plans/2026-11-10-split-floor-exl3.md`. Basis: `spec_decode`, **cache
 allocated at 262144** (the production allocation), decode priced at 131072, exl3 drafter
 (`_t4check/state-exl3.json`), static placement, pin on, `-cq 4,4`, `-mct 16`, `-ambs 2`,

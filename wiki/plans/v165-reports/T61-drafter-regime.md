@@ -1,5 +1,12 @@
 # T61 — the served drafter is not the measured one: acceptance −0.18, speed unresolved, 0.75 GB freed
 
+> **Correction (T63).** This report judged the arm on the **aggregate corpus mean**. On the
+> campaign's agentic-weighted primary (`bench/spec_primary.py`: Agentic-code ×5, Agentic-curl ×4,
+> Coding ×3) the same runs read **primary 71.51 → 71.75, ratio 1.0033 against a 1.024 floor,
+> Agentic-curl −5.74 % with acceptance 2.67 → 2.19, verdict `WITHDRAW`.** Both statements are true
+> of their own metric; the weighted one is the campaign's rule and is the one to quote. See
+> `T63-per-domain-table.md` for the per-category table.
+
 Pre-registered in `T61-drafter-regime-gap.md`. Basis: 131072, `spec_decode`, production regime
 (split 381, threads 16, Q4 `4,4`, cache 40960 for drafting), static placement, pin on,
 `-ndt 4 -dds`.
