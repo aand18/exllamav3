@@ -237,6 +237,16 @@ the RAM floor is the component shrunk instead.
   **Answered by T62: the Q4 floor at 262144 is 378 under the exl3 drafter (375, 373 and 372 all
   refuse), and 378 is +0.28 % against the 381 pair — a null.** The headroom is real and not
   spendable on decode speed; 378 is a margin choice for the operator, not a speed choice.
+- **The served drafter `WITHDRAW`s on the agentic weighting (T63).** `bench/spec_primary.py` over
+  T61's runs (cache 40960): primary **71.51 → 71.75, ratio 1.0033 against a 1.024 floor**,
+  **Agentic-curl −5.74 % with acceptance 2.67 → 2.19**, verdict `WITHDRAW`. Aggregate corpus tok/s
+  hid this (+2.31 %, and itself unresolved). The BF16 drafter costs 679 MiB more VRAM at the same
+  split — production at 381 with BF16 has ~839 MiB free, the configuration every campaign has
+  loaded for months. **Re-serving BF16 at 381 is the only change on the table that buys acceptance
+  on the agentic-weighted categories; it needs the operator.**
+- **Reporting rule (T63): quote the agentic-weighted primary and its three categories first, the
+  corpus mean second.** Aggregate corpus tok/s is a cross-check, not the verdict. The campaign's
+  rule weights Agentic-code ×5, Agentic-curl ×4, Coding ×3 (`bench/spec_primary.py`).
 
 ## Closing audit (2026-11-02)
 
