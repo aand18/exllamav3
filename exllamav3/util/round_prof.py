@@ -70,6 +70,11 @@ _rows = []                          # CSV rows: (round, layer, phase, ms)
 _dropped = 0                         # brackets whose exit event had not completed at read time
 _distinct = []                       # rows: (round, layer, distinct cpu experts, rows, topk)
 _pending = []                        # this sampled round's async sel copies, counted once at round end
+# T65 1b: raw selections, so a pool policy can be simulated against real routing instead of the
+# stationary profile. EXL3_ROUTING_DUMP=<path.npz>; capped by EXL3_ROUTING_DUMP_ROUNDS (default 400)
+_DUMP_PATH = os.environ.get("EXL3_ROUTING_DUMP") or None
+_DUMP_ROUNDS = _env_int("EXL3_ROUTING_DUMP_ROUNDS", 400)
+_dump = []                           # (round, layer, rows, topk, list-of-picks)
 # T60 routing autocorr: each layer's distinct CPU expert set at the previous finalized sampled
 # round, and the intersection covers of rows==5 layer-rounds against it (one entry per
 # current-rows==5 layer-round with a previous set and a non-empty current set).
@@ -277,7 +282,34 @@ def _finalize_distinct():
         _distinct.append((rnd, layer, count_distinct_cpu(buf_cpu, first_cpu, rows, topk),
                           rows, topk))
         _autocorr_cover(layer, distinct_cpu_set(buf_cpu, first_cpu, rows, topk), rows)
+        if _DUMP_PATH and len(_dump) < _DUMP_ROUNDS * 64:
+            _dump.append((rnd, layer, rows, topk,
+                          buf_cpu[:rows, :topk].reshape(-1).to(torch.int16).tolist()))
     _pending = []
+
+
+def write_dump(path = None, rows = None):
+    """T65 1b: the raw per-round selections as an npz, so a pool policy can be simulated on them.
+
+    Rows differ per layer-round (rows=1..5 -> 10..50 picks), so the array is padded to a fixed
+    width with -1 and `meta` carries each record's real length.
+    """
+    path = path or _DUMP_PATH
+    rows = _dump if rows is None else rows
+    if not path or not rows:
+        return 0
+    import numpy as np
+    width = max(len(r[4]) for r in rows)
+    picks = np.full((len(rows), width), -1, dtype = np.int16)
+    for i, r in enumerate(rows):
+        picks[i, :len(r[4])] = r[4]
+    meta = np.array([[r[0],
+                      int(r[1].split(".")[-2]) if ".layers." in r[1] else -1,
+                      r[2], r[3], len(r[4])] for r in rows], dtype = np.int32)
+    with open(path, "wb") as f:
+        np.savez_compressed(f, picks = picks, meta = meta)
+    print(f" -- routing dump: {len(rows)} layer-rounds, width {width} -> {path}", flush = True)
+    return len(rows)
 
 
 def write_distinct(path = None, rows = None):
@@ -298,3 +330,5 @@ if PROF and CSV_PATH:
     atexit.register(write_csv)
 if PROF and DISTINCT_CSV_PATH:
     atexit.register(write_distinct)
+if PROF and _DUMP_PATH:
+    atexit.register(write_dump)

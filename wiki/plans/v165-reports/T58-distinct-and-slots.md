@@ -1,5 +1,11 @@
 # T58 — distinct CPU experts per layer + slot ABBA: slots are not the lever
 
+> **Correction (T66).** The headline "distinct CPU experts median 8, p90 18, mean 9.3" was an
+> **all-rows** statistic: 97 920 of the 124 991 layer-rounds are the undrafted `rows=1` baseline arm.
+> By row count the same CSVs give rows=1 **8**, rows=2 13, rows=3 16, rows=4 19, **rows=5 median 21**
+> (mean 20.5). Everything downstream that quoted ~9.3 at the drafted window — T59, T63, T64 — should
+> read **~20.5** instead; at 33.9 µs/expert the corrected figure closes T59's 0.696 ms `cmb` exactly.
+
 ## Setup
 
 `EXL3_ROUND_PROF=1` with a new R1 counter (`enqueue_distinct`/`write_distinct` in
