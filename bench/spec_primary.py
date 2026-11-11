@@ -89,6 +89,29 @@ def rate(rows, key: str) -> float | None:
     return sum(vals) / len(vals) if vals else None
 
 
+def throughput(rows) -> float | None:
+    """tok/s for a set of rows: a ratio of sums where the CSV makes it possible.
+
+    `sum(tokens) / sum(seconds)` is the quantity a throughput claim is about. Where those columns are
+    absent (every pass before the harness emitted them) this falls back to the mean of the per-run
+    rates, which is an average of ratios and weights a short prompt the same as a long one; the
+    fallback is reported by `basis()` so a report can say which one it used.
+    """
+    tk = [float(r["tokens"]) for r in rows if r.get("tokens") not in (None, "")]
+    sc = [float(r["seconds"]) for r in rows if r.get("seconds") not in (None, "")]
+    if tk and sc and sum(sc) > 0:
+        return sum(tk) / sum(sc)
+    return rate(rows, "tok_s")
+
+
+def basis(rows) -> str:
+    """Which throughput estimator `throughput` used, for the report to quote."""
+    if any(r.get("tokens") not in (None, "") for r in rows) and \
+       any(r.get("seconds") not in (None, "") for r in rows):
+        return "ratio of sums (tokens/seconds)"
+    return "mean of per-run rates (no tokens/seconds columns in this CSV)"
+
+
 def ratio(control: float, treat: float) -> float | None:
     return (treat / control) if control else None
 
@@ -105,7 +128,7 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
             continue
         if len({r["run_id"] for r in c}) < 2 or len({r["run_id"] for r in t}) < 2:
             problems.append(f"category '{cat}' has fewer than two runs on an arm, so no spread")
-        rc, rt = rate(c, "tok_s"), rate(t, "tok_s")
+        rc, rt = throughput(c), throughput(t)
         cats[cat] = {"control": rc, "treat": rt, "ratio": ratio(rc, rt),
                      "acc_control": rate(c, "acc"), "acc_treat": rate(t, "acc")}
     # every non-trivial category, as the guardrail needs them
@@ -114,7 +137,7 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
         if cat in PRIMARY_WEIGHTS or cat == TRIVIAL:
             continue
         c, t = pick(rows, control, cat), pick(rows, treat, cat)
-        rc, rt = rate(c, "tok_s"), rate(t, "tok_s")
+        rc, rt = throughput(c), throughput(t)
         if rc and rt:
             others[cat] = ratio(rc, rt)
         else:
@@ -123,7 +146,7 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
     def allrows(prefix):
         return [r for r in rows if _matches(r.get("tag", ""), prefix)
                 and any(r.get("arm", "").startswith(k) for k in DRAFT_ARMS)]
-    corpus_c, corpus_t = rate(allrows(control), "tok_s"), rate(allrows(treat), "tok_s")
+    corpus_c, corpus_t = throughput(allrows(control)), throughput(allrows(treat))
 
     if problems:
         return 2, {"problems": problems, "categories": cats, "secondary": others}
@@ -152,7 +175,7 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
             # different quantity than the one being gated
             got = {}
             for c in PRIMARY_WEIGHTS:
-                v = rate([r for r in run_rows if r["category"] == c], "tok_s")
+                v = throughput([r for r in run_rows if r["category"] == c])
                 if v:
                     got[c] = v
             if got:
@@ -188,7 +211,7 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
         rs = [r for r in rows if _matches(r.get("tag", ""), prefix) and r.get("category") == cat
               and any(r.get("arm", "").startswith(k) for k in DRAFT_ARMS)]
         runs = sorted({r["run_id"] for r in rs})
-        vals = [v for v in (rate([r for r in rs if r["run_id"] == rid], "tok_s") for rid in runs) if v]
+        vals = [v for v in (throughput([r for r in rs if r["run_id"] == rid]) for rid in runs) if v]
         if len(vals) < 2:
             return None
         m = sum(vals) / len(vals)
@@ -230,6 +253,7 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
                     "floor": 1 + floor, "spread_control": spread_a, "spread_treat": spread_t,
                     "spread_method": f"SEM x {SEM_Z} / mean"},
         "categories": cats, "secondary": others, "corpus_ratio": corpus_ratio,
+        "basis": basis(allrows(treat)) if "allrows" in dir() else "mean of per-run rates",
         "category_guard": cat_lines,
         "acc": {"control": acc_c, "treat": acc_t, "delta": (acc_t - acc_c) if acc_c and acc_t else None,
                 "rule": acc_rule, "ok": acc_ok},

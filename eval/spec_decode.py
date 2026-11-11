@@ -120,6 +120,7 @@ def measure(generator, tokenizer, sampler, max_new_tokens, stats_sink = None):
         all_results[category].append({
             "new_tokens": new_tokens,
             "gen_tps": gen_tps,
+            "time_generate": result["time_generate"],
             "dacc": dacc,
             "drej": drej,
             "rounds": rounds,
@@ -134,15 +135,22 @@ def measure(generator, tokenizer, sampler, max_new_tokens, stats_sink = None):
 
     aggregated = {}
     for category, cat_results in all_results.items():
-        tps = (
-            sum(m["gen_tps"] * m["new_tokens"] for m in cat_results) /
-            sum(m["new_tokens"] for m in cat_results)
-        )
+        # Ratio of sums, not an average of rates. The previous form,
+        #     sum(gen_tps * new_tokens) / sum(new_tokens)
+        # is sum(N^2 / T) / sum(N) because gen_tps already carries N in its numerator: it weights each
+        # prompt quadratically by how many tokens it happened to generate, and by Jensen it reads
+        # strictly above the true throughput sum(N) / sum(T). A prompt that runs long before EOS was
+        # therefore worth N_i^2 of the category's number.
+        total_tokens = sum(m["new_tokens"] for m in cat_results)
+        total_seconds = sum(m["time_generate"] for m in cat_results)
+        tps = (total_tokens / total_seconds) if total_seconds else 0.0
         rounds = sum(m["rounds"] for m in cat_results if m["rounds"] is not None)
         dacc = sum(m["dacc"] for m in cat_results if m["dacc"] is not None)
         drej = sum(m["drej"] for m in cat_results if m["drej"] is not None)
         aggregated[category] = {
             "tps": tps,
+            "tokens": total_tokens,
+            "seconds": total_seconds,
             # Per verification round (including rounds that drafted nothing): mean accepted
             # draft tokens and mean drafted window. Every fed draft position is counted as
             # either accepted or rejected, so fed = dacc + drej
@@ -213,7 +221,14 @@ def warm_corpus(generator, tokenizer, tokens = 64):
 
 
 def arm_line(label, aggregated):
-    """One machine-readable line per arm: the harness parses these into results/arms.csv."""
+    """One machine-readable line per arm: the harness parses these into results/arms.csv.
+
+    `tok_s` here is the **unweighted** mean of the per-category token rates (an 8-category summary;
+    every category counts once regardless of how many prompts or tokens it carries). It is a headline
+    only: the campaign's decision metric is `bench/spec_primary.py`, which weights the agentic
+    categories 5:4:3 and, when the CSV carries `tokens`/`seconds`, takes a ratio of sums. `tokens` and
+    `seconds` are therefore printed too, so a ratio of sums stays computable downstream.
+    """
     tps = [v["tps"] for v in aggregated.values() if v.get("tps")]
     accs = [v["acc_len"] for v in aggregated.values() if v.get("acc_len") is not None]
     drafts = [v["draft_len"] for v in aggregated.values() if v.get("draft_len") is not None]
@@ -221,7 +236,10 @@ def arm_line(label, aggregated):
         return
     acc = sum(accs) / len(accs) if accs else 0.0
     draft = sum(drafts) / len(drafts) if drafts else 0.0
-    print(f"ARM {label} tok_s={sum(tps) / len(tps):.2f} acc={acc:.2f}/{draft:.2f} rounds={len(tps)}")
+    tk = sum(v["tokens"] for v in aggregated.values() if v.get("tokens"))
+    sec = sum(v["seconds"] for v in aggregated.values() if v.get("seconds"))
+    print(f"ARM {label} tok_s={sum(tps) / len(tps):.2f} acc={acc:.2f}/{draft:.2f} rounds={len(tps)} "
+          f"tokens={tk} seconds={sec:.3f}")
 
 
 def plot_stats(stats_sink):
@@ -539,6 +557,14 @@ def main(args):
 
     print()
     print(tabulate(rows, headers = headers, tablefmt = "pipe", colalign=("left", *["right"] * (len(headers) - 1)),))
+    # Machine-readable per-category counts, so a ratio of sums stays computable downstream. The
+    # rendered table shows a rate, and a rate is an average of ratios: the harness needs the numerator
+    # and denominator to weight a long prompt above a short one, which is what a throughput claim is.
+    for name, result in r.items():
+        for category, res_cat in sorted(result.items()):
+            if res_cat.get("tokens") is None or res_cat.get("seconds") is None:
+                continue
+            print(f"CAT\t{category}\t{name}\t{int(res_cat['tokens'])}\t{res_cat['seconds']:.4f}")
     print()
 
     if args.draft_stats and stats_sink:

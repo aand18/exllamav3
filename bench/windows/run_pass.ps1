@@ -74,6 +74,7 @@ param(
     [switch] $DryRun,          # print argv+env and exit 0 before any log, CSV row or watcher exists
     [switch] $Short,
     [string] $Runner = "perf",   # perf.py (pp/tg ladder) or spec_decode.py (drafting arms)
+    [switch] $WithBaseline,   # spec_decode: also run the undrafted Baseline arm (off by default)
     [switch] $NoSpecDec,
     [switch] $SkipPrefill,
     [switch] $SkipGen,
@@ -334,6 +335,13 @@ if ($SkipPrefill)    { $argsList += "-spf" }
 if ($SkipGen)        { $argsList += "-sg" }
 if ($SkipWarmup)     { $argsList += "-swu" }
 
+# spec_decode runs the whole 22-prompt undrafted Baseline arm (rows=1) before the drafted arm unless
+# told otherwise. It is a third of the pass's GPU time, spec_primary.py ignores it (it filters to the
+# DRAFT arms), and it pollutes every ROUND_PROF / distinct CSV with rows=1 layer-rounds - which is
+# exactly how T58's 'median 8 distinct experts' came to be an all-rows figure when the drafted window
+# was 21. Baseline is skipped by default and asked for explicitly with -WithBaseline.
+if ($Runner -eq "spec_decode" -and -not $WithBaseline) { $argsList += "-nbl" }
+
 # --- Environment -------------------------------------------------------------------------------
 $baseEnv = [ordered]@{}
 if ($ST.env) { foreach ($pr in $ST.env.PSObject.Properties) { $baseEnv[$pr.Name] = [string]$pr.Value } }
@@ -532,6 +540,7 @@ $tgRows = @($tgRows | Where-Object { $_[1][1] -gt 0 })
 # spec_decode.py prints a per-category table; without this every drafting arm lived only in the log
 # and no CSV analysis was possible (critique C13b). Both the rendered table and the machine-readable
 # "ARM ..." lines are captured, so acceptance and latency are separable afterwards (improvement I4).
+$catStats = @{}
 $sdRows = New-Object System.Collections.ArrayList
 $armRows = New-Object System.Collections.ArrayList
 $sdHeader = $null
@@ -542,6 +551,13 @@ foreach ($rawLine in (($raw -replace "`r", "`n") -split "`n")) {
                              $(if ($Matches[3] -ne "") { [double]::Parse($Matches[3], $inv) } else { -1.0 }),
                              $(if ($Matches[4] -ne "") { [double]::Parse($Matches[4], $inv) } else { -1.0 }),
                              $(if ($Matches[5] -ne "") { [int]$Matches[5] } else { 0 })))
+        continue
+    }
+    # Per-category tokens/seconds emitted by spec_decode.py ("CAT<TAB>category<TAB>arm<TAB>n<TAB>s"):
+    # the table shows a rate, which is an average of ratios, and the harness needs the counts to take
+    # a ratio of sums (T73).
+    if ($l -match '^CAT\t(.+)\t(.+)\t(\d+)\t([0-9.]+)$') {
+        $catStats["$($Matches[1])|$($Matches[2])"] = @([int]$Matches[3], [double]::Parse($Matches[4], $inv))
         continue
     }
     if ($l -match '^\|\s*Category\s*\|') {
@@ -661,12 +677,18 @@ foreach ($r in $ppRows) {
 
 $sdCsv = Join-Path $RES "spec_decode.csv"
 if (-not (Test-Path $sdCsv)) {
-    Set-Content -Path $sdCsv -Value "tag,run_id,category,arm,tok_s,ratio,acc,draft" -Encoding ASCII
+    Set-Content -Path $sdCsv -Value "tag,run_id,category,arm,tok_s,ratio,acc,draft,tokens,seconds" -Encoding ASCII
 }
 foreach ($r in $sdRows) {
-    Add-Content -Path $sdCsv -Value ("{0},{1},{2},{3},{4},{5},{6},{7}" -f $Tag, $runId, ($r[0] -replace ",", ";"), ($r[1] -replace ",", ";"),
+    # tokens/seconds when spec_decode.py emitted a CAT line for this category+arm, so a ratio of sums
+    # is computable downstream; empty otherwise (every pass before these columns existed)
+    $cs = $catStats["$($r[0])|$($r[1])"]
+    $tkStr = if ($null -ne $cs) { [string]$cs[0] } else { "" }
+    $scStr = if ($null -ne $cs) { [string]::Format($inv, "{0:F4}", $cs[1]) } else { "" }
+    Add-Content -Path $sdCsv -Value ("{0},{1},{2},{3},{4},{5},{6},{7},{8},{9}" -f $Tag, $runId, ($r[0] -replace ",", ";"), ($r[1] -replace ",", ";"),
         ([string]::Format($inv, "{0:F2}", $r[2])), ([string]::Format($inv, "{0:F3}", $r[3])),
-        ([string]::Format($inv, "{0:F2}", $r[4])), ([string]::Format($inv, "{0:F2}", $r[5]))) -Encoding ASCII
+        ([string]::Format($inv, "{0:F2}", $r[4])), ([string]::Format($inv, "{0:F2}", $r[5])),
+        $tkStr, $scStr) -Encoding ASCII
 }
 $armCsv = Join-Path $RES "arms.csv"
 if (-not (Test-Path $armCsv)) {
