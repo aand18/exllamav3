@@ -149,8 +149,7 @@ drafter. Two complementary measurements — a fixed-trace systems test (payload,
 round latency, no trajectory confounding) and a paired free-running evaluation (corrected
 `Σtokens/Σseconds`, agentic primary, pre-registered quality suite).
 
-Pre-registered predictions: payload 1.83 → 1.15 MB; coefficient 33.9 → 21–23 µs; `cmb` 0.69 →
-0.43–0.48 ms/layer; round 47.2 → ~35 ms; end-to-end +25–30 % *if* acceptance and fixed overhead hold.
+Pre-registered predictions: payload 1.83 → 1.15 MB; coefficient 33.9 → 21–23 µs; `cmb` 0.69 → 0.43 to 0.48 ms/layer; round 47.2 → ~35 ms; end-to-end +25–30 % *if* acceptance and fixed overhead hold.
 
 **Stop if** quality fails the operator's limit, or the mechanism works fully and still lands in the
 mid-70s — that would show the largest validated byte reduction does not close the gap.
