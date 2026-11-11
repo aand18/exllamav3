@@ -49,3 +49,18 @@ next campaign plan rather than a change to this script.
 
 Recorded as the standing method: **`cmb` and `distinct` decide a systems arm; `spec_primary.py`
 decides a drafting arm; tok/s alone decides neither.**
+
+## Runs re-scored
+
+`t66A-static-262k-20261110-172259`, `t66B-dynamic-262k-20261110-174018`,
+`t66C-dynamic-262k-20261110-175726`, `t66D-static-262k-20261110-181449` (T66);
+`t68E-cs40-mcs381-20261110-211419`, `t68H-cs40-mcs381-20261110-215158`,
+`t68J-cs40-mcs381-20261110-221041`, `t69A-cs40-mcs373-20261110-223004`,
+`t69B-cs40-mcs373-20261110-224657` (T69); `t70A-ndt4-262k-20261111-055730`,
+`t70D-ndt4-262k-20261111-061433`, `t70E-ndt4-262k-20261111-070757`,
+`t70B-ndt3-262k-20261111-063421`, `t70C-ndt3-262k-20261111-065103` (T70);
+`t61A-bf16-131k-20261110-065833`, `t61D-bf16-131k-20261110-074755`,
+`t61B-exl3-131k-20261110-071514`, `t61C-exl3-131k-20261110-073132` (T61).
+
+Every one was re-scored with the corrected gate in this session; the script and its 13 tests are the
+deliverable, and the table above is that re-score.
