@@ -208,7 +208,8 @@ the RAM floor is the component shrunk instead.
 - **The tested arms are exhausted; "decode is exhausted" is too wide (T77).** `cmb` is
   **33.9 µs per distinct CPU expert** (T66: 1 014 545 layer-rounds, slope +37 µs, monotone 4→0.047 …
   20→0.807 ms), i.e. 20.5 × 33.9 ≈ 0.69 ms/layer of DDR5 read against 0.27 ms of GPU work
-  (`ker` 0.118 + `mixer` 0.101 + `sub` 0.047). Both factors are closed by measurement: experts
+  (`ker` 0.118 + `mixer` 0.101 + `sub` 0.047). **No family below is empirically closed.** What is
+  closed is the *decision* to spend more runs on these doses: experts
   **per layer** — placement (T66 **inconclusive**, and its dynamic arm was handicapped), +3 experts
   (T62, +0.28 % inside spread), +8 (T69 **inconclusive**: `cmb` 0.676 → 0.679), pinning 24→30 chunks
   (T67, mechanism flat) — **not detected at these doses**, which is a poor-ROI decision, not an

@@ -237,3 +237,30 @@ def test_a_real_loss_withdraws():
     d = {c: (100, 100, 80, 80) for c in PRIMARY_WEIGHTS}   # -20 %, past the 2 % floor
     code, out = evaluate(_rows(d), "A", "B")
     assert out["verdict"] == "withdraw"
+
+
+def test_combined_arm_uncertainty_not_the_maximum():
+    """The ratio's interval is sqrt(a^2 + t^2); taking max(a, t) understates two noisy arms."""
+    noisy = _rows({c: (100, 110, 100, 110) for c in PRIMARY_WEIGHTS})   # both arms identical spread
+    _, out = noisy_ = evaluate(noisy, "A", "B")
+    a = out["primary"]["spread_control"] or 0.0
+    t = out["primary"]["spread_treat"] or 0.0
+    f = out["primary"]["floor"] - 1.0
+    assert abs(f - max(0.02, (a ** 2 + t ** 2) ** 0.5)) < 1e-9, (f, a, t)
+
+
+def test_category_guard_uses_combined_variance_and_reciprocal_form():
+    rows = _rows({c: (100, 104, 110, 114) for c in PRIMARY_WEIGHTS})     # 10 % gain, some jitter
+    _, out = evaluate(rows, "A", "B")
+    for c, line in out["category_guard"].items():
+        # reciprocal form: the guard is below 1, never 1 - spread
+        assert 0.0 < line <= 1.0
+
+
+def test_a_resolved_loss_is_the_reciprocal_of_the_pass_bound():
+    """Symmetric on a ratio scale: a +f pass bound corresponds to a 1/(1+f) loss bound."""
+    d = {c: (100, 100, 86, 86) for c in PRIMARY_WEIGHTS}   # -14 %
+    _, out = evaluate(_rows(d), "A", "B")
+    f = out["primary"]["floor"] - 1.0
+    assert out["verdict"] == "withdraw"
+    assert 0.86 <= 1.0 / (1.0 + f) + 0.02                   # within the stated bound

@@ -109,7 +109,7 @@ additional expert) is a re-analysis of those CSVs, not a new run.
 
 ## 6. Verdicts re-scored under the corrected floor
 
-| arm | ratio | floor | verdict | why |
+| arm | ratio | floor (as `1 + f`) | verdict | why |
 |---|---:|---:|---|---|
 | T70 `-ndt 3` | 0.9657 | 1.152 | **WITHDRAW** | acceptance −0.423 (material loss) |
 | T61 exl3 drafter | 1.0033 | 1.135 | **WITHDRAW** | acceptance −0.205 (material loss) |
@@ -117,6 +117,11 @@ additional expert) is a re-analysis of those CSVs, not a new run.
 | T66 dynamic | 1.0284 | 1.336 | INCONCLUSIVE | inside resolution; arm was also handicapped |
 
 None flips, and now each verdict names the rule that produced it.
+
+Conventions in this table, so the two thresholds cannot be read as one: the **floor** column is
+`1 + f`, the pass bound on the ratio. A **resolved loss** is the reciprocal bound, `1 / (1 + f)`,
+because a ratio scale is not symmetric — at `f = 0.152` a pass needs ≥1.152 and a loss is resolved at
+≤0.868, not ≤0.848. Category guards use the same reciprocal form.
 
 ## 7. What the campaign should stop saying
 
