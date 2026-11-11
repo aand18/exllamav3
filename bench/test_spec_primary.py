@@ -171,3 +171,69 @@ def test_a_category_vetoes_only_past_its_own_noise():
     d["Agentic; curl"] = (100, 100, 90, 90)          # -10 %: past it
     _, out = evaluate(_rows(d), "A", "B")
     assert out["verdict"] == "withdraw"
+
+
+# --- the defects a second external review found in the first repair (T78) -----------------------
+
+def _acc_rows(tok, acc, tokens=None, seconds=None, tag="A", rid="A1"):
+    """One run per category with optional tokens/seconds columns."""
+    rows = []
+    for i, c in enumerate(PRIMARY_WEIGHTS):
+        r = {"tag": tag, "run_id": rid, "category": c,
+             "arm": "DFlash (greedy)", "tok_s": str(tok[i] if isinstance(tok, list) else tok),
+             "acc": str(acc)}
+        if tokens is not None:
+            r["tokens"] = str(tokens[i])
+            r["seconds"] = str(seconds[i])
+        rows.append(r)
+    return rows
+
+
+def test_spread_uses_the_same_estimator_as_the_effect():
+    """A weighted mean of category rates is NOT a cross-category ratio of sums: with categories of
+    different durations the two differ, and the spread must measure the gated quantity."""
+    import spec_primary as sp
+    # two categories at different rates and durations: ratio-of-sums differs from mean-of-rates
+    runs = []
+    for rid in ("A1", "A2"):
+        runs.append({"tag": rid, "run_id": rid, "category": "Agentic; code", "arm": "DFlash (greedy)",
+                     "tok_s": "100", "acc": "2.0", "tokens": "1000", "seconds": "10"})
+        runs.append({"tag": rid, "run_id": rid, "category": "Coding", "arm": "DFlash (greedy)",
+                     "tok_s": "10", "acc": "2.0", "tokens": "10", "seconds": "1"})
+        runs.append({"tag": rid, "run_id": rid, "category": "Agentic; curl", "arm": "DFlash (greedy)",
+                     "tok_s": "50", "acc": "2.0", "tokens": "50", "seconds": "1"})
+    primary = sp.primary_from_rows(runs)
+    # ratio of sums: tokens weighted 5/4/3 -> (5*1000 + 4*50 + 3*10) / (5*10 + 4*1 + 3*1)
+    assert abs(primary - (5000 + 200 + 30) / (50 + 4 + 3)) < 1e-9
+
+
+def test_basis_requires_complete_columns_not_any():
+    import spec_primary as sp
+    rows = _acc_rows([100, 100, 100], "2.0", tokens=[1000, 1000, 1000], seconds=[10, 10, 10])
+    assert "ratio of sums" in sp.basis(rows)
+    rows[1].pop("seconds")                      # one row incomplete
+    assert "mean of per-run rates" in sp.basis(rows)
+
+
+def test_mixed_bases_are_refused():
+    a = (_acc_rows([100, 100, 100], "2.0", tokens=[1000, 1000, 1000], seconds=[10, 10, 10],
+                   tag="A", rid="A1")
+         + _acc_rows([100, 100, 100], "2.0", tokens=[1000, 1000, 1000], seconds=[10, 10, 10],
+                     tag="A2", rid="A2"))
+    b = (_acc_rows([100, 100, 100], "2.0", tag="B", rid="B1")          # no columns at all
+         + _acc_rows([100, 100, 100], "2.0", tag="B2", rid="B2"))
+    code, out = evaluate(a + b, "A", "B")
+    assert code == 2 and any("different bases" in p for p in out["problems"]), out.get("problems")
+
+
+def test_a_negative_point_estimate_inside_the_floor_does_not_withdraw():
+    """Half of true nulls land below 1.0; that is not evidence of a regression."""
+    d = {c: (100, 100, 99, 99) for c in PRIMARY_WEIGHTS}   # -1 %, floor will be >= 2 %
+    code, out = evaluate(_rows(d), "A", "B")
+    assert out["verdict"] == "inconclusive", out
+
+
+def test_a_real_loss_withdraws():
+    d = {c: (100, 100, 80, 80) for c in PRIMARY_WEIGHTS}   # -20 %, past the 2 % floor
+    code, out = evaluate(_rows(d), "A", "B")
+    assert out["verdict"] == "withdraw"

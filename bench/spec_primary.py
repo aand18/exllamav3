@@ -3,29 +3,42 @@
 
     primary = workload-weighted tok_s over {Agentic; code (5), Agentic; curl (4), Coding (3)}
 
-Gate (revised 2026-11-11, T72 §5 — the earlier form is described below and was defective):
+Gate (revised twice: T73, then T77/T78 after two external reviews found the first repair wanting).
+This is the CURRENT rule; the superseded forms are listed below so the older reports can still be read.
 
-    spread   = 1.96 x SEM / mean of the per-run primary means, each run weighted 5:4:3
-               (the old rule used (max-min)/mean, which GREW with the number of replicates and so
-               raised the pass floor every time a repeat was added: 1.039 -> 1.045 -> 1.050 across
-               T66-T70. The mean's standard error shrinks as 1/sqrt(N), which is the quantity a
-               pass floor should track.)
-    floor    = max(0.02, spread)
+    primary  = 5:4:3 weighted tok/s over {Agentic; code, Agentic; curl, Coding},
+               as sum(tokens)/sum(seconds) when every row of a run carries both columns,
+               else the 5:4:3 weighted mean of the per-category rates. `basis()` says which, and
+               the gate REFUSES to compare two arms measured on different bases.
+    run_value = the same function (`primary_from_rows`) applied per run - the effect and its
+               resolution must be the same quantity.
+    spread   = t(0.975, n-1) * SEM / mean over the per-run values
+    floor    = max(0.02, sqrt(spread_control^2 + spread_treat^2))   # variances add for a ratio
     pass     = primary ratio >= 1 + floor
-               AND every primary category >= 1 - max(0.02, that category's own spread)
-               AND acceptance: |delta| <= 0.05 for a kernel arm, or delta >= -0.05 for a drafting
-                   arm (`--drafting`) whose point IS acceptance
-               AND full-corpus ratio >= 1.00 with no non-trivial category < 0.97
-    withdraw = primary ratio < 1.00, or any primary category past its own noise line
+               AND every primary category >= 1 / (1 + its own combined spread)
+               AND acceptance: |delta| <= 0.05 (kernel arm) or delta >= -0.05 (`--drafting`)
+               AND corpus ratio >= 1.00 with no non-trivial category < 0.97
+    withdraw = primary ratio <= 1 / (1 + floor)      # a RESOLVED loss, not any negative point
+               or a material acceptance loss on a drafting arm
+               or a primary category below its own noise line
+    resolution = the floor, printed with the verdict: at n=2-3 this is 7-26 %, i.e. the data
+               cannot support a 2 % claim, and the output says so instead of looking decisive.
 
-Two defects the revision removes, both of which produced wrong verdicts in practice: a fixed
-per-category line at 1.00 (with 3-5 prompts per category and 3-7 % jitter, a true +2.5 % uniform gain
-failed about half the time) and a two-sided acceptance band that made every genuine drafting
-improvement unpassable.
+Defects the revisions remove, each of which produced a wrong verdict in practice:
+  * a fixed per-category line at 1.00 / 0.98 over 3-5-prompt buckets (a true +2.5 % gain failed
+    ~half the time);
+  * a two-sided acceptance band, which made every genuine drafting improvement unpassable;
+  * a range-based floor that grew with the number of replicates, so more evidence made the gate
+    stricter;
+  * 1.96*SEM, which at n=2 equals 0.98*range - the statistic it replaced, relabelled;
+  * a spread computed as a weighted mean of category rates while the effect was a ratio of sums;
+  * `basis()` inferred from `any()` while the estimator required `all()`, so mixed bases slipped
+    through the check meant to refuse them;
+  * `withdraw` on any negative point estimate, which let ordinary noise prove a regression.
 
-Superseded rule, kept for reading the earlier reports: pass = ratio >= max(1.02, 1 + range/mean) AND
-every category >= 1.00 AND |acc delta| <= 0.05 AND corpus >= 1.00 AND no category < 0.97;
-withdraw = ratio < 1.00 or any category < 0.98.
+Superseded: pass = ratio >= max(1.02, 1 + range/mean) AND every category >= 1.00 AND
+|acc delta| <= 0.05 AND corpus >= 1.00 AND no category < 0.97; withdraw = ratio < 1.00 or a
+category < 0.98.
 
 Input is `results/spec_decode.csv` as the harness writes it (one row per category per arm), with two
 or more runs per arm so the same-arm spread is measurable.
@@ -122,26 +135,67 @@ def rate(rows, key: str) -> float | None:
 
 
 def throughput(rows) -> float | None:
-    """tok/s for a set of rows: a ratio of sums where the CSV makes it possible.
+    """tok/s for a set of rows: a ratio of sums where the rows allow it, else the mean of rates.
 
-    `sum(tokens) / sum(seconds)` is the quantity a throughput claim is about. Where those columns are
-    absent (every pass before the harness emitted them) this falls back to the mean of the per-run
-    rates, which is an average of ratios and weights a short prompt the same as a long one; the
-    fallback is reported by `basis()` so a report can say which one it used.
+    A ratio of sums needs the SAME rows to carry both numbers - collecting token and second lists
+    independently (as an earlier version did) lets two different row subsets be divided by each
+    other. The pairing is therefore per row, and any row missing either field forces the whole
+    estimate onto the mean-of-rates path, where the basis is reported.
     """
-    tk = [float(r["tokens"]) for r in rows if r.get("tokens") not in (None, "")]
-    sc = [float(r["seconds"]) for r in rows if r.get("seconds") not in (None, "")]
-    if tk and sc and sum(sc) > 0:
-        return sum(tk) / sum(sc)
+    pairs = [(float(r["tokens"]), float(r["seconds"])) for r in rows
+             if r.get("tokens") not in (None, "") and r.get("seconds") not in (None, "")]
+    if pairs and len(pairs) == len(rows) and sum(sec for _, sec in pairs) > 0:
+        return sum(tok for tok, _ in pairs) / sum(sec for _, sec in pairs)
     return rate(rows, "tok_s")
 
 
+def primary_from_rows(rows) -> float | None:
+    """The 5:4:3 primary for ONE run: a ratio of sums across categories, or the weighted mean of
+    their rates.
+
+    Why this exists as its own function: the effect and its uncertainty must be the same quantity.
+    An earlier version computed the primary as a cross-category ratio of sums but the per-run spread
+    as a weighted mean of the categories' rates - calling throughput() inside each category fixes the
+    estimator within a category, not across categories, and the two differ whenever category rates
+    and durations differ. Kimi caught this after the first repair was called complete.
+    """
+    cats = {}
+    complete = True
+    for c in PRIMARY_WEIGHTS:
+        rs = [r for r in rows if r.get("category") == c
+              and any(r.get("arm", "").startswith(k) for k in DRAFT_ARMS)]
+        if not rs:
+            continue
+        if any(r.get("tokens") in (None, "") or r.get("seconds") in (None, "") for r in rs):
+            complete = False
+        cats[c] = rs
+    if not cats:
+        return None
+    if complete:
+        num = sum(PRIMARY_WEIGHTS[c] * sum(float(r["tokens"]) for r in rs) for c, rs in cats.items())
+        den = sum(PRIMARY_WEIGHTS[c] * sum(float(r["seconds"]) for r in rs) for c, rs in cats.items())
+        if den > 0:
+            return num / den
+    wsum = sum(PRIMARY_WEIGHTS[c] for c in cats)
+    rates = {c: rate(rs, "tok_s") for c, rs in cats.items()}
+    if any(v is None for v in rates.values()):
+        return None
+    return sum(PRIMARY_WEIGHTS[c] * rates[c] for c in cats) / wsum
+
+
 def basis(rows) -> str:
-    """Which throughput estimator `throughput` used, for the report to quote."""
-    if any(r.get("tokens") not in (None, "") for r in rows) and \
-       any(r.get("seconds") not in (None, "") for r in rows):
-        return "ratio of sums (tokens/seconds)"
-    return "mean of per-run rates (no tokens/seconds columns in this CSV)"
+    """Which estimator the primary will use for these rows, by the same completeness rule.
+
+    The guard must not infer completeness from `any()`: two arms can both be labelled
+    "ratio of sums" while only one actually has complete columns, and the mixed comparison the check
+    exists to refuse goes through. If any row lacks either field, the estimator is the mean of rates.
+    """
+    if not rows:
+        return "no rows"
+    complete = all(r.get("tokens") not in (None, "") and r.get("seconds") not in (None, "")
+                   for r in rows)
+    return "ratio of sums (tokens/seconds)" if complete else \
+        "mean of per-run rates (tokens/seconds missing on at least one row)"
 
 
 def ratio(control: float, treat: float) -> float | None:
@@ -227,18 +281,14 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
         vals = []
         for rid in runs:
             run_rows = [r for r in pr if r["run_id"] == rid]
-            # the same 5:4:3 weighting the primary uses: an unweighted mean here measured a
-            # different quantity than the one being gated
-            got = {}
-            for c in PRIMARY_WEIGHTS:
-                # same estimator as the primary: a ratio of sums where the columns exist, so the
-                # treatment effect and its resolution are measured the same way (T77 - they were not)
-                v = throughput([r for r in run_rows if r["category"] == c])
-                if v:
-                    got[c] = v
-            if got:
-                ws = sum(PRIMARY_WEIGHTS[c] for c in got)
-                vals.append(sum(PRIMARY_WEIGHTS[c] * got[c] for c in got) / ws)
+            # the SAME function the effect uses. Calling throughput() inside each category fixes the
+            # estimator within a category, not across categories: a weighted mean of category rates
+            # is not a cross-category ratio of sums, and the effect and its resolution ended up being
+            # different quantities (caught by a second external review after the first repair was
+            # reported as complete).
+            v = primary_from_rows(run_rows)
+            if v:
+                vals.append(v)
         if len(vals) < 2:
             return None
         m = sum(vals) / len(vals)
@@ -316,7 +366,7 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
     cat_lines = {}
     for c in cats:
         sp = max(FLOOR_MIN, category_spread(c, control) or 0.0, category_spread(c, treat) or 0.0)
-        cat_lines[c] = 1.0 - sp
+        cat_lines[c] = 1.0 / (1.0 + sp)
     # How small an effect this arm pair could see at all, printed with the verdict. At two or three
     # runs the t interval is 7-26 % wide, so a 2 % claim is simply not supported by the data; saying
     # that in the output is more useful than a verdict that reads as decisive. This number is the
@@ -335,7 +385,10 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
     # true nulls land below 1.0. Withdrawing on p_ratio < 1.0 made the gate asymmetric in the worst
     # way - a coin flip could "prove" a regression, while a real win needed the full floor (T77).
     # A loss now withdraws only when it clears the same interval, i.e. p_ratio <= 1 - floor.
-    real_loss = bool(p_ratio is not None and p_ratio <= 1.0 - floor)
+    # A ratio is not symmetric: a floor of +20 % corresponds to 1/1.2 = 0.833 as a loss, not 0.80.
+    # Using 1 - floor made a loss easier to prove than a gain, the same asymmetry as before in the
+    # other direction (T78).
+    real_loss = bool(p_ratio is not None and p_ratio <= 1.0 / (1.0 + floor))
     withdraw = real_loss or acc_loss or any(cats[c]["ratio"] < cat_lines[c] for c in cats)
 
     # Acceptance: two-sided for kernel/placement arms, one-sided for arms whose point IS acceptance.

@@ -209,19 +209,26 @@ the RAM floor is the component shrunk instead.
   **33.9 µs per distinct CPU expert** (T66: 1 014 545 layer-rounds, slope +37 µs, monotone 4→0.047 …
   20→0.807 ms), i.e. 20.5 × 33.9 ≈ 0.69 ms/layer of DDR5 read against 0.27 ms of GPU work
   (`ker` 0.118 + `mixer` 0.101 + `sub` 0.047). Both factors are closed by measurement: experts
-  **per layer** — placement (T66), +3 experts (T62), +8 (T69), pinning 24→30 chunks (T67), all zero;
-  experts **per token** — `-ndt 3` is `WITHDRAW` (T70, primary 0.9657, Agentic-code −5.82 %, 4-row
-  window verified at 100 % of drafted rounds), which closes *that* arm, not better acceptance at the
-  same five-row cost. At fixed round cost the Strata gap needs **3.62–3.87 accepted of 4** (57 tok/s at
+  **per layer** — placement (T66 **inconclusive**, and its dynamic arm was handicapped), +3 experts
+  (T62, +0.28 % inside spread), +8 (T69 **inconclusive**: `cmb` 0.676 → 0.679), pinning 24→30 chunks
+  (T67, mechanism flat) — **not detected at these doses**, which is a poor-ROI decision, not an
+  empirical closure of the family; experts **per token** — `-ndt 3` is **withdrawn because its
+  acceptance loss is material** (−0.423) with a negative throughput point estimate whose exact size
+  is unresolved at the floor; that withdraws *the arm*, not better acceptance at the same five-row
+  cost. At fixed round cost the Strata gap needs **3.62–3.87 accepted of 4** (57 tok/s at
   2.88 tokens/round ⇒ 50.5 ms/round ⇒ 93 tok/s needs acc ≈ 3.70); a 25 ms round is not portable.
-  The ladder is **not linear** (marginal µs/expert: 34 → 36 → 44 → **75.5** at 16→20), so 33.9 is an
-  average, not a constant — and the only interventional test (T69, +8 experts, 3 µs) did not reproduce
-  the ladder, which is why the count lever is closed while the **payload** lever (bytes) is not.
+  The ladder is **not linear** (marginal µs/expert: 34 → 36 → 44 → **75.5** at 16→20), so 33.9 µs is a
+  ratio of medians, an average intensity at best — not a causal marginal coefficient. The only
+  interventional test (T69, +8 experts, `cmb` +3 µs) did **not** reproduce the ladder, so the ladder
+  does not identify what changing count does; and **no intervention has yet changed bytes per expert
+  at fixed count**, so the payload hypothesis is *untested*, not validated.
 - **The 2 bpw cold-CPU region is legal under STATIC placement only (T77).** Dynamic promotion copies
   with a single `expert_bytes` and same-shaped destinations, so a 2 bpw cold expert cannot be promoted
   into a 3.18 bpw GPU slot; the `spares` offset also mixes layouts. Build recipe must assert
-  `EXL3_MOE_CPU_SWAP=0` and `EXL3_MOE_CPU_PROMOTE=0`, and project **≈26 % lower round latency ≈ 35 %
-  higher round rate**, i.e. low-to-mid 70s end-to-end — not 93.
+  `EXL3_MOE_CPU_SWAP=0` and `EXL3_MOE_CPU_PROMOTE=0`. **If** `cmb` scales with payload, acceptance and
+  routing stay comparable and fixed overhead behaves as assumed, the model predicts **≈26 % lower
+  round latency ≈ 35 % higher round rate**, i.e. low-to-mid 70s end-to-end — not 93. Those are
+  pre-registered predictions, not established implications.
 - **`-mcs N` names the CPU side** (`model_init.py:68`, "run the TAIL N routed experts"): at split 381
   the GPU holds 131 experts/layer and the CPU 381. One expert ≈ **1.83 MB**; a split unit in
   `size_check` is 48 experts' worth ≈ 87.7 MiB of trunk.
