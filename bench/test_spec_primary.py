@@ -6,6 +6,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import spec_primary  # noqa: E402
 from spec_primary import PRIMARY_WEIGHTS, evaluate  # noqa: E402
 
 
@@ -49,6 +50,17 @@ def test_a_single_run_per_arm_cannot_be_judged():
             if r["run_id"] in ("A1", "B1")]
     code, out = evaluate(rows, "A", "B")
     assert code == 2 and any("fewer than two runs" in p for p in out["problems"])
+
+
+def _rows_acc(arms, acc_c="2.0", acc_t="2.0"):
+    """Same shape as _rows but with per-arm acceptance, for the drafting-arm guard."""
+    rows = []
+    for cat, (c1, c2, t1, t2) in arms.items():
+        for tag, rid, v, a in (("A1","A1",c1,acc_c), ("A2","A2",c2,acc_c),
+                               ("B1","B1",t1,acc_t), ("B2","B2",t2,acc_t)):
+            rows.append({"tag": tag, "run_id": rid, "category": cat,
+                         "arm": "DFlash (greedy)", "tok_s": str(v), "acc": str(a)})
+    return rows
 
 
 def _arm(cat, rid, tag, tok_s, acc="2.0", arm="DFlash (greedy)"):
@@ -120,3 +132,42 @@ if __name__ == "__main__":
             failures += 1
             print(f"FAIL {t.__name__}: {e}")
     sys.exit(1 if failures else 0)
+
+
+# --- the gate's own defects (T72 §5), each pinned by a test -------------------------------------
+
+def test_adding_a_repeat_does_not_raise_the_floor():
+    """The old range-based spread grew with N, so a third replicate RAISED the pass floor."""
+    two = _rows({c: (100, 100, 110, 110) for c in PRIMARY_WEIGHTS})
+    _, out2 = evaluate(two, "A", "B")
+    three = two + [_arm(c, "A3", "A3", 100.0) for c in PRIMARY_WEIGHTS] \
+               + [_arm(c, "B3", "B3", 110.0) for c in PRIMARY_WEIGHTS]
+    _, out3 = evaluate(three, "A", "B")
+    assert out3["primary"]["floor"] <= out2["primary"]["floor"] + 1e-9
+    assert out3["verdict"] == "pass"
+
+
+def test_a_drafting_arm_may_improve_acceptance():
+    """|delta acc| <= 0.05 barred every genuine drafting improvement from passing."""
+    rows = _rows_acc({c: (100, 100, 110, 110) for c in PRIMARY_WEIGHTS}, acc_c="1.80", acc_t="2.30")
+    _, kernel = evaluate(rows, "A", "B", drafting=False)
+    assert kernel["verdict"] != "pass", "a kernel arm still may not move acceptance"
+    _, draft = evaluate(rows, "A", "B", drafting=True)
+    assert draft["acc"]["ok"] is True and draft["verdict"] == "pass"
+
+
+def test_a_drafting_arm_may_not_lose_acceptance():
+    rows = _rows_acc({c: (100, 100, 110, 110) for c in PRIMARY_WEIGHTS}, acc_c="2.30", acc_t="1.80")
+    _, out = evaluate(rows, "A", "B", drafting=True)
+    assert out["acc"]["ok"] is False and out["verdict"] != "pass"
+
+
+def test_a_category_vetoes_only_past_its_own_noise():
+    """A 3-prompt category jitters 3-7 %; the fixed 0.98 line vetoed real wins."""
+    d = {c: (100, 100, 110, 110) for c in PRIMARY_WEIGHTS}
+    d["Agentic; curl"] = (100, 100, 99, 99)          # -1 %: inside any noise floor
+    _, out = evaluate(_rows(d), "A", "B")
+    assert out["verdict"] == "pass", out
+    d["Agentic; curl"] = (100, 100, 90, 90)          # -10 %: past it
+    _, out = evaluate(_rows(d), "A", "B")
+    assert out["verdict"] == "withdraw"
