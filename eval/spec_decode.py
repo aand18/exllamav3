@@ -135,12 +135,17 @@ def measure(generator, tokenizer, sampler, max_new_tokens, stats_sink = None):
 
     aggregated = {}
     for category, cat_results in all_results.items():
-        # Ratio of sums, not an average of rates. The previous form,
-        #     sum(gen_tps * new_tokens) / sum(new_tokens)
-        # is sum(N^2 / T) / sum(N) because gen_tps already carries N in its numerator: it weights each
-        # prompt quadratically by how many tokens it happened to generate, and by Jensen it reads
-        # strictly above the true throughput sum(N) / sum(T). A prompt that runs long before EOS was
-        # therefore worth N_i^2 of the category's number.
+        # Ratio of sums, not an average of rates.
+        #
+        # The previous form was sum(gen_tps * new_tokens) / sum(new_tokens). Because
+        # gen_tps = new_tokens / time_generate already carries N in its numerator, that is
+        #     sum(N^2 / T) / sum(N)
+        # - each prompt weighted QUADRATICALLY by how many tokens it happened to generate before EOS.
+        # By Jensen a mean of rates reads above the true throughput, so every absolute tok/s this
+        # harness printed was inflated, by a different amount per category (it depends on how unevenly
+        # the prompts ran). Ratios between two arms share most of the bias, which is why no verdict
+        # flipped when it was fixed - but no pre-fix absolute is quotable, and the numbers in
+        # tasks/T50-T70 were produced with it.
         total_tokens = sum(m["new_tokens"] for m in cat_results)
         total_seconds = sum(m["time_generate"] for m in cat_results)
         tps = (total_tokens / total_seconds) if total_seconds else 0.0
@@ -557,9 +562,14 @@ def main(args):
 
     print()
     print(tabulate(rows, headers = headers, tablefmt = "pipe", colalign=("left", *["right"] * (len(headers) - 1)),))
-    # Machine-readable per-category counts, so a ratio of sums stays computable downstream. The
-    # rendered table shows a rate, and a rate is an average of ratios: the harness needs the numerator
-    # and denominator to weight a long prompt above a short one, which is what a throughput claim is.
+    # Machine-readable per-category counts, so a ratio of sums stays computable downstream.
+    #
+    # Why the extra lines instead of another table column: the rendered table shows a rate, and a rate
+    # is an average of ratios - the weighting is already baked in and cannot be undone from it. A
+    # throughput claim needs the numerator and denominator separately, so that a long prompt can be
+    # weighted above a short one. run_pass.ps1 parses these into tokens/seconds columns of
+    # spec_decode.csv; passes before this line existed carry no such columns, which is why
+    # spec_primary.py reports which basis it used.
     for name, result in r.items():
         for category, res_cat in sorted(result.items()):
             if res_cat.get("tokens") is None or res_cat.get("seconds") is None:

@@ -1106,10 +1106,16 @@ class BlockSparseMLP_CPU:
                 buf = self._distinct_buf = torch.empty(
                     (64, selected_experts.shape[1]), dtype = torch.int64, pin_memory = True)
             buf[:bsz].copy_(selected_experts, non_blocking = True)
-            # Only the drafted window is counted. A rows=1 row is either the undrafted baseline arm or
-            # a warm-up pass, and pooling it with the drafted rows produced the campaign's worst number
-            # (an all-rows median of 8 CPU experts where the drafted window reads 21, T66/T74). One
-            # filter here beats every downstream reminder to separate the two.
+            # Only the drafted window is counted (bsz > 1).
+            #
+            # Why: a rows=1 round is either the undrafted baseline arm or a warm-up pass, and those
+            # rows used to land in the same CSV as the drafted ones. They outnumbered them 4:1
+            # (97,920 of 124,991 layer-rounds), so the pooled median was the baseline's - "median 8
+            # distinct CPU experts per layer" - while the drafted window actually reads 21. Every
+            # downstream analysis inherited that number, including a reviewer's model of the
+            # bottleneck, until the rows were separated. Filtering here means no future reader has to
+            # remember to separate them; the harness also stops running the baseline arm by default
+            # (run_pass.ps1 -nbl), and this is the second, independent guard.
             if bsz > 1:
                 round_prof.enqueue_distinct(self.key, buf, self.cpu_split_first, bsz,
                                             selected_experts.shape[1], round_prof.current_round())

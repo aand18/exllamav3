@@ -335,11 +335,14 @@ if ($SkipPrefill)    { $argsList += "-spf" }
 if ($SkipGen)        { $argsList += "-sg" }
 if ($SkipWarmup)     { $argsList += "-swu" }
 
-# spec_decode runs the whole 22-prompt undrafted Baseline arm (rows=1) before the drafted arm unless
-# told otherwise. It is a third of the pass's GPU time, spec_primary.py ignores it (it filters to the
-# DRAFT arms), and it pollutes every ROUND_PROF / distinct CSV with rows=1 layer-rounds - which is
-# exactly how T58's 'median 8 distinct experts' came to be an all-rows figure when the drafted window
-# was 21. Baseline is skipped by default and asked for explicitly with -WithBaseline.
+# spec_decode runs a full 22-prompt UNDRAFTED Baseline arm (rows=1) before the drafted arm unless told
+# otherwise. It is skipped by default for three measured reasons:
+#   1. it is roughly a third of the pass's GPU time, and
+#   2. spec_primary.py ignores it entirely (it filters to the DRAFT arms), and
+#   3. its rows=1 rounds shared a profiler CSV with the drafted rows=5 rounds and outnumbered them 4:1
+#      (97,920 of 124,991 layer-rounds), which is how this campaign came to report 'median 8 distinct
+#      CPU experts per layer' when the drafted window reads 21. Every analysis downstream inherited it.
+# Ask for it explicitly with -WithBaseline when the undrafted ratio is itself the measurement.
 if ($Runner -eq "spec_decode" -and -not $WithBaseline) { $argsList += "-nbl" }
 
 # --- Environment -------------------------------------------------------------------------------
@@ -680,7 +683,9 @@ if (-not (Test-Path $sdCsv)) {
     Set-Content -Path $sdCsv -Value "tag,run_id,category,arm,tok_s,ratio,acc,draft,tokens,seconds" -Encoding ASCII
 }
 foreach ($r in $sdRows) {
-    # tokens/seconds when spec_decode.py emitted a CAT line for this category+arm, so a ratio of sums
+    # tokens/seconds from the CAT line for this category+arm: the table carries only a rate (an
+    # average of ratios, weighting already baked in), so a ratio of sums is unrecoverable from it.
+    # Blank when a pass predates these columns, which spec_primary.py reports as its `basis`.
     # is computable downstream; empty otherwise (every pass before these columns existed)
     $cs = $catStats["$($r[0])|$($r[1])"]
     $tkStr = if ($null -ne $cs) { [string]$cs[0] } else { "" }

@@ -271,6 +271,13 @@ def _autocorr_cover(layer, cur, rows):
 
 
 def _finalize_distinct():
+    """Count this sampled round's selections, after ONE host sync, outside every phase bracket.
+
+    Why outside: the `sub`/`ker`/`cmb` brackets are the campaign's measurement instrument and they
+    are trusted to 0.4 %. An earlier version of this counter copied the selection inside the `sub`
+    bracket and inflated that phase by 3.5x (0.014 -> 0.049 ms), which then propagated into a
+    published table. Instrumentation that perturbs what it measures is worse than none.
+    """
     global _pending, _distinct
     if not _pending:
         return
@@ -291,8 +298,12 @@ def _finalize_distinct():
 def write_dump(path = None, rows = None):
     """T65 1b: the raw per-round selections as an npz, so a pool policy can be simulated on them.
 
-    Rows differ per layer-round (rows=1..5 -> 10..50 picks), so the array is padded to a fixed
-    width with -1 and `meta` carries each record's real length.
+    Why the padding: a layer-round yields `rows x topk` picks and `rows` varies (10..50), so the
+    records are ragged. `np.array` on a ragged list raises, and because this writer runs from an
+    atexit hook the exception was swallowed - the file was created, stayed 0 bytes, and the pass that
+    produced it looked successful. That cost a 17-minute GPU pass whose only artifact was an empty
+    file. Padded to a fixed width with -1, with each record's real length in `meta`, so a reader never
+    has to guess.
     """
     path = path or _DUMP_PATH
     rows = _dump if rows is None else rows

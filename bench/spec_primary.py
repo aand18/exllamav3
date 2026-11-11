@@ -28,8 +28,13 @@ every category >= 1.00 AND |acc delta| <= 0.05 AND corpus >= 1.00 AND no categor
 withdraw = ratio < 1.00 or any category < 0.98.
 
 Input is `results/spec_decode.csv` as the harness writes it (one row per category per arm), with two
-or more runs per arm so the same-arm spread is measurable. Every ratio is a ratio of sums, never an
-average of per-run averages.
+or more runs per arm so the same-arm spread is measurable.
+
+Basis, stated because it was once claimed and not true: `throughput()` takes a **ratio of sums**
+(tokens/seconds) only when the CSV carries those columns; otherwise it falls back to the mean of
+per-run rates, which is an average of ratios. `basis()` reports which one was used and the verdict
+carries it. A docstring promising a property the code does not compute survived three reviews of this
+file before an external one caught it - the basis belongs in the output, not in the prose.
 
     bench/spec_primary.py --csv results/spec_decode.csv --control t39-A --treat t39-B
     bench/spec_primary.py --csv ... --control ... --treat ... --drafting   # drafter/window arms
@@ -65,7 +70,14 @@ T975 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8
 
 
 def t975(df: int) -> float:
-    """Two-sided 95 % t quantile for df degrees of freedom (table, interpolated at the top)."""
+    """Two-sided 95 % t quantile for df degrees of freedom (table, interpolated at the top).
+
+    Why a t quantile and not 1.96: with two values, sd = |v1 - v2| / sqrt(2), so 1.96 * sd / sqrt(2)
+    = 0.98 * |v1 - v2| - i.e. the normal quantile reproduced the range statistic it was meant to
+    replace (measured ratio 0.980 at n=2, 0.571 at n=3). A floor that is supposed to shrink with n
+    has to start from an interval that admits how little two runs say: t = 12.71 at df=1, 4.30 at
+    df=2. This mistake shipped once and was caught by an external review, not by the tests.
+    """
     if df < 1:
         return float("inf")
     if df in T975:
@@ -172,9 +184,12 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
         return 2, {"problems": problems, "categories": cats, "secondary": others}
 
     wsum = sum(PRIMARY_WEIGHTS.values())
-    # The primary is a workload-weighted throughput. Where the CSV carries tokens and seconds it is a
-    # ratio of sums over the weighted prompt counts; otherwise it degrades to a weighted mean of the
-    # per-category rates, which is a different (averaging-of-ratios) quantity. `basis` says which.
+    # The primary is a workload-weighted THROUGHPUT, which is sum(tokens)/sum(seconds) over the
+    # weighted prompt counts - not the weighted mean of three per-category rates. Those differ
+    # whenever a category's prompts run to different lengths, and the campaign reported the second
+    # under the name of the first for weeks. Where the columns are missing (every pass before they
+    # were emitted) the mean of rates is used and `basis` says so, so the next reader is not misled
+    # by the number's provenance.
     def primary_of(prefix, arm_kind):
         num = den = 0.0
         have = True
@@ -201,10 +216,12 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
                 and any(r.get("arm", "").startswith(k) for k in DRAFT_ARMS)]
 
     def arm_spread(prefix):
-        # Spread of the same-arm primary mean, as a standard error of the mean and not a range:
-        # (max - min) grows with the number of replicates, so adding passes RAISED the pass floor
-        # (1.039 -> 1.045 -> 1.050 across T66-T70) instead of shrinking the uncertainty. The mean's
-        # standard error shrinks as 1/sqrt(N), which is what the gate needs.
+        # Spread of the same-arm primary mean as an INTERVAL, not a range: (max - min) grows with the
+        # number of replicates, so adding passes RAISED the pass floor (1.039 -> 1.045 -> 1.050 across
+        # T66-T70) - more evidence made the gate stricter, which is backwards. The interval is
+        # t(0.975, n-1) * SEM / mean: SEM shrinks as 1/sqrt(N) and the t quantile handles the tiny-n
+        # case honestly. Note 1.96 was wrong here for the reason spelled out at t975() - at n=2 it is
+        # exactly 0.98 * the range it replaced.
         pr = primary_rows(prefix)
         runs = sorted({r["run_id"] for r in pr})
         vals = []
@@ -232,6 +249,10 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
     # a single-run arm has no observable spread; the 2 % default stands in for it and is reported
     floor = max(FLOOR_MIN, spread_a or 0.0, spread_t or 0.0)
     def acc_of(prefix, arm_kind):
+        # Accepted drafts per verification round, aggregated as sum(acc*rounds)/sum(rounds). The
+        # earlier form averaged the per-category means weighted by prompt count, which counts a
+        # 5-prompt category five times but ignores that its prompts may have run far more rounds -
+        # so the acceptance a long prompt contributed was thrown away.
         num = den = 0.0
         for c in cats:
             rs = [r for r in rows if _matches(r.get("tag", ""), prefix) and r.get("category") == c
@@ -256,10 +277,17 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
         return 2, {"problems": [f"no data for {c}" for c in missing],
                    "categories": cats, "secondary": others}
 
-    # Per-category guards, tied to each category's own noise instead of two fixed lines. A primary
-    # category has 3-5 prompts, so its run-to-run jitter is 3-7 %; requiring every category >= 1.00
-    # rejected a true +2.5 % uniform gain in roughly half of draws (T66-T70 floors of 1.039-1.050
-    # came from that same noise). A category now vetoes only when it loses more than it can resolve.
+    # Per-category guards, tied to each category's own noise instead of two fixed lines.
+    #
+    # Why: the three primary categories are built from 3-5 prompts each and jitter 3-7 % run to run.
+    # Requiring every one of them >= 1.00 rejected a TRUE +2.5 % uniform gain in roughly half of draws
+    # (Argon's arithmetic: with sigma = 2.5 % per category, P(one lands < 1.00) = 21 %, so
+    # 1 - 0.79^3 = 51 % across the three). Three independent gates over noisy buckets is a
+    # multiple-testing trap, and it fired: T66-T70 all landed "inconclusive".
+    #
+    # The trade accepted here: a category now vetoes only past its own resolution, so with 2-3 runs a
+    # real 4 % regression in one category also passes. That is the price of not rejecting real wins;
+    # it is why the primary and the corpus ratio still have to clear their own floors.
     def category_spread(cat, prefix):
         rs = [r for r in rows if _matches(r.get("tag", ""), prefix) and r.get("category") == cat
               and any(r.get("arm", "").startswith(k) for k in DRAFT_ARMS)]
@@ -277,23 +305,30 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
     for c in cats:
         sp = max(FLOOR_MIN, category_spread(c, control) or 0.0, category_spread(c, treat) or 0.0)
         cat_lines[c] = 1.0 - sp
-    # How small an effect this arm pair could see at all. With two or three runs the t interval is
-    # wide enough that a 2 % claim is not supported by the data, and the honest thing to print is that
-    # number rather than a verdict that looks decisive.
+    # How small an effect this arm pair could see at all, printed with the verdict. At two or three
+    # runs the t interval is 7-26 % wide, so a 2 % claim is simply not supported by the data; saying
+    # that in the output is more useful than a verdict that reads as decisive. This number is the
+    # honest answer to "why does every arm come back inconclusive".
     resolution = floor
     # a loss only vetoes past that category's own resolution; the old fixed 0.98 could not tell a
     # real 2 % loss from a 5 %-jitter category
-    # A material acceptance LOSS is a regression, not an inconclusive: for a drafting arm the
-    # acceptance change is the mechanism under test, so failing that rule in the losing direction
-    # must withdraw rather than merely block a pass.
+    # A material acceptance LOSS withdraws; it does not merely block a pass.
+    #
+    # Why: with the one-sided band, a drafting arm that lost 0.42 accepted tokens could still report
+    # "inconclusive" because the verdict branch only looked at the throughput ratio. That is how a
+    # genuine regression hides - it is not that the arm failed to win, it is that it lost, and the
+    # word "inconclusive" tells the operator to try again instead of to stop.
     acc_loss = (acc_t - acc_c) < -acc_tolerance if drafting else False
     withdraw = bool(p_ratio is not None and p_ratio < 1.0) or acc_loss or any(
         cats[c]["ratio"] < cat_lines[c] for c in cats)
 
-    # Acceptance: two-sided for kernel/placement arms, one-sided for arms whose point IS acceptance
-    # (a drafter or window change must not LOSE acceptance; requiring |delta| <= 0.05 barred every
-    # genuine drafting improvement from passing, which is why T61/T63/T70 could only be judged on
-    # their losses).
+    # Acceptance: two-sided for kernel/placement arms, one-sided for arms whose point IS acceptance.
+    #
+    # Why: |delta acc| <= 0.05 was written for kernel arms, where acceptance is a confound that
+    # should not move. Applied to drafter and window arms it made the better mechanism unpassable by
+    # construction - a drafter that accepts MORE drafts fails the band. T61/T63/T70 were therefore
+    # only ever judged on their losses, which is not a test, it is a filter. A drafting arm must not
+    # LOSE acceptance; gaining it is the point.
     if drafting:
         acc_ok = (acc_t - acc_c) >= -acc_tolerance
         acc_rule = f"acc_treat >= acc_control - {acc_tolerance} (drafting arm)"

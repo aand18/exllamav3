@@ -10,9 +10,18 @@ Two policies:
   global   - one pool ranked across all layers, allocated by each layer's own entropy/coverage
              demand (Strata's non-uniform pool)
 
-Calibration: at 381 resident/layer the model must reproduce the measured T58 number
-(median 8, mean 9.3 distinct CPU misses per layer at rows=5). If it does not, the model is wrong
-and every number below it is void.
+Calibration is the whole point of this file, and it has already failed once:
+
+  * `-mcs N` names the **CPU** side (model_init.py: "run the TAIL N routed experts on the CPU"), so at
+    split 381 the GPU holds 512-381 = **131** experts per layer, not 381. The first version of this
+    simulator passed 381 as the GPU resident set and produced 0.49 misses/layer where the harness
+    measures 21 - a 40x error that looked like a plausible "bytes don't matter" result.
+  * the measured target was also misread: 8 was an all-rows median dominated by the undrafted rows=1
+    arm. The drafted window is median 21, mean 20.5.
+
+Both mistakes produced confident, wrong output. That is why the calibration step runs first, prints
+the measured target beside the simulated one, and declares every number below it void when they
+disagree - and why `uniform_resident()` takes the number of GPU slots, not the split value.
 """
 
 from __future__ import annotations
@@ -28,6 +37,9 @@ import sys
 PROFILE_GLOB = "/mnt/c/Users/yoho/Downloads/tabbyAPI/_agent/v165/engine-state/master/exllamav3/expert_stats/*.json"
 ROWS = 5
 TOPK = 10
+N_EXPERTS = 512
+CPU_SPLIT = 381          # -mcs 381 = the TAIL 381 experts run on the CPU
+GPU_SLOTS = N_EXPERTS - CPU_SPLIT   # 131 GPU-resident experts per layer today
 TRIALS = 400          # sampled windows per layer
 SEED = 12345
 
@@ -157,20 +169,20 @@ def main():
     rng = random.Random(SEED)
 
     # --- calibration: today's static split (381 of 512 resident) ---
-    cal = simulate(layers, uniform_resident(381), rng)
+    cal = simulate(layers, uniform_resident(GPU_SLOTS), rng)
     med = st.median(v[0] for v in cal.values())
     mean = st.mean(v[1] for v in cal.values())
-    print("CALIBRATION (split 381, uniform)")
+    print(f"CALIBRATION (split {CPU_SPLIT}: {GPU_SLOTS} GPU slots/layer, uniform)")
     print(f"  distinct CPU misses/layer: median {med:.1f}  mean {mean:.2f}")
-    print(f"  measured T58             : median 8    mean 9.35")
-    ok = abs(med - 8) <= 1.5 and abs(mean - 9.35) <= 1.5
+    print(f"  measured (T66 correction): median 21   mean 20.5  (drafted window, rows=5)")
+    ok = abs(med - 21) <= 2.0 and abs(mean - 20.5) <= 2.0
     print(f"  calibration {'OK' if ok else 'FAILED - model is wrong, numbers below are void'}")
     print()
 
     # --- the question: how many slots buy what ---
     # uniform policies at increasing per-layer residency
-    print("UNIFORM pool (today's design, more slots per layer)")
-    for per_layer in (381, 400, 420, 440, 460, 480, 500):
+    print("UNIFORM pool, GPU slots per layer (today: %d)" % GPU_SLOTS)
+    for per_layer in (GPU_SLOTS, 140, 160, 180, 200, 220, 240):
         res = uniform_resident(per_layer)
         sim = simulate(layers, res, random.Random(SEED))
         m = st.median(v[0] for v in sim.values())
@@ -179,7 +191,7 @@ def main():
     print()
 
     print("GLOBAL non-uniform pool (Strata shape)")
-    for total in (381 * n_layers, 7000, 7700, 8301, 9000, 10000):
+    for total in (GPU_SLOTS * n_layers, 7000, 7700, 8301, 9000, 10000):
         alloc = global_resident_fast(total, layers)
         hold = lambda k, f, a=alloc: a[k]
         sim = simulate(layers, hold, random.Random(SEED))
@@ -193,7 +205,7 @@ def main():
     # --- what pool size reaches Argon's gate (mean <= 4.5, or <= 5.0 for the pass) ---
     print("POOL SIZE NEEDED")
     for target in (5.0, 4.5, 3.0):
-        lo, hi = 381 * n_layers, 512 * n_layers
+        lo, hi = GPU_SLOTS * n_layers, N_EXPERTS * n_layers
         while lo < hi:
             mid = (lo + hi) // 2
             alloc = global_resident_fast(mid, layers)
@@ -214,7 +226,7 @@ def main():
     freed = kv_full - kv_32k
     print(f"  KV at 262144: {kv_full} MiB; at 32768: ~{kv_32k} MiB -> frees {freed} MiB")
     print(f"  at {expert_mib} MiB/expert that is ~{freed/expert_mib:.0f} experts "
-          f"-> {381 + freed/expert_mib:.0f}/layer uniform ({int((381 + freed/expert_mib)*n_layers)} total)")
+          f"-> {GPU_SLOTS + freed/expert_mib:.0f}/layer uniform ({int((GPU_SLOTS + freed/expert_mib)*n_layers)} total)")
 
 
 if __name__ == "__main__":
