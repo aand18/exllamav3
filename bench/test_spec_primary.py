@@ -249,18 +249,43 @@ def test_combined_arm_uncertainty_not_the_maximum():
     assert abs(f - max(0.02, (a ** 2 + t ** 2) ** 0.5)) < 1e-9, (f, a, t)
 
 
-def test_category_guard_uses_combined_variance_and_reciprocal_form():
-    rows = _rows({c: (100, 104, 110, 114) for c in PRIMARY_WEIGHTS})     # 10 % gain, some jitter
+def test_category_guard_uses_combined_variance_exactly():
+    """max(a, t) and sqrt(a^2 + t^2) differ materially when BOTH arms are noisy; only the exact
+    combination passes this."""
+    # both arms carry a 10 % spread, so max == a while sqrt == 1.414 * a
+    rows = (_rows({c: (100, 110, 100, 110) for c in PRIMARY_WEIGHTS}))
     _, out = evaluate(rows, "A", "B")
-    for c, line in out["category_guard"].items():
-        # reciprocal form: the guard is below 1, never 1 - spread
-        assert 0.0 < line <= 1.0
+    for c, sp in out["category_spread"].items():
+        combined = (sp["control"] ** 2 + sp["treat"] ** 2) ** 0.5
+        assert abs(sp["combined"] - combined) < 1e-12, (c, sp)
+        if sp["control"] > 0 and sp["treat"] > 0:
+            assert sp["combined"] > max(sp["control"], sp["treat"]) * 1.2, (c, sp)
+        expected = 1.0 / (1.0 + max(0.02, combined))
+        assert abs(out["category_guard"][c] - expected) < 1e-12, (c, out["category_guard"][c], expected)
 
 
-def test_a_resolved_loss_is_the_reciprocal_of_the_pass_bound():
-    """Symmetric on a ratio scale: a +f pass bound corresponds to a 1/(1+f) loss bound."""
-    d = {c: (100, 100, 86, 86) for c in PRIMARY_WEIGHTS}   # -14 %
+def test_bounds_are_reciprocal_and_the_gap_between_them_classifies_correctly():
+    """A ratio between 1 - f and 1 / (1 + f) must classify as a loss under the reciprocal rule and
+    as 'inside' under the old linear one: at f = 0.10 those are 0.900 and 0.9091, so 0.905 splits
+    them. The old rule would have called 0.905 'inside' and not withdrawn."""
+    import spec_primary as sp
+    for f in (0.02, 0.05, 0.10, 0.25):
+        assert abs(sp.pass_bound(f) - (1 + f)) < 1e-12
+        assert abs(sp.loss_bound(f) - 1 / (1 + f)) < 1e-12
+        assert sp.loss_bound(f) > 1 - f                      # the reciprocal is the stricter loss line
+        mid = (sp.loss_bound(f) + (1 - f)) / 2
+        # the discriminating band: ABOVE the old linear line (so the old rule saw no loss) but AT or
+        # BELOW the reciprocal bound (so the current rule does). This is the case that made
+        # `1 - floor` easier to satisfy than the pass bound.
+        assert mid > 1 - f, f
+        assert sp.classify_ratio(mid, f) == "loss", f
+        assert sp.classify_ratio(sp.loss_bound(f) * 0.999, f) == "loss"
+        assert sp.classify_ratio(sp.pass_bound(f) * 1.001, f) == "pass"
+    assert sp.classify_ratio(0.905, 0.10) == "loss"           # the case the old rule let through
+    assert sp.classify_ratio(0.95, 0.10) == "inside"
+
+
+def test_a_large_loss_still_withdraws_end_to_end():
+    d = {c: (100, 100, 86, 86) for c in PRIMARY_WEIGHTS}      # -14 %
     _, out = evaluate(_rows(d), "A", "B")
-    f = out["primary"]["floor"] - 1.0
     assert out["verdict"] == "withdraw"
-    assert 0.86 <= 1.0 / (1.0 + f) + 0.02                   # within the stated bound

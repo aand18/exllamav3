@@ -18,7 +18,7 @@ an action; it is never counted as addressed.
 |---|---|---|
 | O1 | Response substantive; "all findings addressed" not accurate | **addressed** (T78 opens by conceding it) |
 | O2 | No systematic misrepresentation of the review | **recorded** |
-| O3 | Narrower vocabulary adopted over stronger conclusions | **partial** — 4 of 5 corrected; the closure-language instance survived (see 1c) |
+| O3 | Narrower vocabulary adopted over stronger conclusions | **addressed** — all five corrected; the closure-language instance was fixed in T80 (see 1c) |
 | 1a | "Decode exhausted" broader than the evidence | **addressed** |
 | 1b | "Removing the 4th draft loses more than it saves" exceeds T70 | **addressed** |
 | 1c | STATE still asserted empirical closure | **addressed in T80** — `STATE.md:211` now reads "No family below is empirically closed. What is closed is the *decision* to spend more runs on these doses" |
@@ -34,26 +34,29 @@ an action; it is never counted as addressed.
 | 4c | 26 % latency ≈ 35 % rate | **recorded** |
 | 4d | 70s projection must stay conditional | **addressed** |
 | 5a | Spread and primary used different estimators | **addressed** — one `primary_from_rows()` |
-| 5b | Variance combination primary-only; categories used `max()` | **addressed** |
+| 5b | Variance combination primary-only; categories used `max()` | **addressed in T81** — categories now `sqrt(a²+t²)` via `loss_bound()`, verified exactly |
 | 5c | Ratio scale asymmetric | **addressed** — `1/(1+f)` both sides |
 | 5d | T77's table showed `1+f` while its prose discussed `1−f` | **addressed in T80** — T77 now labels the column and defines both bounds locally; the earlier docstring edit alone did not close this |
 | 5e | Basis guard used `any()` vs estimator's `all()` | **addressed** |
-| 5f | No focused tests for the repairs | **addressed in T80** — 21 tests, adding combined-variance, category-guard reciprocal, and resolved-loss-boundary cases to the earlier five |
+| 5f | No focused tests for the repairs | **addressed in T81** — 22 tests; the category guard and the reciprocal bounds are asserted numerically, not by shape |
 | 5g | Module docstring described superseded rules | **addressed** |
 | 6a | Ten procedural rules faithfully recorded | **recorded** |
 | 6b | Rules recorded but inconsistently applied — rule 1 breached in STATE, rule 10 at risk before a ladder, rule 5 with unnamed regimes | **partial** — rule 1 now satisfied (T80); 5 open under 2b; 10 open under item 1 |
 | 7a | Experiment and stopping rule faithfully recorded | **recorded** |
 | 7b | "Quality-gated" needs a named numerical limit; success tied to predictions | **open** |
-| §3 | Ranked #1 omission: `suh`/`svh` unpriced (~950 MiB); fixed-trace runner is the larger scientific omission | **recorded** (both unimplemented) |
+| §3a | Ranked #1 omission: `suh`/`svh` unpriced (~950 MiB) | **open** (an unimplemented action is not "recorded") |
+| §3b | Fixed-trace runner is the larger scientific omission | **open** |
 | §4.1 | Finish estimator/basis **and add the focused tests** before re-scoring | **addressed in T80** (tests now exist; re-score unchanged) |
 | §4.2 | Fix workload validity; add fixed-trace measurement | **open** |
-| §4.3 | Per-category acceptance guard | **open** (item 4) |
+| §4.3 | Per-category acceptance guard | **open** (item 7) |
 | §4.4 | More same-regime paired replication instead of friendlier intervals | **open** — now an explicit action (item 8) |
 | §4.5 | Noise-aware corpus and secondary vetoes | **open** — now an explicit action (item 9) |
-| §5 | Authorise compile-only static build, not a GPU A/B, until sizing is fixed | **recorded**, with the loophole closed in item 7 |
+| §5 | Authorise compile-only static build, not a GPU A/B, until sizing is fixed | **recorded**, with the loophole closed in item 10 |
 
-Totals under the stated rule: **addressed 16 · partial 2 · recorded 10 · open 9**. The earlier
-"20 addressed, 8 open" was not reproducible and is withdrawn.
+Totals counted mechanically from the rows above (a script tally, not an estimate):
+**addressed 17 · partial 1 · recorded 9 · open 9 = 36.** The "20 addressed, 8 open" of the first
+draft and the "16/2/10/9" of the second are both withdrawn; a third pass found the second draft's
+arithmetic summed to 37 while claiming 9 open, and its §3 bundled two actions into one "recorded" row.
 
 ## Part B — the plan, re-ordered after validation
 

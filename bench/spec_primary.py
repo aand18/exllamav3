@@ -198,6 +198,32 @@ def basis(rows) -> str:
         "mean of per-run rates (tokens/seconds missing on at least one row)"
 
 
+def pass_bound(f: float) -> float:
+    """Smallest ratio that counts as a resolved gain at fractional uncertainty `f`."""
+    return 1.0 + f
+
+
+def loss_bound(f: float) -> float:
+    """Largest ratio that counts as a resolved loss.
+
+    The reciprocal of the pass bound, not 1 - f: a ratio scale is not symmetric, so a +20 % pass
+    bound corresponds to 1/1.2 = 0.833 as a loss, not 0.80. Using 1 - f made a loss easier to prove
+    than a gain, which is the same asymmetry in the other direction.
+    """
+    return 1.0 / (1.0 + f)
+
+
+def classify_ratio(p_ratio: float | None, f: float) -> str:
+    """'pass' when the ratio clears the gain bound, 'loss' when it clears the loss bound."""
+    if p_ratio is None:
+        return "unknown"
+    if p_ratio >= pass_bound(f):
+        return "pass"
+    if p_ratio <= loss_bound(f):
+        return "loss"
+    return "inside"
+
+
 def ratio(control: float, treat: float) -> float | None:
     return (treat / control) if control else None
 
@@ -364,9 +390,16 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
         return t975(len(vals) - 1) * (var / len(vals)) ** 0.5 / m
 
     cat_lines = {}
+    cat_spreads = {}
     for c in cats:
-        sp = max(FLOOR_MIN, category_spread(c, control) or 0.0, category_spread(c, treat) or 0.0)
-        cat_lines[c] = 1.0 / (1.0 + sp)
+        # same combination rule as the primary: a ratio's uncertainty is sqrt(a^2 + t^2). This line
+        # said max() for two revisions after the primary was fixed - the repair was reported complete
+        # while the category path still took the larger arm alone (caught by a third external pass).
+        ca, ct = category_spread(c, control) or 0.0, category_spread(c, treat) or 0.0
+        combined = (ca ** 2 + ct ** 2) ** 0.5
+        sp = max(FLOOR_MIN, combined)
+        cat_spreads[c] = {"control": ca, "treat": ct, "combined": combined}
+        cat_lines[c] = loss_bound(sp)
     # How small an effect this arm pair could see at all, printed with the verdict. At two or three
     # runs the t interval is 7-26 % wide, so a 2 % claim is simply not supported by the data; saying
     # that in the output is more useful than a verdict that reads as decisive. This number is the
@@ -384,11 +417,10 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
     # A NEGATIVE point estimate is not by itself a regression: at a 10-25 % resolution, half of all
     # true nulls land below 1.0. Withdrawing on p_ratio < 1.0 made the gate asymmetric in the worst
     # way - a coin flip could "prove" a regression, while a real win needed the full floor (T77).
-    # A loss now withdraws only when it clears the same interval, i.e. p_ratio <= 1 - floor.
-    # A ratio is not symmetric: a floor of +20 % corresponds to 1/1.2 = 0.833 as a loss, not 0.80.
-    # Using 1 - floor made a loss easier to prove than a gain, the same asymmetry as before in the
-    # other direction (T78).
-    real_loss = bool(p_ratio is not None and p_ratio <= 1.0 / (1.0 + floor))
+    # A loss now withdraws only when it clears the same interval, expressed on the reciprocal scale:
+    # p_ratio <= loss_bound(floor) = 1 / (1 + floor). A ratio is not symmetric, so a +20 % pass bound
+    # corresponds to 0.833 as a loss, not 0.80; `1 - floor` made a loss easier to prove than a gain.
+    real_loss = classify_ratio(p_ratio, floor) == "loss"
     withdraw = real_loss or acc_loss or any(cats[c]["ratio"] < cat_lines[c] for c in cats)
 
     # Acceptance: two-sided for kernel/placement arms, one-sided for arms whose point IS acceptance.
@@ -420,6 +452,7 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
         "categories": cats, "secondary": others, "corpus_ratio": corpus_ratio,
         "basis": basis(allrows(treat)) if "allrows" in dir() else "mean of per-run rates",
         "category_guard": cat_lines,
+        "category_spread": cat_spreads,
         "resolution": {"min_effect_pct": resolution * 100.0,
                        "note": "the smallest primary change this many runs can separate at 95 %"},
         "acc": {"control": acc_c, "treat": acc_t, "delta": (acc_t - acc_c) if acc_c and acc_t else None,
