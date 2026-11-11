@@ -90,3 +90,20 @@ per-round latency at fixed rows, not free-running generation.
 
 The `-dds` closing ABBA, and any future drafter arm, **cannot be judged by `spec_primary.py` as
 written**. That is a real defect to fix before another drafting experiment runs.
+
+## Evidence base
+
+This report cites no run of its own: it re-reads code and prior evidence, which is why the post gate
+reports "no run ids". Claims trace to:
+
+- `block_sparse_mlp_cpu.py:1388-1393` (promote spares), `:361` (`promote_ready`), `:1425-1429` and
+  `:1464` (`dims_of` / `proj_dims` from `gates[first]`), `:1477` (GPU slice shrink), `:1433-1446`
+  (`fetch_aux`), `:1137` (synchronous `submit_prefill`).
+- `moe_cpu_host.py:1240-1247` (worker byte offsets from `proj_dims`), `:2119` (`counts1.tolist()`).
+- `bench/spec_primary.py:117-128` (`arm_spread` range), `:121` vs `:108` (unweighted vs weighted),
+  `:140`, `:143`, `:144` (veto and acceptance guard).
+- Measurements: `t66A-static-262k-20261110-172259` … `t66D-static-262k-20261110-181449`;
+  `t69A-cs40-mcs373-20261110-223004`, `t69B-cs40-mcs373-20261110-224657`;
+  `t70B-ndt3-262k-20261111-063421`, `t70C-ndt3-262k-20261111-065103`.
+- Routing mass of the CPU slice: 22.4 % mean over 49 layers of
+  `engine-state/master/exllamav3/expert_stats/50a2b4236d60f65e.json` (ranks 131+ by hot-to-cold rank).
