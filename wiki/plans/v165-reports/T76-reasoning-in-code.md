@@ -35,6 +35,14 @@ measured**: wrong by 1.9× rather than 40×, which is the real, documented findi
 routing profile is more concentrated than per-conversation routing. Calibration still fails, and the
 tool says so and voids its own numbers — as it must.
 
+## Evidence
+
+No run of its own — this is a documentation pass over code changed in T74/T75. The measurements the
+notes cite are `t58A-slots4-131k-20261108-214726` … `t58D-slots4-131k-20261108-223615` (the 97 920
+rows=1 of 124 991 layer-rounds), `t69A-cs40-mcs373-20261110-223004`,
+`t69B-cs40-mcs373-20261110-224657`, `t70B-ndt3-262k-20261111-063421`,
+`t70C-ndt3-262k-20261111-065103`, and the T73/T75 floor tables.
+
 ## Verification
 
 - `bench/test_spec_primary.py` + `tests/moe_cpu`: **191 passed, 41 skipped**.
