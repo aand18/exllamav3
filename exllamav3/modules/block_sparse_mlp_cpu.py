@@ -1106,8 +1106,13 @@ class BlockSparseMLP_CPU:
                 buf = self._distinct_buf = torch.empty(
                     (64, selected_experts.shape[1]), dtype = torch.int64, pin_memory = True)
             buf[:bsz].copy_(selected_experts, non_blocking = True)
-            round_prof.enqueue_distinct(self.key, buf, self.cpu_split_first, bsz,
-                                        selected_experts.shape[1], round_prof.current_round())
+            # Only the drafted window is counted. A rows=1 row is either the undrafted baseline arm or
+            # a warm-up pass, and pooling it with the drafted rows produced the campaign's worst number
+            # (an all-rows median of 8 CPU experts where the drafted window reads 21, T66/T74). One
+            # filter here beats every downstream reminder to separate the two.
+            if bsz > 1:
+                round_prof.enqueue_distinct(self.key, buf, self.cpu_split_first, bsz,
+                                            selected_experts.shape[1], round_prof.current_round())
         if self._split_map is not None:
             self._split_submit_rows = bsz
             self._split_swap_tick()

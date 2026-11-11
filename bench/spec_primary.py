@@ -52,9 +52,29 @@ TRIVIAL = "Trivial repetition"
 DRAFT_ARMS = ("DFlash", "MTP", "Draft")
 
 # Gate constants. FLOOR_MIN is the historical 2 % default, used when an arm has a single run and no
-# observable spread; SEM_Z is the normal quantile for the 95 % half-width of the same-arm mean.
+# observable spread.
+#
+# The multi-run half-width uses the SMALL-SAMPLE t quantile, not the normal 1.96. At n=2 the two
+# differ in a way that matters: sd/sqrt(2) makes 1.96*SEM exactly 0.98*(max-min), i.e. the range
+# statistic this replaced, relabelled. With df = n-1 the interval is honest about how little two runs
+# say (t = 12.71 at n=2, 4.30 at n=3), which is the point: a floor that shrinks with n must start
+# somewhere credible.
 FLOOR_MIN = 0.02
-SEM_Z = 1.96
+T975 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306,
+        9: 2.262, 10: 2.228, 12: 2.179, 15: 2.131, 20: 2.086, 30: 2.042}
+
+
+def t975(df: int) -> float:
+    """Two-sided 95 % t quantile for df degrees of freedom (table, interpolated at the top)."""
+    if df < 1:
+        return float("inf")
+    if df in T975:
+        return T975[df]
+    keys = sorted(T975)
+    for k in keys:
+        if df <= k:
+            return T975[k]
+    return 1.96
 
 
 def load(path: str) -> list[dict]:
@@ -152,8 +172,27 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
         return 2, {"problems": problems, "categories": cats, "secondary": others}
 
     wsum = sum(PRIMARY_WEIGHTS.values())
-    p_c = sum(PRIMARY_WEIGHTS[c] * cats[c]["control"] for c in cats) / wsum
-    p_t = sum(PRIMARY_WEIGHTS[c] * cats[c]["treat"] for c in cats) / wsum
+    # The primary is a workload-weighted throughput. Where the CSV carries tokens and seconds it is a
+    # ratio of sums over the weighted prompt counts; otherwise it degrades to a weighted mean of the
+    # per-category rates, which is a different (averaging-of-ratios) quantity. `basis` says which.
+    def primary_of(prefix, arm_kind):
+        num = den = 0.0
+        have = True
+        for c in cats:
+            rs = [r for r in rows if _matches(r.get("tag", ""), prefix) and r.get("category") == c
+                  and any(r.get("arm", "").startswith(k) for k in DRAFT_ARMS)]
+            if not rs or any(r.get("tokens") in (None, "") for r in rs) or \
+                    any(r.get("seconds") in (None, "") for r in rs):
+                have = False
+                break
+            num += PRIMARY_WEIGHTS[c] * sum(float(r["tokens"]) for r in rs)
+            den += PRIMARY_WEIGHTS[c] * sum(float(r["seconds"]) for r in rs)
+        if have and den > 0:
+            return num / den
+        return sum(PRIMARY_WEIGHTS[c] * cats[c][arm_kind] for c in cats) / wsum
+
+    p_c = primary_of(control, "control")
+    p_t = primary_of(treat, "treat")
     p_ratio = ratio(p_c, p_t)
     # the same-arm spread: the widest per-run deviation from its arm's mean, over the primary set
     def primary_rows(prefix):
@@ -188,12 +227,26 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
             return None
         var = sum((v - m) ** 2 for v in vals) / (len(vals) - 1)
         sem = (var / len(vals)) ** 0.5
-        return SEM_Z * sem / m
+        return t975(len(vals) - 1) * sem / m
     spread_a, spread_t = arm_spread(control), arm_spread(treat)
     # a single-run arm has no observable spread; the 2 % default stands in for it and is reported
     floor = max(FLOOR_MIN, spread_a or 0.0, spread_t or 0.0)
-    acc_c = sum(PRIMARY_WEIGHTS[c] * cats[c]["acc_control"] for c in cats) / wsum
-    acc_t = sum(PRIMARY_WEIGHTS[c] * cats[c]["acc_treat"] for c in cats) / wsum
+    def acc_of(prefix, arm_kind):
+        num = den = 0.0
+        for c in cats:
+            rs = [r for r in rows if _matches(r.get("tag", ""), prefix) and r.get("category") == c
+                  and any(r.get("arm", "").startswith(k) for k in DRAFT_ARMS)]
+            if rs and all(r.get("acc") not in (None, "") for r in rs) and \
+                    all(r.get("rounds") not in (None, "", "0") for r in rs):
+                for r in rs:
+                    num += PRIMARY_WEIGHTS[c] * float(r["acc"]) * float(r["rounds"])
+                    den += PRIMARY_WEIGHTS[c] * float(r["rounds"])
+        if den > 0:
+            return num / den
+        return sum(PRIMARY_WEIGHTS[c] * cats[c][arm_kind] for c in cats) / wsum
+
+    acc_c = acc_of(control, "acc_control")
+    acc_t = acc_of(treat, "acc_treat")
     corpus_ratio = ratio(corpus_c, corpus_t)
     worst_other = min(others.values()) if others else None
 
@@ -218,15 +271,23 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
         if not m:
             return None
         var = sum((v - m) ** 2 for v in vals) / (len(vals) - 1)
-        return SEM_Z * (var / len(vals)) ** 0.5 / m
+        return t975(len(vals) - 1) * (var / len(vals)) ** 0.5 / m
 
     cat_lines = {}
     for c in cats:
         sp = max(FLOOR_MIN, category_spread(c, control) or 0.0, category_spread(c, treat) or 0.0)
         cat_lines[c] = 1.0 - sp
+    # How small an effect this arm pair could see at all. With two or three runs the t interval is
+    # wide enough that a 2 % claim is not supported by the data, and the honest thing to print is that
+    # number rather than a verdict that looks decisive.
+    resolution = floor
     # a loss only vetoes past that category's own resolution; the old fixed 0.98 could not tell a
     # real 2 % loss from a 5 %-jitter category
-    withdraw = bool(p_ratio is not None and p_ratio < 1.0) or any(
+    # A material acceptance LOSS is a regression, not an inconclusive: for a drafting arm the
+    # acceptance change is the mechanism under test, so failing that rule in the losing direction
+    # must withdraw rather than merely block a pass.
+    acc_loss = (acc_t - acc_c) < -acc_tolerance if drafting else False
+    withdraw = bool(p_ratio is not None and p_ratio < 1.0) or acc_loss or any(
         cats[c]["ratio"] < cat_lines[c] for c in cats)
 
     # Acceptance: two-sided for kernel/placement arms, one-sided for arms whose point IS acceptance
@@ -251,10 +312,12 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
         "control": control, "treat": treat,
         "primary": {"control": p_c, "treat": p_t, "ratio": p_ratio,
                     "floor": 1 + floor, "spread_control": spread_a, "spread_treat": spread_t,
-                    "spread_method": f"SEM x {SEM_Z} / mean"},
+                    "spread_method": f"1.96->t(95%, df=n-1) x SEM / mean"},
         "categories": cats, "secondary": others, "corpus_ratio": corpus_ratio,
         "basis": basis(allrows(treat)) if "allrows" in dir() else "mean of per-run rates",
         "category_guard": cat_lines,
+        "resolution": {"min_effect_pct": resolution * 100.0,
+                       "note": "the smallest primary change this many runs can separate at 95 %"},
         "acc": {"control": acc_c, "treat": acc_t, "delta": (acc_t - acc_c) if acc_c and acc_t else None,
                 "rule": acc_rule, "ok": acc_ok},
         "verdict": verdict,
