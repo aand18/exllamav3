@@ -87,3 +87,21 @@ treatment clarified.
 So item 2 remains the only outstanding **operator decision**, but it is not the only outstanding
 repair. The next engineering correction is the category variance implementation and its ineffective
 tests.
+
+---
+
+## Addendum (same session, after the fixes were described)
+
+One practical addition: **item 10's compile-only build does not need to wait behind items 5–9.** My
+authorisation permits it after recipe assertions, the record sentence/quality limit, sizing, and
+provenance. Moving it earlier is optional, but could provide useful compiler feedback while
+fixed-trace and workload-validity work proceeds. The performance A/B must remain blocked.
+
+Otherwise, no new substantive findings. Minimum close-out remains:
+
+1. Fix `spec_primary.py:368`.
+2. Make the tests genuinely fail against the old `max()` and `1−f` implementations.
+3. Re-score the affected arms.
+4. Correct the register's totals and stale references.
+
+The numerical quality limit remains an operator input, not something the reviewer should invent.

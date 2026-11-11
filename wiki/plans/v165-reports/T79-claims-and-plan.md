@@ -73,7 +73,13 @@ arithmetic summed to 37 while claiming 9 open, and its §3 bundled two actions i
 | **9** | Make the corpus and secondary vetoes noise-aware | Real weakness, but with floors at 9–34 % it is not the source of most unresolved verdicts | ~1 h |
 | **10** | The 2 bpw build — **compile-only** | Authorised on that basis alone | days |
 
-**Order: 4 → 2 → 1 → 3 → then 5 and 6 in parallel → 7 → 8 → 9 → 10 (compile-only).**
+**Order: 4 → 2 → 1 → 3 → 10 (compile-only, optional move) → 5 and 6 in parallel → 7 → 8 → 9.**
+
+Kimi's addendum (same session) permits item 10 to move **earlier**, immediately after the four
+prerequisites 4, 2, 1 and 3, because a compile-only build yields compiler feedback while the
+fixed-trace and validity work proceeds. It stays **compile-only**: no GPU load, timing, performance A/B
+or deployment, and it does not substitute for item 5. Its earlier placement is optional — the
+prerequisites are what the authorisation depends on, not the order.
 
 Corrected from the first draft: item 7 (per-category guard) no longer precedes the scientific work.
 Kimi's objection was that putting another gate repair ahead of the fixed-trace runner and workload
