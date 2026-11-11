@@ -203,6 +203,19 @@ the RAM floor is the component shrunk instead.
   which `cmb` is 0.696 (**79 % wait**), so there is no launch-gap layer for graph capture to win
   (T59); predicted-routing prefetch scores 25 % cover against an 80 % pass mark (T60, family
   closed); a grouped expert kernel fails its rows=1 mark (0.0914 vs ≤0.061 ms/row, T59).
+  **Corrected (T66):** distinct CPU experts at the drafted window are **median 21, mean 20.5** — the
+  "median 8" was an all-rows figure dominated by the undrafted rows=1 arm.
+- **Decode is exhausted at this model, cache width and split (T62–T70).** `cmb` is
+  **33.9 µs per distinct CPU expert** (T66: 1 014 545 layer-rounds, slope +37 µs, monotone 4→0.047 …
+  20→0.807 ms), i.e. 20.5 × 33.9 ≈ 0.69 ms/layer of DDR5 read against 0.27 ms of GPU work
+  (`ker` 0.118 + `mixer` 0.101 + `sub` 0.047). Both factors are closed by measurement: experts
+  **per layer** — placement (T66), +3 experts (T62), +8 (T69), pinning 24→30 chunks (T67), all zero;
+  experts **per token** — `-ndt 3` is `WITHDRAW` (T70, primary 0.9657, Agentic-code −5.82 %, 4-row
+  window verified at 100 % of drafted rounds). The remaining options are a different expert
+  representation (2 bpw class, one K per layer) or a different engine.
+- **`-mcs N` names the CPU side** (`model_init.py:68`, "run the TAIL N routed experts"): at split 381
+  the GPU holds 131 experts/layer and the CPU 381. One expert ≈ **1.83 MB**; a split unit in
+  `size_check` is 48 experts' worth ≈ 87.7 MiB of trunk.
 - **Q4 against Q2 at one split: settled 2026-11-02.** Q2 at 389 runs 52.70 tok/s against Q4's
   52.96 with identical 2.34/4 acceptance (median per-category 0.993,
   `t16-q2-389-corpus-20261102-170933`). The cache width costs VRAM, not speed: the earlier 3.4 % gap
