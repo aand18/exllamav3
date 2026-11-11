@@ -205,14 +205,23 @@ the RAM floor is the component shrunk instead.
   closed); a grouped expert kernel fails its rows=1 mark (0.0914 vs ≤0.061 ms/row, T59).
   **Corrected (T66):** distinct CPU experts at the drafted window are **median 21, mean 20.5** — the
   "median 8" was an all-rows figure dominated by the undrafted rows=1 arm.
-- **Decode is exhausted at this model, cache width and split (T62–T70).** `cmb` is
+- **The tested arms are exhausted; "decode is exhausted" is too wide (T77).** `cmb` is
   **33.9 µs per distinct CPU expert** (T66: 1 014 545 layer-rounds, slope +37 µs, monotone 4→0.047 …
   20→0.807 ms), i.e. 20.5 × 33.9 ≈ 0.69 ms/layer of DDR5 read against 0.27 ms of GPU work
   (`ker` 0.118 + `mixer` 0.101 + `sub` 0.047). Both factors are closed by measurement: experts
   **per layer** — placement (T66), +3 experts (T62), +8 (T69), pinning 24→30 chunks (T67), all zero;
   experts **per token** — `-ndt 3` is `WITHDRAW` (T70, primary 0.9657, Agentic-code −5.82 %, 4-row
-  window verified at 100 % of drafted rounds). The remaining options are a different expert
-  representation (2 bpw class, one K per layer) or a different engine.
+  window verified at 100 % of drafted rounds), which closes *that* arm, not better acceptance at the
+  same five-row cost. At fixed round cost the Strata gap needs **3.62–3.87 accepted of 4** (57 tok/s at
+  2.88 tokens/round ⇒ 50.5 ms/round ⇒ 93 tok/s needs acc ≈ 3.70); a 25 ms round is not portable.
+  The ladder is **not linear** (marginal µs/expert: 34 → 36 → 44 → **75.5** at 16→20), so 33.9 is an
+  average, not a constant — and the only interventional test (T69, +8 experts, 3 µs) did not reproduce
+  the ladder, which is why the count lever is closed while the **payload** lever (bytes) is not.
+- **The 2 bpw cold-CPU region is legal under STATIC placement only (T77).** Dynamic promotion copies
+  with a single `expert_bytes` and same-shaped destinations, so a 2 bpw cold expert cannot be promoted
+  into a 3.18 bpw GPU slot; the `spares` offset also mixes layouts. Build recipe must assert
+  `EXL3_MOE_CPU_SWAP=0` and `EXL3_MOE_CPU_PROMOTE=0`, and project **≈26 % lower round latency ≈ 35 %
+  higher round rate**, i.e. low-to-mid 70s end-to-end — not 93.
 - **`-mcs N` names the CPU side** (`model_init.py:68`, "run the TAIL N routed experts"): at split 381
   the GPU holds 131 experts/layer and the CPU 381. One expert ≈ **1.83 MB**; a split unit in
   `size_check` is 48 experts' worth ≈ 87.7 MiB of trunk.

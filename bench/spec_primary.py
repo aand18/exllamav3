@@ -231,6 +231,8 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
             # different quantity than the one being gated
             got = {}
             for c in PRIMARY_WEIGHTS:
+                # same estimator as the primary: a ratio of sums where the columns exist, so the
+                # treatment effect and its resolution are measured the same way (T77 - they were not)
                 v = throughput([r for r in run_rows if r["category"] == c])
                 if v:
                     got[c] = v
@@ -246,8 +248,12 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
         sem = (var / len(vals)) ** 0.5
         return t975(len(vals) - 1) * sem / m
     spread_a, spread_t = arm_spread(control), arm_spread(treat)
+    # The uncertainty of the RATIO is not the larger of the two arms' intervals: for independent
+    # arms the variances add, so the half-width is sqrt(a^2 + t^2) (T77). max() understates a case
+    # where both arms are noisy and overstates one where only one is.
+    combined = ((spread_a or 0.0) ** 2 + (spread_t or 0.0) ** 2) ** 0.5
     # a single-run arm has no observable spread; the 2 % default stands in for it and is reported
-    floor = max(FLOOR_MIN, spread_a or 0.0, spread_t or 0.0)
+    floor = max(FLOOR_MIN, combined)
     def acc_of(prefix, arm_kind):
         # Accepted drafts per verification round, aggregated as sum(acc*rounds)/sum(rounds). The
         # earlier form averaged the per-category means weighted by prompt count, which counts a
@@ -270,6 +276,12 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
     acc_t = acc_of(treat, "acc_treat")
     corpus_ratio = ratio(corpus_c, corpus_t)
     worst_other = min(others.values()) if others else None
+
+    # (d) an arm pair measured on different estimators is not a comparison: refuse it rather than
+    # silently falling back for one side only (T77)
+    basis_c, basis_t = basis(primary_rows(control)), basis(primary_rows(treat))
+    if basis_c != basis_t:
+        return 2, {"problems": [f"arms measured on different bases: control={basis_c}, treat={basis_t}"]}
 
     missing = [c for c in cats if cats[c]["ratio"] is None or cats[c]["acc_control"] is None
                or cats[c]["acc_treat"] is None]
@@ -319,8 +331,12 @@ def evaluate(rows, control: str, treat: str, drafting: bool = False,
     # genuine regression hides - it is not that the arm failed to win, it is that it lost, and the
     # word "inconclusive" tells the operator to try again instead of to stop.
     acc_loss = (acc_t - acc_c) < -acc_tolerance if drafting else False
-    withdraw = bool(p_ratio is not None and p_ratio < 1.0) or acc_loss or any(
-        cats[c]["ratio"] < cat_lines[c] for c in cats)
+    # A NEGATIVE point estimate is not by itself a regression: at a 10-25 % resolution, half of all
+    # true nulls land below 1.0. Withdrawing on p_ratio < 1.0 made the gate asymmetric in the worst
+    # way - a coin flip could "prove" a regression, while a real win needed the full floor (T77).
+    # A loss now withdraws only when it clears the same interval, i.e. p_ratio <= 1 - floor.
+    real_loss = bool(p_ratio is not None and p_ratio <= 1.0 - floor)
+    withdraw = real_loss or acc_loss or any(cats[c]["ratio"] < cat_lines[c] for c in cats)
 
     # Acceptance: two-sided for kernel/placement arms, one-sided for arms whose point IS acceptance.
     #
