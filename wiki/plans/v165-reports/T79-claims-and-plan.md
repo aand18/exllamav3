@@ -61,6 +61,20 @@ last mechanism-blind spot in the gate. Items 6 and 7 are the two-week decisions 
 future systems experiment is judged, 7 is the only remaining lever that could move tok/s by more than
 noise.
 
+## Evidence
+
+No run of its own: this is a claims/findings register plus a plan, which is why the post gate reports
+"no run ids". The re-scored measurements it refers to are `t61A-bf16-131k-20261110-065833`,
+`t61B-exl3-131k-20261110-071514`, `t61C-exl3-131k-20261110-073132`,
+`t61D-bf16-131k-20261110-074755`, `t66A-static-262k-20261110-172259`,
+`t66D-static-262k-20261110-181449`, `t66B-dynamic-262k-20261110-174018`,
+`t66C-dynamic-262k-20261110-175726`, `t68E-cs40-mcs381-20261110-211419`,
+`t68H-cs40-mcs381-20261110-215158`, `t68J-cs40-mcs381-20261110-221041`,
+`t69A-cs40-mcs373-20261110-223004`, `t69B-cs40-mcs373-20261110-224657`,
+`t70A-ndt4-262k-20261111-055730`, `t70B-ndt3-262k-20261111-063421`,
+`t70C-ndt3-262k-20261111-065103`, `t70D-ndt4-262k-20261111-061433`,
+`t70E-ndt4-262k-20261111-070757`.
+
 ## Part C — what this plan does not do
 
 - It does not reopen the MoE handoff, placement, split or pinning families: those are "not detected at
