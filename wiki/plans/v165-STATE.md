@@ -223,13 +223,21 @@ the RAM floor is the component shrunk instead.
   interventional test (T69, +8 experts, `cmb` +3 µs) did **not** reproduce the ladder, so the ladder
   does not identify what changing count does; and **no intervention has yet changed bytes per expert
   at fixed count**, so the payload hypothesis is *untested*, not validated.
-- **The 2 bpw cold-CPU region is legal under STATIC placement only (T77).** Dynamic promotion copies
-  with a single `expert_bytes` and same-shaped destinations, so a 2 bpw cold expert cannot be promoted
-  into a 3.18 bpw GPU slot; the `spares` offset also mixes layouts. Build recipe must assert
-  `EXL3_MOE_CPU_SWAP=0` and `EXL3_MOE_CPU_PROMOTE=0`. **If** `cmb` scales with payload, acceptance and
-  routing stay comparable and fixed overhead behaves as assumed, the model predicts **≈26 % lower
-  round latency ≈ 35 % higher round rate**, i.e. low-to-mid 70s end-to-end — not 93. Those are
-  pre-registered predictions, not established implications.
+- **DENIED — 2 bpw cold-CPU region (operator, 2026-11-11).** The mixed-representation model
+  (3.18 bpw hot experts on the GPU, 2 bpw cold experts on the CPU) is **not to be built**: it is a
+  bad idea as a product configuration — two expert representations in one model, extra sizing and
+  loading complexity, legal only under static placement, and unshippable if static placement ever
+  changes. The compile-only falsification build is **cancelled** with it. The mechanism question it
+  would have answered (does host-read bytes drive `cmb`?) is now unpaid, and the payload law stays
+  *untested* rather than validated. This closes the last decode-speed lever with real arithmetic
+  behind it: **at this model, cache width and configuration, decode speed is closed by decision, not
+  by measurement.**
+- **What the denial implies for the record.** The siz/legality detail that made the lever reachable
+  remains true and is kept for anyone reopening it: `dims_of()`/`proj_dims` give the CPU worker its
+  own K (`block_sparse_mlp_cpu.py:1425-1429`, `:1464`), so a region split needs no kernel change; it
+  requires `EXL3_MOE_CPU_SWAP=0` and `EXL3_MOE_CPU_PROMOTE=0`, because `promote_expert` copies with a
+  single `expert_bytes`; the conditional projection was ≈26 % lower round latency ≈ 35 % higher round
+  rate (low-to-mid 70s end to end), never measured.
 - **`-mcs N` names the CPU side** (`model_init.py:68`, "run the TAIL N routed experts"): at split 381
   the GPU holds 131 experts/layer and the CPU 381. One expert ≈ **1.83 MB**; a split unit in
   `size_check` is 48 experts' worth ≈ 87.7 MiB of trunk.

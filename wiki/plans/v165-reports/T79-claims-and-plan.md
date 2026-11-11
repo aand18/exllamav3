@@ -71,15 +71,16 @@ arithmetic summed to 37 while claiming 9 open, and its §3 bundled two actions i
 | **7** | Per-category acceptance guard | Aggregate acceptance hides an Agentic-curl regression (T61 −5.74 %, T70 acc −0.35 there) | ~1 h + tests |
 | **8** | Same-regime paired replication for the next drafting arm (n from a pilot variance estimate, not a guess) | The wide t intervals honestly report insufficient information; the remedy is evidence, not a friendlier statistic | per arm |
 | **9** | Make the corpus and secondary vetoes noise-aware | Real weakness, but with floors at 9–34 % it is not the source of most unresolved verdicts | ~1 h |
-| **10** | The 2 bpw build — **compile-only** | Authorised on that basis alone | days |
+| ~~**10**~~ | ~~The 2 bpw build — compile-only~~ | **DENIED by the operator (2026-11-11)** — the mixed-representation model is not a configuration to build. Cancelled, not deferred | — |
 
-**Order: 4 → 2 → 1 → 3 → 10 (compile-only, optional move) → 5 and 6 in parallel → 7 → 8 → 9.**
+**Order: 4 → 1 → 3 → 5 and 6 in parallel → 7 → 8 → 9.** Items 2 and 10 were the 2 bpw prerequisites and
+are **withdrawn with the denial**: there is no build left for a quality limit to gate.
 
-Kimi's addendum (same session) permits item 10 to move **earlier**, immediately after the four
+*(Superseded: item 10 is denied. Kept for the record — Kimi's addendum permitted it to move earlier, immediately after the four
 prerequisites 4, 2, 1 and 3, because a compile-only build yields compiler feedback while the
 fixed-trace and validity work proceeds. It stays **compile-only**: no GPU load, timing, performance A/B
 or deployment, and it does not substitute for item 5. Its earlier placement is optional — the
-prerequisites are what the authorisation depends on, not the order.
+prerequisites are what the authorisation depends on, not the order.)*
 
 Corrected from the first draft: item 7 (per-category guard) no longer precedes the scientific work.
 Kimi's objection was that putting another gate repair ahead of the fixed-trace runner and workload
